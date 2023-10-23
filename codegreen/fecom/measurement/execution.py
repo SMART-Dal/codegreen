@@ -9,6 +9,9 @@ import json
 import psutil
 from pathlib import Path
 from datetime import datetime
+from pympler import asizeof
+import sys
+import tensorflow as tf
 
 from codegreen.fecom.measurement.utilities import custom_print
 from codegreen.fecom.measurement.start_measurement import start_sensors, quit_process, unregister_and_quit_process
@@ -30,7 +33,28 @@ from codegreen.fecom.experiment.experiment_kinds import ExperimentKinds
 def print_exec(message: str):
     custom_print("execution", message)
 
-
+def get_size(obj):
+        # Sys.getsizeof() just returns the size of the item itself, whereas asizeof() returns the size of the object plus every object it references. As a result, asizeof() can show the memory utilisation of an object more clearly.
+        try:
+            if isinstance(obj, tf.Tensor) and tf.executing_eagerly():
+                print("++++++1++++++")
+                print("1-size",float(obj.numpy().nbytes))
+                return float(obj.numpy().nbytes)
+            elif isinstance(obj, (dict, list, tuple)):
+                print("++++++4++++++")
+                print("4-size",sum(get_size(x) for x in obj))
+                return sum(get_size(x) for x in obj)
+            else :
+                try:
+                    print("++++++5++++++")
+                    print("5-size",float(asizeof.asizeof(obj)))
+                    return float(asizeof.asizeof(obj))
+                except Exception as e:
+                    print("++++++6++++++",e)
+                    print("6-size",float(sys.getsizeof(obj)))
+                    return float(sys.getsizeof(obj))
+        except Exception as e:
+            print_exec(f"get_size_error: \n {e} \n ")
 
 def is_measurement_running():
     for process in psutil.process_iter(attrs=['name', 'cmdline']):
@@ -107,6 +131,9 @@ def store_data(data: dict, experiment_file_path: Path):
     
     if DEBUG:
         print_exec(f"Result: {str(data)[:100]}")
+
+    # Create parent directories if they don't exist
+    experiment_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     if experiment_file_path.is_file():
         with open(experiment_file_path, 'r') as f:
@@ -239,7 +266,7 @@ def after_execution(
                 skip_calls.append(function_to_run)
                 with open(skip_calls_file_path, 'w') as f:
                     json.dump(skip_calls, f)
-                print_exec('skipping call added, current list is: ', skip_calls)
+                print_exec('skipping call added, current list is: '+ str(skip_calls))
             else:
                 print_exec('Skipping call already exists.')
 
@@ -262,17 +289,26 @@ def after_execution(
     # (8) Add size data using pickle, if possible
     # some objects cannot be pickled, so catch any exceptions and set the size to None for those objects
     try:
-        args_size = len(pickle.dumps(function_args)) if function_args is not None else None
+        # args_size = len(pickle.dumps(function_args)) if function_args is not None else None
+        print("inside_arg_size")
+        args_size = get_size(function_args) if function_args is not None else 0
+        print("outside_arg_size")
     except Exception as e:
         print_exec(f"Could not pickle function args. Error: \n {e} \n Args Size will be None for this function. Execution will continue normally.")
         args_size = None
     try:
-        kwargs_size = len(pickle.dumps(function_kwargs)) if function_kwargs is not None else None
+        # kwargs_size = len(pickle.dumps(function_kwargs)) if function_kwargs is not None else None
+        print("inside_kwarg_size")
+        kwargs_size = get_size(function_kwargs) if function_kwargs is not None else 0
+        print("outside_kwarg_size")
     except Exception as e:
         print_exec(f"Could not pickle function kwargs. Error: \n {e} \n Kwargs Size will be None for this function. Execution will continue normally.")
         kwargs_size = None
     try:
-        object_size = len(pickle.dumps(method_object)) if method_object is not None else None
+        # object_size = len(pickle.dumps(method_object)) if method_object is not None else None
+        print("inside_object_size")
+        object_size = get_size(method_object) if method_object is not None else 0
+        print("outside_object_size")
     except Exception as e:
         print_exec(f"Could not pickle method object. Error: \n {e} \n Object Size will be None for this function. Execution will continue normally.")
         object_size = None
