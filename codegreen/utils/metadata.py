@@ -1,4 +1,5 @@
 import git
+import os
 
 def get_repo_metadata(repo_dir):
   metadata = {}
@@ -35,3 +36,9 @@ def get_repo_metadata(repo_dir):
     print(f"{repo_dir} is not a Git repository, so git metadata cannot be retrieved.")
 
   return metadata
+
+def get_script_path(script_name, method_level_python_scripts):
+    for script_path in method_level_python_scripts:
+        if script_name in script_path:
+            return script_path
+    return None

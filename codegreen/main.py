@@ -4,13 +4,13 @@ from rich.markdown import Markdown
 from codegreen.fecom.measurement import start_measurement
 from typing_extensions import Annotated
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import shutil
 
 import subprocess
 from codegreen.fecom.patching.patching_config import METHOD_LEVEL_PATCHING_SCRIPT_PATH
 from codegreen.fecom.patching.repo_patching import patch_project
-from codegreen.utils.metadata import get_repo_metadata
+from codegreen.utils.metadata import get_repo_metadata, get_script_path
 from codegreen import __version__
 import os
 
@@ -18,14 +18,19 @@ app = typer.Typer(rich_markup_mode="rich",help="[green]🍃 CodeGreen: Your Pass
 
 @app.callback()
 def version():
-    print(f"Awesome CLI Version: {__version__}")
+    print(f"{__version__}")
     raise typer.Exit()
 
-def get_script_path(script_name, method_level_python_scripts):
-    for script_path in method_level_python_scripts:
-        if script_name in script_path:
-            return script_path
-    return None
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        None, "--version", callback=version, 
+        help="Print version and exit")
+):
+   '''
+   This is the main entry point for the codegreen package.
+   '''
+
 
 @app.command()
 def run_energy_profiler():
@@ -37,8 +42,8 @@ def run_energy_profiler():
 
 @app.command()
 def start_energy_measurement(
-    project : Annotated[Path,typer.Option(help="Path to the source code of the project to be measured.")],
-    scripts : Annotated[List[Path],typer.Option(help="List of paths to the project scripts to be measured.")],
+    project : Annotated[Path,typer.Option(default=...,help="Path to the source code of the project to be measured.")],
+    scripts : Annotated[List[Path],typer.Option(default=...,help="List of paths to the project scripts to be measured.")],
 ):
     """
     This command will start running the scripts and collecting data for energy measurement.
