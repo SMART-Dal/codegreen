@@ -1,3 +1,2 @@
 function_executed;time_stamp
-START_MEASUREMENTS;1697160090382404149
-tensorflow.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch();22:53:56
+START_MEASUREMENTS;1699043883661497419

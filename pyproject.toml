@@ -9,8 +9,7 @@ license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)"]
 dynamic = ["version", "description"]
 dependencies = [
-"typer",
-"typer-cli",
+"typer>=0.9",
 "GitPython",
 "rich",
 "tensorflow>=2.10",

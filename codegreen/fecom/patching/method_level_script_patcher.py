@@ -41,7 +41,6 @@ def method_level_patcher(script_path_to_be_patched,metadata):
     global importMap
     importMap = analyzer.importMap
     requiredAlias = analyzer.stats["required"]
-    print("Required libraries: ", requiredAlias)
     importScriptList = list(set(analyzer.stats["importScript"]))
 
     # Get list of libraries and aliases with __future__ imports as they need to be moved to the beginning
@@ -121,6 +120,7 @@ def method_level_patcher(script_path_to_be_patched,metadata):
     with open(script_path_to_be_patched, 'w') as file:
         file.write(patched_code)
 
+    return requiredAlias
 
 class FuncCallVisitor(ast.NodeVisitor):
     def __init__(self):

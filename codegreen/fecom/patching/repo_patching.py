@@ -98,10 +98,14 @@ def patch_project(patched_repo_dir,original_repo_dir,metadata):
 
     # run the script for all the files in the input directory and save the patched files in the output directory
     method_level_python_scripts, project_level_python_scripts, og_python_scripts = get_python_scripts_path(patched_repo_dir)
-    script_with_target_gramework = []
+    script_with_target_framework = []
     for idx, input_file_path in enumerate(method_level_python_scripts):
         metadata["script_path"] = og_python_scripts[idx]
-        method_level_patcher(input_file_path,metadata)
+        required_framework_alias = method_level_patcher(input_file_path,metadata)
+
+# check is required_framework_alias is not an empty list and if it's not empty append input_file_path to script_with_target_framework
+        if required_framework_alias:
+            script_with_target_framework.append(input_file_path)
 
         # result = subprocess.run(['python3', METHOD_LEVEL_PATCHING_SCRIPT_PATH, input_file_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -121,7 +125,7 @@ def patch_project(patched_repo_dir,original_repo_dir,metadata):
 
 
     print("done....")
-    return method_level_python_scripts, project_level_python_scripts, og_python_scripts
+    return method_level_python_scripts, project_level_python_scripts, og_python_scripts, script_with_target_framework
 
 
 
