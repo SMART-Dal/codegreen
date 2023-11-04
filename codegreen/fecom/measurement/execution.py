@@ -59,7 +59,7 @@ def get_size(obj):
 def is_measurement_running():
     for process in psutil.process_iter(attrs=['name', 'cmdline']):
         # Checking if the process name is python or python3
-        if 'python' in process.info['name']:
+        if 'codegreen' in process.info['name']:
             # Checking the command line arguments to see if the measurement module name is present
             if any(MEASUREMENT_MODULE_NAME in part for part in process.info['cmdline']):
                 return True
