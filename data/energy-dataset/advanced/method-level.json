@@ -1,0 +1,154 @@
+2023-11-04 01:32:32.508672: I tensorflow/core/platform/cpu_feature_guard.cc:193] This TensorFlow binary is optimized with oneAPI Deep Neural Network Library (oneDNN) to use the following CPU instructions in performance-critical operations:  AVX2 AVX512F AVX512_VNNI FMA
+To enable them in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2023-11-04 01:32:32.646371: I tensorflow/core/util/port.cc:104] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2023-11-04 01:32:33.279554: W tensorflow/compiler/xla/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libnvinfer.so.7'; dlerror: libnvinfer.so.7: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/saurabh/miniconda3/envs/tf2/lib
+2023-11-04 01:32:33.279611: W tensorflow/compiler/xla/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libnvinfer_plugin.so.7'; dlerror: libnvinfer_plugin.so.7: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/saurabh/miniconda3/envs/tf2/lib
+2023-11-04 01:32:33.279617: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Cannot dlopen some TensorRT libraries. If you would like to use Nvidia GPU with TensorRT, please make sure the missing libraries mentioned above are installed properly.
+TensorFlow version: 2.11.0
+[EXECUTION] [01:32:34] Waiting before running function for 10 seconds.
+[EXECUTION] [01:32:44] Sensors started
+[STABLE CHECK] [01:32:47] Success: temperature is below threshold.
+[MAIN] [01:32:47] Terminated sensors
+[STABLE CHECK] [01:32:47] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:33:07] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:33:07] Machine is not stable yet.
+[STABLE CHECK] [01:33:07] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:33:27] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:33:27] Machine is not stable yet.
+[STABLE CHECK] [01:33:27] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:33:47] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:33:47] Machine is not stable yet.
+[STABLE CHECK] [01:33:47] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:34:08] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:34:08] Machine is not stable yet.
+[STABLE CHECK] [01:34:08] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:34:28] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:34:28] Machine is not stable yet.
+[STABLE CHECK] [01:34:28] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:34:48] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:34:48] Machine is not stable yet.
+[EXECUTION] [01:35:18] Waiting before running function for 10 seconds.
+[EXECUTION] [01:35:28] Sensors started
+[STABLE CHECK] [01:35:31] Success: temperature is below threshold.
+[MAIN] [01:35:31] Terminated sensors
+[STABLE CHECK] [01:35:31] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:35:51] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:35:51] Machine is not stable yet.
+[STABLE CHECK] [01:35:51] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:36:11] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:36:11] Machine is not stable yet.
+[STABLE CHECK] [01:36:11] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:36:31] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:36:31] Machine is not stable yet.
+[STABLE CHECK] [01:36:31] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:36:51] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:36:51] Machine is not stable yet.
+[STABLE CHECK] [01:36:51] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:37:11] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:37:11] Machine is not stable yet.
+[STABLE CHECK] [01:37:11] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:37:31] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:37:31] Machine is not stable yet.
+[EXECUTION] [01:38:01] Waiting before running function for 10 seconds.
+[EXECUTION] [01:38:11] Sensors started
+[STABLE CHECK] [01:38:14] Success: temperature is below threshold.
+[MAIN] [01:38:14] Terminated sensors
+[STABLE CHECK] [01:38:14] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:38:34] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:38:34] Machine is not stable yet.
+[STABLE CHECK] [01:38:34] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:38:54] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:38:54] Machine is not stable yet.
+[STABLE CHECK] [01:38:54] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:39:14] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:39:14] Machine is not stable yet.
+[STABLE CHECK] [01:39:14] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:39:34] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:39:34] Machine is not stable yet.
+[STABLE CHECK] [01:39:34] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:39:54] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:39:54] Machine is not stable yet.
+[STABLE CHECK] [01:39:54] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:40:14] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:40:14] Machine is not stable yet.
+[EXECUTION] [01:40:44] Waiting before running function for 10 seconds.
+[EXECUTION] [01:40:54] Sensors started
+[STABLE CHECK] [01:40:57] Success: temperature is below threshold.
+[MAIN] [01:40:57] Terminated sensors
+[STABLE CHECK] [01:40:57] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:41:17] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:41:17] Machine is not stable yet.
+[STABLE CHECK] [01:41:17] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:41:37] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:41:37] Machine is not stable yet.
+[STABLE CHECK] [01:41:37] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:41:57] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:41:57] Machine is not stable yet.
+[STABLE CHECK] [01:41:57] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:42:17] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:42:17] Machine is not stable yet.
+[STABLE CHECK] [01:42:17] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:42:37] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:42:37] Machine is not stable yet.
+[STABLE CHECK] [01:42:37] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:42:57] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:42:57] Machine is not stable yet.
+[EXECUTION] [01:43:27] Waiting before running function for 10 seconds.
+[EXECUTION] [01:43:38] Sensors started
+[STABLE CHECK] [01:43:41] Success: temperature is below threshold.
+[MAIN] [01:43:41] Terminated sensors
+[STABLE CHECK] [01:43:41] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:44:01] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:44:01] Machine is not stable yet.
+[STABLE CHECK] [01:44:01] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:44:21] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:44:21] Machine is not stable yet.
+[STABLE CHECK] [01:44:21] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:44:41] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:44:41] Machine is not stable yet.
+[STABLE CHECK] [01:44:41] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:45:01] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:45:01] Machine is not stable yet.
+[STABLE CHECK] [01:45:01] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:45:21] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:45:21] Machine is not stable yet.
+[STABLE CHECK] [01:45:21] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:45:41] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
+[STABLE CHECK] [01:45:41] Machine is not stable yet.
+[EXECUTION] [01:46:11] Waiting before running function for 10 seconds.
+[EXECUTION] [01:46:21] Sensors started
+[STABLE CHECK] [01:46:24] Success: temperature is below threshold.
+[MAIN] [01:46:24] Terminated sensors
+[STABLE CHECK] [01:46:24] Waiting 20 seconds to reach stable state.
+
+[STABLE CHECK] [01:46:44] Not stable: stdev/mean is 0.036611850181707255, which is greater than 0.03
