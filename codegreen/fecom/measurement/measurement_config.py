@@ -41,7 +41,7 @@ STABLE_GPU_POWER_MEAN = 18.517920
 ENERGY MEASUREMENT CONFIG
 """
 # MEASUREMENT_MODULE_NAME = "start_measurement.py"
-MEASUREMENT_MODULE_NAME = run-energy-profiler
+MEASUREMENT_MODULE_NAME = "run-energy-profiler"
 # this is also used for the cpu temperature file
 CPU_FILE_SEPARATOR = ';'
 # set measurement interval for perf & nvidia-smi in milliseconds

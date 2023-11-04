@@ -8,5 +8,5 @@ from codegreen.fecom.experiment.experiment_kinds import ExperimentKinds
 experiment_number = sys.argv[1]
 experiment_project = sys.argv[2]
 
-EXPERIMENT_FILE_PATH = EXPERIMENT_DIR / ExperimentKinds.METHOD_LEVEL.value / experiment_project / f'experiment-{experiment_number}.json'
+EXPERIMENT_FILE_PATH = EXPERIMENT_DIR / experiment_project / f'experiment-{experiment_number}.json'
 

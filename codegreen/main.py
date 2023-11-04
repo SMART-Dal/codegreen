@@ -8,7 +8,7 @@ from typing import List, Optional
 import shutil
 
 import subprocess
-from codegreen.fecom.patching.patching_config import METHOD_LEVEL_PATCHING_SCRIPT_PATH
+from codegreen.fecom.patching.patching_config import METHOD_LEVEL_PATCHING_SCRIPT_PATH, EXPERIMENT_DIR
 from codegreen.fecom.patching.repo_patching import patch_project
 from codegreen.utils.metadata import get_repo_metadata, get_script_path
 from codegreen import __version__
@@ -55,6 +55,10 @@ def start_energy_measurement(
     method_level_python_scripts, project_level_python_scripts, og_python_scripts, scripts_with_target_framework = patch_project(patched_dir,project,metadata)
     print("method_level_python_scripts",method_level_python_scripts)
 
+    # create a list with json objects having filepaths of scripts_with_target_framework and their corresponding execution status
+    # This will be used to determine if the script was executed successfully after patching and also contain logs for the file
+    scripts_execution_status = []
+
     if scripts:
         # run the patched files in the provided sequence in arguments
         for idx, script in enumerate(scripts):
@@ -63,7 +67,6 @@ def start_energy_measurement(
             base_path, ext = os.path.splitext(script)
             # print("base script path is: ",base_path)
 
-
             print("script path is: ",str(patched_dir/(base_path+ "_method-level.py"))," method level script is: ", method_level_python_scripts)
 
             script_to_run = get_script_path(str(base_path+ "_method-level.py"), method_level_python_scripts)
@@ -71,9 +74,11 @@ def start_energy_measurement(
             # Start the subprocess
             process = subprocess.Popen(['python3', script_to_run,"1",base_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-            # Capture and print the output in real-time
-            for line in process.stdout:
-                print(line, end='')
+            # Capture and print the output in real-time and store in a file
+            with open(EXPERIMENT_DIR / (base_path + "_method-level.log"), "w") as f:
+                for line in process.stdout:
+                    print(line, end='')
+                    f.write(line)
 
             # Wait for the subprocess to complete
             process.wait()
@@ -82,6 +87,8 @@ def start_energy_measurement(
                 print(f"{script} completed successfully.")
             else:
                 print(f"Error running {script}. Return code: {process.returncode}")
+            
+            print("+-----------------------------------------------+")
     else:
         print("[bold yellow]Default script execution:[/bold yellow]No scripts provided, running all scripts with the target framework")
         for idx, script_to_run in enumerate(scripts_with_target_framework):
@@ -94,9 +101,11 @@ def start_energy_measurement(
             # Start the subprocess
             process = subprocess.Popen(['python3', script_to_run,"1",base_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-            # Capture and print the output in real-time
-            for line in process.stdout:
-                print(line, end='')
+            # Capture and print the output in real-time and store in a file
+            with open(EXPERIMENT_DIR / base_path / "method-level.json", "w") as f:
+                for line in process.stdout:
+                    print(line, end='')
+                    f.write(line)
 
             # Wait for the subprocess to complete
             process.wait()
@@ -105,6 +114,8 @@ def start_energy_measurement(
                 print(f"{script_to_run} completed successfully.")
             else:
                 print(f"Error running {script_to_run}. Return code: {process.returncode}")
+            
+            print("+-----------------------------------------------+")
 
     # store the data and log
 
