@@ -1,0 +1,1 @@
+["tensorflow.nn.softmax(predictions).numpy()", "tensorflow.keras.losses.SparseCategoricalCrossentropy()", "tensorflow.keras.losses.SparseCategoricalCrossentropy(y_train[:1], predictions).numpy()", "tensorflow.keras.models.Sequential.compile()", "tensorflow.keras.Sequential()"]

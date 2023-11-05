@@ -63,7 +63,7 @@ def start_energy_measurement(
     for script in scripts_with_target_framework:
         # get file name from the script_to_run path with removed "_method-level.py" substring
         base_script_path = os.path.basename(script).replace("_method-level.py","")
-        script_status[base_script_path] = "not_executed_yet"
+        script_status[str(base_script_path)] = "not_executed_yet"
     
     # store the metadata of the experiment in the experiment directory
     with open(EXPERIMENT_DIR/ project.stem / "scripts_execution_metadata.json", "w") as f:
@@ -78,7 +78,7 @@ def start_energy_measurement(
             base_path, ext = os.path.splitext(script)
             # print("base script path is: ",base_path)
             execution_metadata["script_name"] = script
-            script_status[base_path] = "started_execution"
+            # script_status[base_path] = "started_execution"
 
             print("script path is: ",str(patched_dir/(base_path+ "_method-level.py"))," method level script is: ", method_level_python_scripts)
 

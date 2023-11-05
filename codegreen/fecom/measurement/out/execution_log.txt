@@ -1,2 +1,25 @@
 function_executed;time_stamp
-START_MEASUREMENTS;1699043883661497419
+START_MEASUREMENTS;1699132972051836060
+tensorflow.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000).batch();18:33:46
+tensorflow.data.Dataset.from_tensor_slices((x_test, y_test)).batch();18:34:49
+tensorflow.keras.layers.Conv2D();18:35:52
+tensorflow.keras.layers.Flatten();18:36:56
+tensorflow.keras.layers.Dense();18:37:59
+tensorflow.keras.losses.SparseCategoricalCrossentropy();18:39:02
+tensorflow.keras.optimizers.Adam();18:40:05
+tensorflow.keras.metrics.Mean();18:41:09
+tensorflow.keras.metrics.SparseCategoricalAccuracy();18:42:32
+tensorflow.keras.metrics.Mean.reset_states();18:44:35
+tensorflow.keras.metrics.SparseCategoricalAccuracy.reset_states();18:45:38
+tensorflow.keras.Model();18:47:23
+tensorflow.keras.optimizers.Adam.apply_gradients();18:48:48
+tensorflow.keras.Model();18:50:27
+tensorflow.keras.models.Sequential();18:52:43
+tensorflow.keras.models.Sequential(x_train[:1]).numpy();18:53:47
+tensorflow.nn.softmax(predictions).numpy();18:54:50
+tensorflow.keras.losses.SparseCategoricalCrossentropy();18:55:53
+tensorflow.keras.losses.SparseCategoricalCrossentropy(y_train[:1], predictions).numpy();18:56:56
+tensorflow.keras.models.Sequential.compile();18:58:00
+tensorflow.keras.models.Sequential.fit();19:05:13
+tensorflow.keras.models.Sequential.evaluate();19:06:38
+tensorflow.keras.Sequential();19:07:41
