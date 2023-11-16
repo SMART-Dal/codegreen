@@ -41,7 +41,7 @@ def run_energy_profiler():
     start_measurement.main()
 
 @app.command()
-def patch_project(
+def project_patcher(
     project : Annotated[Path,typer.Option(help="Path to the source code of the project to be measured.")],
     ):
     """
