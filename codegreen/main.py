@@ -41,6 +41,34 @@ def run_energy_profiler():
     start_measurement.main()
 
 @app.command()
+def patch_project(
+    project : Annotated[Path,typer.Option(help="Path to the source code of the project to be measured.")],
+    ):
+    """
+    This command will start running the scripts and collecting data for energy measurement.
+    """
+    # Start patching all the files in the argument and store them in the same location as the original file with suffix "_patched"
+    project = project.resolve()
+    patched_dir = project.parent / (project.stem + "_patched")
+    metadata = get_repo_metadata(project)
+    print("metadata",metadata)
+    method_level_python_scripts, project_level_python_scripts, og_python_scripts, scripts_with_target_framework = patch_project(patched_dir,project,metadata)
+    print("method_level_python_scripts",method_level_python_scripts)
+
+        # create a list with json objects having filepaths of scripts_with_target_framework and their corresponding execution status
+    # This will be used to determine if the script was executed successfully after patching and also contain logs for the file
+    scripts_execution_metadata = []
+    script_status = {}
+    for script in scripts_with_target_framework:
+        # get file name from the script_to_run path with removed "_method-level.py" substring
+        base_script_path = os.path.basename(script).replace("_method-level.py","")
+        script_status[str(base_script_path)] = "not_executed_yet"
+    
+    # store the metadata of the experiment in the experiment directory
+    with open(EXPERIMENT_DIR/ Path(project.stem) / Path("scripts_execution_metadata.json"), "w") as f:
+        f.write(str(script_status))
+
+@app.command()
 def start_energy_measurement(
     project : Annotated[Path,typer.Option(help="Path to the source code of the project to be measured.")],
     scripts : Annotated[List[Path],typer.Option(help="List of paths to the project scripts to be measured.")] = [],
@@ -66,7 +94,7 @@ def start_energy_measurement(
         script_status[str(base_script_path)] = "not_executed_yet"
     
     # store the metadata of the experiment in the experiment directory
-    with open(EXPERIMENT_DIR/ project.stem / "scripts_execution_metadata.json", "w") as f:
+    with open(EXPERIMENT_DIR/ Path(project.stem) / Path("scripts_execution_metadata.json"), "w") as f:
         f.write(str(script_status))
 
     if scripts:
@@ -137,8 +165,12 @@ def start_energy_measurement(
             
             output = []
 
+            # create directory if it doesnt exist
+            if not os.path.exists(EXPERIMENT_DIR / Path(project.stem)/ Path(base_path)):
+                os.makedirs(EXPERIMENT_DIR / Path(project.stem)/ Path(base_path))
+
             # Capture and print the output in real-time and store in a file
-            with open(EXPERIMENT_DIR / base_path / "execution_log.json", "w") as f:
+            with open(EXPERIMENT_DIR / Path(project.stem)/ Path(base_path) / Path("execution_log.json"), "w") as f:
                 for line in process.stdout:
                     print(line, end='')
                     f.write(line)
@@ -171,7 +203,7 @@ def start_energy_measurement(
     # stop measurement process
 
     # store scripts_execution_metadata in a file
-    with open(EXPERIMENT_DIR/ project.stem / "scripts_execution_metadata.json", "w") as f:
+    with open(EXPERIMENT_DIR/ Path(project.stem) / Path("scripts_execution_metadata.json"), "w") as f:
         f.write(str(scripts_execution_metadata))
 
 # only use this by uncommenting for testing purposes

@@ -43,6 +43,9 @@ def method_level_patcher(script_path_to_be_patched,metadata):
     requiredAlias = analyzer.stats["required"]
     importScriptList = list(set(analyzer.stats["importScript"]))
 
+    if not requiredAlias:
+        return
+
     # Get list of libraries and aliases with __future__ imports as they need to be moved to the beginning
     future_imports = [
         imp for imp in importScriptList if imp.startswith("from __future__")
@@ -568,19 +571,20 @@ class Analyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node):
-        lib_path = node.module.split(".")
-        for alias in node.names:
-            self.stats["importScript"].append(ast.get_source_segment(sourceCode, node))
-            self.stats["from"].append(alias.name)
-            if any(lib in lib_path for lib in requiredLibraries):
-                if alias.asname:
-                    self.stats["required"].append(alias.asname)
-                    self.importMap[alias.asname] = node.module + "." + alias.name
-                elif alias.name == "*":
-                    pass
-                else:
-                    self.stats["required"].append(alias.name)
-                    self.importMap[alias.name] = node.module + "." + alias.name
+        if(node.module):
+            lib_path = node.module.split(".")
+            for alias in node.names:
+                self.stats["importScript"].append(ast.get_source_segment(sourceCode, node))
+                self.stats["from"].append(alias.name)
+                if any(lib in lib_path for lib in requiredLibraries):
+                    if alias.asname:
+                        self.stats["required"].append(alias.asname)
+                        self.importMap[alias.asname] = node.module + "." + alias.name
+                    elif alias.name == "*":
+                        pass
+                    else:
+                        self.stats["required"].append(alias.name)
+                        self.importMap[alias.name] = node.module + "." + alias.name
         self.generic_visit(node)
 
     def report(self):

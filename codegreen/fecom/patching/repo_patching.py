@@ -101,7 +101,7 @@ def patch_project(patched_repo_dir,original_repo_dir,metadata):
     script_with_target_framework = []
     for idx, input_file_path in enumerate(method_level_python_scripts):
         metadata["script_path"] = og_python_scripts[idx]
-        print(f"Patching_ {input_file_path}")
+        # print(f"Patching_ {input_file_path}")
         required_framework_alias = method_level_patcher(input_file_path,metadata)
 
 # check is required_framework_alias is not an empty list and if it's not empty append input_file_path to script_with_target_framework

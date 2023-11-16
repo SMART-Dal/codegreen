@@ -24,7 +24,7 @@ module_path = Path(sys.modules[__name__].__file__).resolve().parent
 TOOL_INSTALLATION_PATH = module_path.parent
 
 # (!) Change this to the relevant path variable (!)
-PROJECT_PATH = your_project_path
+PROJECT_PATH = os.environ.get("PROJECTS_DIR") if os.environ.get("PROJECTS_DIR") else your_project_path
 
 # directory where to store data, an Experiment will append to this the experiment kind
 # (e.g. project-level) and after that the subdirectory structure will be equivalent to the code dataset
