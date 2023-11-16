@@ -30,8 +30,8 @@ PROJECT_PATH = os.environ.get("PROJECTS_DIR") if os.environ.get("PROJECTS_DIR") 
 # (e.g. project-level) and after that the subdirectory structure will be equivalent to the code dataset
 EXPERIMENT_DIR = os.environ.get("DATA_DIR") if os.environ.get("DATA_DIR") else PROJECT_PATH / 'data/energy-dataset/'
 # directory where to find patched code
-CODE_DIR = PROJECT_PATH / 'data/code-dataset/Patched-Repositories'
-UNPATCHED_CODE_DIR = PROJECT_PATH / 'data/code-dataset/Repositories'
+CODE_DIR = PROJECT_PATH / Path('data/code-dataset/Patched-Repositories')
+UNPATCHED_CODE_DIR = PROJECT_PATH / Path('data/code-dataset/Repositories')
 
 METHOD_LEVEL_PATCHING_SCRIPT_PATH = Path('method_level_script_patcher.py')
 PROJECT_LEVEL_PATCHING_SCRIPT_PATH = Path('project_level_script_patcher.py')
@@ -39,5 +39,5 @@ PROJECT_LEVEL_PATCHING_SCRIPT_PATH = Path('project_level_script_patcher.py')
 # METHOD_LEVEL_PATCHING_SCRIPT_PATH = PROJECT_PATH / 'patching/method_level_script_patcher.py'
 # PROJECT_LEVEL_PATCHING_SCRIPT_PATH = PROJECT_PATH / 'patching/project_level_script_patcher.py'
 code_dataset_path = Path('../../data/code-dataset')
-SOURCE_REPO_DIR = code_dataset_path / 'Repositories'
-PATCHED_REPO_DIR =  code_dataset_path / 'Patched-Repositories'
+SOURCE_REPO_DIR = code_dataset_path / Path('Repositories')
+PATCHED_REPO_DIR =  code_dataset_path / Path('Patched-Repositories')
