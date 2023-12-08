@@ -1,6 +1,6 @@
 # Codegreen
 
-Codegreen is a Python package and CLI tool for energy profiling of Python code. It allows measuring the energy consumption of code regions like functions.
+Codegreen is a Python package and CLI tool for energy profiling of Python code. It allows measuring the energy consumption of Deep learning framework APIs like TensorFlow.
 
 ## Installation
 
@@ -73,15 +73,15 @@ See the API documentation for more details.
 - `dist/`: Built distributions
 - `tests/`: Unit tests
 - `examples/`: Usage examples
-  
+
+<!-- 
 ## Contributing
 
 Contributions to codegreen are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 Please file bug reports and feature requests on the GitHub issues page.
+-->
 
 ## License
 
-codegreen is licensed under the MIT license. See [LICENSE](LICENSE) for more details.
-
-Let me know if you would like me to explain or expand any part of this README draft further.
+codegreen is licensed under the Apache 2.0. See [LICENSE](LICENSE) for more details.
