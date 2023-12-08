@@ -84,4 +84,4 @@ Please file bug reports and feature requests on the GitHub issues page.
 
 ## License
 
-codegreen is licensed under the Apache 2.0. See [LICENSE](LICENSE) for more details.
+codegreen is licensed under the Apache 2.0. See [LICENSE](https://github.com/SMART-Dal/codegreen/blob/main/LICENSE) for more details.
