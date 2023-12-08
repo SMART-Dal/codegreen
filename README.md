@@ -19,20 +19,38 @@ pip install .
 ## Usage
 
 ### As a CLI
+Run `codegreen --help` to see the CLI options:
 
 ```
-codegreen --help
+Usage: codegreen [OPTIONS] COMMAND [ARGS]...                              
+                                                                          
+🍃 CodeGreen: Your Passport to a Greener Code! 🍃                         
+                                                                          
+╭─ Options ──────────────────────────────────────────────────────────────╮
+│ --install-completion        [bash|zsh|fish|power    Install completion   │
+│                              shell|pwsh]            for the specified    │  
+│                                                      shell.             │
+│ --show-completion           [bash|zsh|fish|power    Show completion for  │
+│                              shell|pwsh]            the specified shell, │
+│                                                      to copy it or       │
+│                                                      customize the       │
+│                                                      installation.       │
+│ --help                                              Show this message and│
+│                                                      exit.               │  
+╰────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ─────────────────────────────────────────────────────────────╮
+│ project-patcher            Patch scripts for measurement │
+│ run-energy-profiler        Start measurement server │   
+│ start-energy-measurement   Run patched scripts and collect data │
+╰────────────────────────────────────────────────────────────────────────╯
 ```
 
-This will display the CLI usage and options.
-
-Basic example:
+Basic usage:
 
 ```
-codegreen profile myscript.py
+codegreen project-patcher myscripts/
+codegreen start-energy-measurement
 ```
-
-This will instrument myscript.py, run it, and output energy measurements.
 
 ### As a Python package
 
