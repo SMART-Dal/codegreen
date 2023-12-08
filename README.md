@@ -1,79 +1,69 @@
+# Codegreen
+
+Codegreen is a Python package and CLI tool for energy profiling of Python code. It allows measuring the energy consumption of code regions like functions.
+
+## Installation
 
 ```
-method-energy-dataset
-├─ LICENSE
-├─ codegreen
-│  ├─ __init__.py
-│  ├─ fecom
-│  │  ├─ README.md
-│  │  ├─ __init__.py
-│  │  ├─ __pycache__
-│  │  │  └─ __init__.cpython-39.pyc
-│  │  ├─ experiment
-│  │  │  ├─ __init__.py
-│  │  │  ├─ analysis.py
-│  │  │  ├─ data.py
-│  │  │  ├─ experiment_kinds.py
-│  │  │  ├─ experiments.py
-│  │  │  ├─ plot.py
-│  │  │  ├─ rq1_analysis.py
-│  │  │  └─ run.py
-│  │  ├─ measurement
-│  │  │  ├─ README.md
-│  │  │  ├─ __init__.py
-│  │  │  ├─ __pycache__
-│  │  │  │  ├─ __init__.cpython-310.pyc
-│  │  │  │  ├─ idle_stats.cpython-310.pyc
-│  │  │  │  ├─ measurement_config.cpython-310.pyc
-│  │  │  │  ├─ measurement_parse.cpython-310.pyc
-│  │  │  │  └─ start_measurement.cpython-310.pyc
-│  │  │  ├─ cpu_temperature.py
-│  │  │  ├─ execution.py
-│  │  │  ├─ idle_stats.py
-│  │  │  ├─ measurement_config.py
-│  │  │  ├─ measurement_parse.py
-│  │  │  ├─ out
-│  │  │  │  ├─ execution_log.txt
-│  │  │  │  ├─ nvidia_smi.txt
-│  │  │  │  ├─ perf.txt
-│  │  │  │  └─ start_times.txt
-│  │  │  ├─ stable_check.py
-│  │  │  ├─ start_measurement.py
-│  │  │  └─ utilities.py
-│  │  └─ patching
-│  │     ├─ README.md
-│  │     ├─ __init__.py
-│  │     ├─ client.log
-│  │     ├─ method_level_patch_imports.py
-│  │     ├─ method_level_script_patcher.py
-│  │     ├─ patching_config.py
-│  │     ├─ project_level_patch_imports.py
-│  │     ├─ project_level_script_patcher.py
-│  │     └─ repo-patching.py
-│  └─ main.py
-├─ dist
-│  ├─ codegreen-0.1-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.1-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.1.tar.gz
-│  ├─ codegreen-0.1.10-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.10.tar.gz
-│  ├─ codegreen-0.1.2-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.2.tar.gz
-│  ├─ codegreen-0.1.3-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.3.tar.gz
-│  ├─ codegreen-0.1.4-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.4.tar.gz
-│  ├─ codegreen-0.1.5-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.5.tar.gz
-│  ├─ codegreen-0.1.6-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.6.tar.gz
-│  ├─ codegreen-0.1.7-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.7.tar.gz
-│  ├─ codegreen-0.1.8-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.8.tar.gz
-│  ├─ codegreen-0.1.9-py2.py3-none-any.whl
-│  ├─ codegreen-0.1.9.tar.gz
-│  └─ codegreen-0.1.tar.gz
-└─ pyproject.toml
+pip install codegreen
+```
+
+Or install from source:
 
 ```
+git clone https://github.com/user/codegreen
+cd codegreen
+pip install .
+```
+
+## Usage
+
+### As a CLI
+
+```
+codegreen --help
+```
+
+This will display the CLI usage and options.
+
+Basic example:
+
+```
+codegreen profile myscript.py
+```
+
+This will instrument myscript.py, run it, and output energy measurements.
+
+### As a Python package
+
+```python
+import codegreen
+
+codegreen.profile(my_function)
+```
+
+See the API documentation for more details.
+
+## Code Structure
+
+- `codegreen/`: Source code
+  - `main.py`: Main CLI entry point
+  - `fecom/`: Core measurement functionality
+    - `patching/`: Code instrumentation
+    - `measurement/`: Measurement and output
+    - `experiment/`: Experimental configurations
+- `dist/`: Built distributions
+- `tests/`: Unit tests
+- `examples/`: Usage examples
+  
+## Contributing
+
+Contributions to codegreen are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+
+Please file bug reports and feature requests on the GitHub issues page.
+
+## License
+
+codegreen is licensed under the MIT license. See [LICENSE](LICENSE) for more details.
+
+Let me know if you would like me to explain or expand any part of this README draft further.
