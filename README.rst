@@ -1,1 +1,0 @@
-Codegreen is a Python framework for fine-grained energy measurement in deep learning projects. It provides tools and utilities to accurately measure and analyze energy consumption at the method-level granularity within deep learning code.
