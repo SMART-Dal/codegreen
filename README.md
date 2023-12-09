@@ -49,6 +49,7 @@ Basic usage:
 
 ```
 codegreen project-patcher myscripts/
+codegreen run-energy-profiler
 codegreen start-energy-measurement
 ```
 
