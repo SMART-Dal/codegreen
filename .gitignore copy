@@ -1,3 +1,4 @@
 codegreen/fecom/measurement/out/nvidia_smi.txt
 codegreen/fecom/measurement/out/perf.txt
 dist/
+.gitignore
