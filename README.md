@@ -11,6 +11,11 @@ Codegreen requires the following hardware:
 
 The Intel processor is needed for accessing the RAPL power sensors. An NVIDIA GPU is required for profiling GPU usage via `nvidia-smi`.
 
+Make sure to add your respective local paths to the following files after installation:
+
+- `codegreen/fecom/patching/patching_config.py`
+- `codegreen/fecom/measurement/measurement_config.py`
+
 ## Installation
 
 ```

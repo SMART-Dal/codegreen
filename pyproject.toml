@@ -6,7 +6,7 @@ build-backend = "flit_core.buildapi"
 name = "codegreen"
 authors = [{name = "Saurabhsingh Rajput", email = "saurabh@dal.ca"}]
 license = {file = "LICENSE"}
-classifiers = ["License :: OSI Approved :: Apache 2.0"]
+classifiers = ["License :: OSI Approved :: Apache Software License"]
 dynamic = ["version", "description"]
 dependencies = [
 "typer>=0.9",

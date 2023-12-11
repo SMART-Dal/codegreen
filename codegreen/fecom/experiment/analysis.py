@@ -254,6 +254,23 @@ def export_summary_to_latex(output_dir: Path, summary_dfs: Dict[str, pd.DataFram
     for name, df in summary_dfs.items():
         df.style.format(precision=2).to_latex(buf = output_dir/f"{name}.tex")
 
+def export_summary_to_csv(output_dir: Path, summary_dfs: Dict[str, pd.DataFrame]):
+    """
+    Write a given set of summary dfs returned by create_summary() to csv files.
+    """
+    
+    for name, df in summary_dfs.items():
+        csv_path = output_dir / f"{name}.csv"
+        
+        with open(csv_path, 'w') as csv_file:
+            writer = csv.writer(csv_file)
+
+            # Write column headers 
+            writer.writerow(df.columns)
+
+            # Write each row to the csv
+            for index, row in df.iterrows():
+                writer.writerow(row)
 
 def create_summary(project_energy_data: ProjectEnergyData) -> Dict[str, pd.DataFrame]:
     cpu_summary_mean = build_summary_df_mean(project_energy_data.cpu_data)
