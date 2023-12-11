@@ -2,6 +2,15 @@
 
 Codegreen is a Python package and CLI tool for energy profiling of Python code. It allows measuring the energy consumption of Deep learning framework APIs like TensorFlow.
 
+## Prerequisites
+
+Codegreen requires the following hardware:
+
+- Intel processor
+- NVIDIA GPU 
+
+The Intel processor is needed for accessing the RAPL power sensors. An NVIDIA GPU is required for profiling GPU usage via `nvidia-smi`.
+
 ## Installation
 
 ```
@@ -47,11 +56,23 @@ Usage: codegreen [OPTIONS] COMMAND [ARGS]...
 
 Basic usage:
 
+```bash
+codegreen project-patcher --project myscripts/
 ```
-codegreen project-patcher myscripts/
+
+Patch all Python scripts in `myscripts/` for instrumentation. Patched projects are saved with a `_patched` suffix.
+
+```bash  
 codegreen run-energy-profiler
-codegreen start-energy-measurement
 ```
+
+This will start the energy measurement server.
+
+```bash
+codegreen start-energy-measurement --project repo_dir --scripts script_to_run --iterations "5"
+``` 
+
+This will run the patched scripts for project `repo_dir`, scripts `script_to_run` and number of run iterations `n` and collect power usage data. Save the energy profiles and execution logs under `experiments/`.
 
 ### As a Python package
 
@@ -71,9 +92,10 @@ See the API documentation for more details.
     - `patching/`: Code instrumentation
     - `measurement/`: Measurement and output
     - `experiment/`: Experimental configurations
-- `dist/`: Built distributions
+  - `utils/`: utility functions
+<!-- - `dist/`: Built distributions
 - `tests/`: Unit tests
-- `examples/`: Usage examples
+- `examples/`: Usage examples -->
 
 <!-- 
 ## Contributing
