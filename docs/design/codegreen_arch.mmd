@@ -1,0 +1,84 @@
+---
+config:
+  theme: neo
+  themeVariables:
+    primaryColor: '#ffffff'
+    primaryBorderColor: '#000000'
+    lineColor: '#333333'
+    tertiaryColor: '#f0f0f0'
+  look: neo
+  layout: elk
+---
+flowchart TD
+ subgraph subGraph0["User Interface Layer"]
+    direction TB
+        IDE("IDE Plugins<br>VSCode, IntelliJ")
+        WebUI("Web Dashboard<br>Visualization")
+  end
+ subgraph Subcomponents["Subcomponents"]
+    direction LR
+        Parser["Code Parser"]
+        HAL["Hardware Abstraction Layer"]
+        Calc["Energy Calculator"]
+  end
+ subgraph subGraph2["Core Engine Layer"]
+    direction TB
+        Instrumentation("Instrumentation Engine<br>Tree-sitter Integration")
+        Measurement("Measurement Engine<br>HAL Interface")
+        Analysis("Analysis &amp; Reporting<br>Data Aggregation")
+        Subcomponents
+  end
+ subgraph subGraph3["Plugin Layer"]
+    direction TB
+        LangAdapter("Language Adapters<br>Java, Python, C++")
+        HWPlugin("Hardware Plugins<br>RAPL, ARM, External")
+        Optimizer("Optimization Modules<br>Code Analysis")
+  end
+ subgraph subGraph4["Data Layer"]
+    direction TB
+        RawData("Raw Metrics<br>Temporary Storage")
+        Reports("Processed Reports<br>CSV, JSON, Dashboards")
+  end
+    IDE -- "1.Trigger Instrumentation" --> Instrumentation
+    Instrumentation -- "2.Instrumented Code" --> Measurement
+    Measurement -- "3.Collect Raw Data" --> RawData
+    RawData -- "4.Process Measurements" --> Analysis
+    Analysis -- "5.Generate Suggestions" --> Optimizer
+    Analysis -- "6.Produce Reports" --> Reports
+    WebUI -- "7.View Results" --> Reports
+    Optimizer -- "8.Provide Refactoring Advice" --> IDE
+    LangAdapter -- "Language-specific<br>Parsing Rules" --> Instrumentation
+    HWPlugin -- Hardware Driver<br>Implementations --> Measurement
+    Parser -. AST Parsing .-> Instrumentation
+    HAL -. Measurement<br>Abstraction .-> Measurement
+    Calc -. Energy<br>Computation .-> Analysis
+     IDE:::ui
+     WebUI:::ui
+     Parser:::core
+     HAL:::core
+     Calc:::core
+     Instrumentation:::core
+     Measurement:::core
+     Analysis:::core
+     LangAdapter:::plugin
+     HWPlugin:::plugin
+     Optimizer:::plugin
+     RawData:::data
+     Reports:::data
+    classDef ui fill:#9C27B0,stroke:#7B1FA2,color:white,stroke-width:2px
+    classDef core fill:#4CAF50,stroke:#388E3C,color:white,stroke-width:2px
+    classDef plugin fill:#2196F3,stroke:#1976D2,color:white,stroke-width:2px
+    classDef data fill:#FF9800,stroke:#F57C00,color:black,stroke-width:2px
+    classDef component fill:#f0f0f0,stroke-dasharray:5 5,stroke-width:1.5px
+    style Subcomponents fill:#f0f0f0,stroke:#888,stroke-dasharray:5 5,stroke-width:1.5px
+    linkStyle 0 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 1 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 2 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 3 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 4 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 5 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 6 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 7 stroke:#333,stroke-width:1.5px,fill:none
+    linkStyle 8 stroke:#333,stroke-width:1.5px,stroke-dasharray:3,3,fill:none
+    linkStyle 9 stroke:#333,stroke-width:1.5px,stroke-dasharray:3,3,fill:none
+    linkStyle 10 stroke:#333,stroke-width:1.5px,stroke-dasharray:3,3,fill:none
