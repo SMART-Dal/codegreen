@@ -1,0 +1,12 @@
+[package]
+name = "energy-language-adapters"
+version = "0.1.0"
+edition = "2021"
+description = "Language adapters for Codegreen energy measurement tool"
+
+[dependencies]
+tree-sitter = "0.20"
+tree-sitter-python = "0.20"
+
+[build-dependencies]
+cc = "1.0" 

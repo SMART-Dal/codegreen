@@ -1,0 +1,18 @@
+[package]
+name = "ide"
+version = "0.1.0"
+edition = "2021"
+description = "IDE integration for Codegreen"
+license = "MIT"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,57 @@
+[package]
+name = "instrumentation"
+version = "0.1.0"
+edition = "2021"
+description = "Code instrumentation tools for energy measurement"
+license = "MIT"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+
+# Language-specific dependencies
+tree-sitter = "0.20"
+tree-sitter-python = { version = "0.20", optional = true }
+tree-sitter-javascript = { version = "0.20", optional = true }
+tree-sitter-rust = { version = "0.20", optional = true }
+
+# IPC and Serialization
+tonic = "0.11"  # gRPC framework
+prost = "0.12"  # Protocol Buffers
+
+# Hardware monitoring
+libbpf-rs = "0.21"  # eBPF support
+bindgen = "0.69"    # C FFI bindings
+
+# Metrics and Storage
+prometheus = "0.13"
+influxdb = { version = "0.4", features = ["derive"] }
+
+# Utilities
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+futures = "0.3"
+
+hardware-plugins = { path = "../hardware-plugins" }
+
+[build-dependencies]
+bindgen = "0.69"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[features]
+default = ["python", "javascript", "rust"]
+python = ["tree-sitter-python"]
+javascript = ["tree-sitter-javascript"]
+rust = ["tree-sitter-rust"]
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.11"
+tempfile = "3.8" 
