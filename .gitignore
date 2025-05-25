@@ -3,3 +3,29 @@ node_modules/
 dist/
 build/
 *.log
+
+# Rust specific
+/target/
+**/*.rs.bk
+Cargo.lock
+*.pdb
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Debug files
+*.pdb
+*.dSYM/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Test coverage
+coverage/
+*.profraw

@@ -1,5 +1,5 @@
 use energy_core::{
-    EnergyMeasurement, MeasurementSession, MultiSourceSession,
+    MeasurementSession, MultiSourceSession,
     EnergyResult, EnergyError,
 };
 use std::time::{Duration, Instant};
@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 #[test]
 fn test_energy_measurement_creation() {
     let now = Instant::now();
-    let measurement = EnergyMeasurement {
+    let measurement = Measurement {
         timestamp: now,
         joules: 100.0,
         watts: 50.0,
@@ -21,14 +21,14 @@ fn test_energy_measurement_creation() {
 
 #[test]
 fn test_measurement_session_creation() {
-    let start = EnergyMeasurement {
+    let start = Measurement {
         timestamp: Instant::now(),
         joules: 100.0,
         watts: 50.0,
         source: "test".to_string(),
     };
 
-    let end = EnergyMeasurement {
+    let end = Measurement {
         timestamp: start.timestamp + Duration::from_secs(1),
         joules: 150.0,
         watts: 50.0,
@@ -53,13 +53,13 @@ fn test_multi_source_session() {
     let mut session = MultiSourceSession::new();
     
     // Add start measurements
-    let start1 = EnergyMeasurement {
+    let start1 = Measurement {
         timestamp: Instant::now(),
         joules: 100.0,
         watts: 50.0,
         source: "source1".to_string(),
     };
-    let start2 = EnergyMeasurement {
+    let start2 = Measurement {
         timestamp: start1.timestamp,
         joules: 200.0,
         watts: 100.0,
@@ -69,13 +69,13 @@ fn test_multi_source_session() {
     session.add_start_measurement(start2);
 
     // Add end measurements
-    let end1 = EnergyMeasurement {
+    let end1 = Measurement {
         timestamp: start1.timestamp + Duration::from_secs(1),
         joules: 150.0,
         watts: 50.0,
         source: "source1".to_string(),
     };
-    let end2 = EnergyMeasurement {
+    let end2 = Measurement {
         timestamp: start2.timestamp + Duration::from_secs(1),
         joules: 300.0,
         watts: 100.0,
@@ -113,14 +113,14 @@ fn test_energy_error_creation() {
 
 #[test]
 fn test_measurement_validation() {
-    let start = EnergyMeasurement {
+    let start = Measurement {
         timestamp: Instant::now(),
         joules: 100.0,
         watts: 50.0,
         source: "test".to_string(),
     };
 
-    let end = EnergyMeasurement {
+    let end = Measurement {
         timestamp: start.timestamp - Duration::from_secs(1), // Invalid: end before start
         joules: 50.0, // Invalid: less energy than start
         watts: 50.0,

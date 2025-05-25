@@ -1,37 +1,34 @@
-use crate::{InstrumentationError, Language, Result};
-use tree_sitter::{Parser as TreeSitterParser, Query, QueryCursor};
+use tree_sitter::{Parser, Language};
+use crate::error::InstrumentationError;
 
 /// Parser for different programming languages
-pub struct Parser {
-    parser: TreeSitterParser,
+pub struct InstrumentationParser {
+    parser: Parser,
 }
 
-impl Parser {
-    /// Create a new parser for the given language
-    pub fn new(language: Language) -> Result<Self> {
-        let mut parser = TreeSitterParser::new();
-        
-        // Set the language
-        let language = match language {
-            Language::Python => tree_sitter_python::language(),
-            Language::JavaScript => tree_sitter_javascript::language(),
-            Language::Rust => tree_sitter_rust::language(),
-        };
-        
-        parser.set_language(language).map_err(InstrumentationError::TreeSitterError)?;
-        
-        Ok(Self { parser })
+impl InstrumentationParser {
+    /// Create a new parser
+    pub fn new() -> Self {
+        Self {
+            parser: Parser::new(),
+        }
+    }
+
+    /// Set the language for the parser
+    pub fn set_language(&mut self, language: Language) -> Result<(), InstrumentationError> {
+        self.parser.set_language(language)
+            .map_err(|e| InstrumentationError::TreeSitterError(e.to_string()))?;
+        Ok(())
     }
 
     /// Parse source code
-    pub fn parse(&mut self, source: &str) -> Result<tree_sitter::Tree> {
-        self.parser
-            .parse(source, None)
-            .ok_or_else(|| InstrumentationError::ParserError("Failed to parse source code".into()))
+    pub fn parse(&mut self, source: &str) -> Result<tree_sitter::Tree, InstrumentationError> {
+        self.parser.parse(source, None)
+            .ok_or_else(|| InstrumentationError::ParserError("Failed to parse source code".to_string()))
     }
 
     /// Get the parser
-    pub fn parser(&self) -> &TreeSitterParser {
+    pub fn parser(&self) -> &Parser {
         &self.parser
     }
 }
@@ -42,13 +39,15 @@ mod tests {
 
     #[test]
     fn test_parser_creation() {
-        let parser = Parser::new(Language::Python).unwrap();
-        assert!(parser.parser().language().is_some());
+        let parser = InstrumentationParser::new();
+        assert!(parser.parser().language().is_none());
     }
 
     #[test]
     fn test_parse_python() {
-        let mut parser = Parser::new(Language::Python).unwrap();
+        let mut parser = InstrumentationParser::new();
+        let language = tree_sitter_python::language();
+        parser.set_language(language).unwrap();
         let source = "def hello(): pass";
         let tree = parser.parse(source).unwrap();
         assert!(!tree.root_node().has_error());

@@ -1,4 +1,4 @@
-//! Python language adapter
+//! Rust language adapter
 
 use tree_sitter::Language;
 use crate::LanguageAdapter;
@@ -8,53 +8,53 @@ use crate::CodeHotspot;
 use crate::OptimizationSuggestion;
 
 extern "C" {
-    fn tree_sitter_python() -> Language;
+    fn tree_sitter_rust() -> Language;
 }
 
-/// Python language adapter
-pub struct PythonAdapter {
+/// Rust language adapter
+pub struct RustAdapter {
     parser: Option<tree_sitter::Parser>,
 }
 
-impl PythonAdapter {
-    /// Create a new Python adapter
+impl RustAdapter {
+    /// Create a new Rust adapter
     pub fn new() -> Result<Self, LanguageAdapterError> {
-        // TODO: Initialize Python parser
+        // TODO: Initialize Rust parser
         Ok(Self {
             parser: None,
         })
     }
 
-    /// Analyze Python code for energy consumption
+    /// Analyze Rust code for energy consumption
     pub fn analyze_code(&self, code: &str) -> Result<AnalysisResult, LanguageAdapterError> {
-        // TODO: Implement Python code analysis
+        // TODO: Implement Rust code analysis
         Ok(AnalysisResult {
-            language: "python".to_string(),
+            language: "rust".to_string(),
             energy_score: 0.0,
             hotspots: Vec::new(),
             suggestions: Vec::new(),
         })
     }
 
-    /// Get Python-specific optimization suggestions
+    /// Get Rust-specific optimization suggestions
     pub fn get_suggestions(&self, code: &str) -> Result<Vec<OptimizationSuggestion>, LanguageAdapterError> {
-        // TODO: Implement Python-specific suggestions
+        // TODO: Implement Rust-specific suggestions
         Ok(Vec::new())
     }
 }
 
-impl LanguageAdapter for PythonAdapter {
+impl LanguageAdapter for RustAdapter {
     fn get_language_id(&self) -> &'static str {
-        "python"
+        "rust"
     }
 
     fn get_grammar(&self) -> Language {
-        unsafe { tree_sitter_python() }
+        unsafe { tree_sitter_rust() }
     }
 
     fn get_function_query(&self) -> &'static str {
         r#"
-        (function_definition
+        (function_item
             name: (identifier) @function.name
             parameters: (parameters) @function.params
             body: (block) @function.body
@@ -64,17 +64,17 @@ impl LanguageAdapter for PythonAdapter {
 
     fn get_class_query(&self) -> &'static str {
         r#"
-        (class_definition
-            name: (identifier) @class.name
-            body: (block) @class.body
+        (struct_item
+            name: (type_identifier) @struct.name
+            body: (field_declaration_list) @struct.body
         )
         "#
     }
 
     fn get_import_query(&self) -> &'static str {
         r#"
-        (import_statement) @import
-        (import_from_statement) @import.from
+        (use_declaration) @use
+        (extern_crate_declaration) @extern
         "#
     }
 } 

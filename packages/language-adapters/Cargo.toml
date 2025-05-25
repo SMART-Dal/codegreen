@@ -1,12 +1,25 @@
 [package]
-name = "energy-language-adapters"
+name = "language-adapters"
 version = "0.1.0"
 edition = "2021"
-description = "Language adapters for Codegreen energy measurement tool"
+description = "Language-specific adapters for code analysis"
+license = "MIT"
 
 [dependencies]
-tree-sitter = "0.20"
-tree-sitter-python = "0.20"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-javascript = { workspace = true }
 
-[build-dependencies]
-cc = "1.0" 
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.11"
+
+[lib]
+path = "src/lib.rs" 

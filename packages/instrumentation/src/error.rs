@@ -1,20 +1,34 @@
+use std::error::Error;
+use std::fmt;
 use thiserror::Error;
 
 /// Errors that can occur during instrumentation
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum InstrumentationError {
-    #[error("Parser error: {0}")]
-    ParserError(String),
-
+    #[error("Hardware error: {0}")]
+    HardwareError(#[from] Box<dyn Error + Send + Sync>),
+    #[error("Language error: {0}")]
+    LanguageError(String),
+    #[error("Measurement error: {0}")]
+    MeasurementError(String),
     #[error("Language not supported: {0}")]
-    UnsupportedLanguage(String),
-
-    #[error("Invalid configuration: {0}")]
-    InvalidConfig(String),
-
+    LanguageNotSupported(String),
+    #[error("Query error: {0}")]
+    QueryError(String),
+    #[error("Tree-sitter error: {0}")]
+    TreeSitterError(String),
+    #[error("InfluxDB error: {0}")]
+    InfluxError(#[from] influxdb::Error),
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Parser error: {0}")]
+    ParserError(String),
+    #[error("Anyhow error: {0}")]
+    AnyhowError(#[from] anyhow::Error),
+}
 
-    #[error("Tree-sitter error: {0}")]
-    TreeSitterError(#[from] tree_sitter::Error),
+impl From<String> for InstrumentationError {
+    fn from(err: String) -> Self {
+        InstrumentationError::LanguageError(err)
+    }
 } 

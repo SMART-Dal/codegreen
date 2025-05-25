@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+chrono = "0.4"
 
 [lib]
 path = "src/lib.rs" 

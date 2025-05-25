@@ -1,83 +1,77 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use crate::error::InstrumentationError;
+use influxdb::{Client, WriteQuery, ReadQuery, Timestamp};
 use prometheus::{Registry, Gauge, Counter};
-use influxdb::{Client, InfluxDbWriteable};
-use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
+use std::sync::{Arc, Mutex};
+use hardware_plugins::Measurement;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EnergyMeasurement {
-    pub timestamp: DateTime<Utc>,
-    pub energy_joules: f64,
-    pub source: String,
-    pub function_name: String,
-    pub language: String,
-}
-
-#[derive(Clone)]
 pub struct MetricsStore {
     prometheus: Arc<Mutex<Registry>>,
-    influxdb: Arc<Mutex<Client>>,
+    client: Client,
     energy_gauge: Gauge,
     total_energy_counter: Counter,
 }
 
 impl MetricsStore {
-    pub fn new(influxdb_url: &str) -> Result<Self, anyhow::Error> {
+    pub fn new(url: &str, database: &str) -> Result<Self, InstrumentationError> {
         let registry = Registry::new();
-        let energy_gauge = Gauge::new("energy_consumption_joules", "Current energy consumption in joules")?;
-        let total_energy_counter = Counter::new("total_energy_joules", "Total energy consumed in joules")?;
+        let energy_gauge = Gauge::new("energy_consumption_joules", "Current energy consumption in joules")
+            .map_err(|e| InstrumentationError::MeasurementError(e.to_string()))?;
+        let total_energy_counter = Counter::new("total_energy_joules", "Total energy consumed in joules")
+            .map_err(|e| InstrumentationError::MeasurementError(e.to_string()))?;
 
-        registry.register(Box::new(energy_gauge.clone()))?;
-        registry.register(Box::new(total_energy_counter.clone()))?;
+        registry.register(Box::new(energy_gauge.clone()))
+            .map_err(|e| InstrumentationError::MeasurementError(e.to_string()))?;
+        registry.register(Box::new(total_energy_counter.clone()))
+            .map_err(|e| InstrumentationError::MeasurementError(e.to_string()))?;
 
-        let client = Client::new(influxdb_url, "energy_metrics");
+        let client = Client::new(url, database);
 
         Ok(Self {
             prometheus: Arc::new(Mutex::new(registry)),
-            influxdb: Arc::new(Mutex::new(client)),
+            client,
             energy_gauge,
             total_energy_counter,
         })
     }
 
-    pub async fn record_measurement(&self, measurement: EnergyMeasurement) -> Result<()> {
+    pub async fn record_measurement(&self, measurement: &Measurement) -> Result<(), InstrumentationError> {
         // Update Prometheus metrics
-        self.energy_gauge.set(measurement.energy_joules);
-        self.total_energy_counter.inc_by(measurement.energy_joules);
+        self.energy_gauge.set(measurement.joules);
+        self.total_energy_counter.inc_by(measurement.joules);
 
         // Store in InfluxDB
-        let query = format!(
-            "energy_measurement,source={},function={},language={} value={} {}",
-            measurement.source,
-            measurement.function_name,
-            measurement.language,
-            measurement.energy_joules,
-            measurement.timestamp.timestamp_nanos()
-        );
+        let millis = measurement.timestamp.timestamp_millis();
+        let millis_u128 = if millis < 0 {
+            0 // Handle negative timestamps by using 0
+        } else {
+            millis as u128
+        };
 
-        let client = self.influxdb.lock().await;
-        client.query(&query).await?;
+        let query = WriteQuery::new(
+            Timestamp::Milliseconds(millis_u128),
+            "energy_measurements"
+        )
+        .add_field("joules", measurement.joules);
 
+        self.client.query(&query).await?;
         Ok(())
     }
 
-    pub async fn get_measurements(
-        &self,
-        start_time: DateTime<Utc>,
-        end_time: DateTime<Utc>,
-    ) -> Result<Vec<EnergyMeasurement>> {
-        let query = format!(
-            "SELECT * FROM energy_measurement WHERE time >= '{}' AND time <= '{}'",
-            start_time.to_rfc3339(),
-            end_time.to_rfc3339()
+    pub async fn get_measurements(&self, start: chrono::DateTime<chrono::Utc>, end: chrono::DateTime<chrono::Utc>) -> Result<Vec<Measurement>, InstrumentationError> {
+        let query = ReadQuery::new(
+            format!(
+                "SELECT joules FROM energy_measurements WHERE time >= '{}' AND time <= '{}'",
+                start.to_rfc3339(),
+                end.to_rfc3339()
+            )
         );
 
-        let client = self.influxdb.lock().await;
-        let result = client.query(&query).await?;
-        
-        // Parse InfluxDB response into EnergyMeasurement structs
-        // This is a simplified version - you'd need to implement proper parsing
+        let result = self.client.query(&query).await?;
+        self.parse_measurements(result)
+    }
+
+    fn parse_measurements(&self, _result: String) -> Result<Vec<Measurement>, InstrumentationError> {
+        // TODO: Implement parsing of InfluxDB response
         Ok(Vec::new())
     }
 } 

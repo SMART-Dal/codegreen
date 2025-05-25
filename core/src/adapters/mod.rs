@@ -1,49 +1,73 @@
 mod intel_rapl;
-mod nvidia_gpu;
 mod arm_pmu;
+mod nvidia_gpu;
 
-pub use intel_rapl::IntelRAPLAdapter;
-pub use nvidia_gpu::NvidiaGPUAdapter;
-pub use arm_pmu::ArmPMUAdapter;
-
-use crate::{EnergyAdapter, EnergyMeasurement, EnergyResult, MeasurementSession};
-use async_trait::async_trait;
-use std::sync::Arc;
+use crate::{MeasurementSession, EnergyResult};
+use hardware_plugins::{HardwarePlugin, Measurement};
+use chrono::Duration;
 
 /// Base adapter implementation that wraps a hardware plugin
 pub struct BaseAdapter {
     name: &'static str,
-    plugin: Arc<dyn HardwarePlugin>,
+    plugin: Box<dyn HardwarePlugin>,
 }
 
 impl BaseAdapter {
-    pub fn new(name: &'static str, plugin: Arc<dyn HardwarePlugin>) -> Self {
+    pub fn new(name: &'static str, plugin: Box<dyn HardwarePlugin>) -> Self {
         Self { name, plugin }
     }
 
     /// Calculate the duration between two measurements
-    pub fn calculate_duration(start: &EnergyMeasurement, end: &EnergyMeasurement) -> std::time::Duration {
-        end.timestamp.duration_since(start.timestamp)
+    pub fn calculate_duration(start: &Measurement, end: &Measurement) -> Duration {
+        end.timestamp.signed_duration_since(start.timestamp)
     }
 
     /// Calculate the energy delta between two measurements
-    pub fn calculate_energy_delta(start: &EnergyMeasurement, end: &EnergyMeasurement) -> f64 {
+    pub fn calculate_energy_delta(start: &Measurement, end: &Measurement) -> f64 {
         end.joules - start.joules
     }
 
     /// Create a measurement session from start and end measurements
     pub fn create_session(
-        start: EnergyMeasurement,
-        end: EnergyMeasurement,
+        start: Measurement,
+        end: Measurement,
     ) -> MeasurementSession {
         let duration = Self::calculate_duration(&start, &end);
         let total_energy = Self::calculate_energy_delta(&start, &end);
 
+        let mut start_measurements = std::collections::HashMap::new();
+        let mut end_measurements = std::collections::HashMap::new();
+        start_measurements.insert("base".to_string(), start.clone());
+        end_measurements.insert("base".to_string(), end.clone());
+
         MeasurementSession {
-            start,
-            end,
-            duration,
+            start_measurements,
+            end_measurements,
+            start: start.timestamp,
+            end: end.timestamp,
+            duration: duration.to_std().unwrap_or_default(),
             total_energy,
         }
     }
-} 
+
+    /// Get the underlying plugin
+    pub fn plugin(&self) -> &dyn HardwarePlugin {
+        self.plugin.as_ref()
+    }
+
+    /// Get the adapter name
+    pub fn name(&self) -> &str {
+        self.name
+    }
+}
+
+pub trait EnergyAdapter: Send + Sync {
+    fn name(&self) -> &str;
+    fn initialize(&mut self) -> EnergyResult<()>;
+    fn shutdown(&mut self) -> EnergyResult<()>;
+    fn read_measurements(&self) -> EnergyResult<Vec<Measurement>>;
+}
+
+pub use intel_rapl::IntelRaplAdapter;
+pub use arm_pmu::ArmPmuAdapter;
+pub use nvidia_gpu::NvidiaGpuAdapter; 

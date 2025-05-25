@@ -1,4 +1,6 @@
-use crate::{EnergyAdapter, EnergyResult};
+use crate::adapters::EnergyAdapter;
+use crate::EnergyResult;
+use hardware_plugins::HardwarePlugin;
 use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
@@ -33,19 +35,19 @@ pub trait Plugin: Send + Sync {
 
 /// Plugin manager that handles loading and managing plugins
 pub struct PluginManager {
-    plugins: Vec<Arc<dyn Plugin>>,
+    adapters: Vec<Box<dyn EnergyAdapter>>,
 }
 
 impl PluginManager {
     /// Create a new plugin manager
     pub fn new() -> Self {
         Self {
-            plugins: Vec::new(),
+            adapters: Vec::new(),
         }
     }
 
     /// Load a plugin from a shared library
-    pub fn load_plugin(&mut self, path: &Path) -> EnergyResult<()> {
+    pub fn load_plugin(&mut self, _path: &Path) -> EnergyResult<()> {
         // TODO: Implement dynamic plugin loading
         // This would involve:
         // 1. Loading the shared library
@@ -55,17 +57,38 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Get all loaded plugins
-    pub fn plugins(&self) -> &[Arc<dyn Plugin>] {
-        &self.plugins
+    /// Register a new adapter
+    pub fn register_adapter(&mut self, adapter: Box<dyn EnergyAdapter>) {
+        self.adapters.push(adapter);
     }
 
-    /// Create adapters from all loaded plugins
-    pub fn create_adapters(&self) -> EnergyResult<Vec<Box<dyn EnergyAdapter>>> {
-        let mut adapters = Vec::new();
-        for plugin in &self.plugins {
-            adapters.push(plugin.create_adapter()?);
+    /// Get all registered adapters
+    pub fn get_adapters(&self) -> &[Box<dyn EnergyAdapter>] {
+        &self.adapters
+    }
+
+    /// Create a new adapter from an existing one
+    pub fn create_adapter(&self, adapter: &dyn EnergyAdapter) -> EnergyResult<Box<dyn EnergyAdapter>> {
+        // Since we can't clone the trait object directly, we need to create a new adapter
+        // based on the adapter's name and type
+        match adapter.name() {
+            "intel_rapl" => {
+                let plugin = hardware_plugins::IntelRaplPlugin::new()?;
+                Ok(Box::new(crate::adapters::IntelRaplAdapter::new(Box::new(plugin))))
+            }
+            "arm_pmu" => {
+                let plugin = hardware_plugins::ArmEnergyPlugin::new()?;
+                Ok(Box::new(crate::adapters::ArmPmuAdapter::new(Box::new(plugin))))
+            }
+            "nvidia_gpu" => {
+                let plugin = hardware_plugins::NvidiaGpuPlugin::new()?;
+                Ok(Box::new(crate::adapters::NvidiaGpuAdapter::new(Box::new(plugin))))
+            }
+            _ => Err(crate::EnergyError::HardwareError(
+                hardware_plugins::HardwareError::UnsupportedOperation(
+                    format!("Unknown adapter type: {}", adapter.name())
+                )
+            ))
         }
-        Ok(adapters)
     }
 } 

@@ -1,13 +1,15 @@
-use crate::{EnergyMeasurement, EnergyResult, MeasurementSession};
+use crate::{MeasurementSession, EnergyResult};
+use hardware_plugins::Measurement;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// A measurement session that tracks multiple energy sources
 pub struct MultiSourceSession {
     /// Start measurements for each source
-    start_measurements: HashMap<String, EnergyMeasurement>,
+    start_measurements: HashMap<String, Measurement>,
     /// End measurements for each source
-    end_measurements: HashMap<String, EnergyMeasurement>,
+    end_measurements: HashMap<String, Measurement>,
     /// Start time of the session
     start_time: Instant,
     /// End time of the session
@@ -26,13 +28,13 @@ impl MultiSourceSession {
     }
 
     /// Add a start measurement for a source
-    pub fn add_start_measurement(&mut self, measurement: EnergyMeasurement) {
-        self.start_measurements.insert(measurement.source.clone(), measurement);
+    pub fn add_start_measurement(&mut self, source: String, measurement: Measurement) {
+        self.start_measurements.insert(source, measurement);
     }
 
     /// Add an end measurement for a source
-    pub fn add_end_measurement(&mut self, measurement: EnergyMeasurement) {
-        self.end_measurements.insert(measurement.source.clone(), measurement);
+    pub fn add_end_measurement(&mut self, source: String, measurement: Measurement) {
+        self.end_measurements.insert(source, measurement);
     }
 
     /// End the session
@@ -74,15 +76,10 @@ impl MultiSourceSession {
             .iter()
             .filter_map(|(source, start)| {
                 self.end_measurements.get(source).map(|end| {
-                    let duration = end.timestamp.duration_since(start.timestamp);
-                    let total_energy = end.joules - start.joules;
-
-                    MeasurementSession {
-                        start: start.clone(),
-                        end: end.clone(),
-                        duration,
-                        total_energy,
-                    }
+                    let mut session = MeasurementSession::new();
+                    session.add_start_measurement(source.clone(), start.clone());
+                    session.add_end_measurement(source.clone(), end.clone());
+                    session
                 })
             })
             .collect()

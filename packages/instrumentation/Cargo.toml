@@ -6,12 +6,13 @@ description = "Code instrumentation tools for energy measurement"
 license = "MIT"
 
 [dependencies]
-tokio = { workspace = true }
-serde = { workspace = true }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
-tracing = { workspace = true }
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
 
 # Language-specific dependencies
 tree-sitter = "0.20"
@@ -29,14 +30,16 @@ bindgen = "0.69"    # C FFI bindings
 
 # Metrics and Storage
 prometheus = "0.13"
-influxdb = { version = "0.4", features = ["derive"] }
+influxdb = { version = "0.5", features = ["derive"] }
 
 # Utilities
 tracing-subscriber = "0.3"
 anyhow = "1.0"
 futures = "0.3"
+futures-util = "0.3"
 
 hardware-plugins = { path = "../hardware-plugins" }
+language-adapters = { path = "../language-adapters" }
 
 [build-dependencies]
 bindgen = "0.69"
@@ -53,5 +56,5 @@ rust = ["tree-sitter-rust"]
 
 [dev-dependencies]
 tokio-test = "0.4"
-mockall = "0.11"
+mockall = "0.11" 
 tempfile = "3.8" 
