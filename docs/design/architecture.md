@@ -1,6 +1,6 @@
-# Code Green Architecture Overview
+# CodeGreen Architecture Overview
 
-This document provides an overview of the Code Green tool’s architecture. Code Green is designed as a modular, language-agnostic energy measurement system that supports multiple hardware platforms and scenarios. Its design follows best practices to ensure extensibility, maintainability, and reusability.
+This document provides an overview of the CodeGreen tool's architecture. CodeGreen is designed as a modular, language-agnostic energy measurement system that supports multiple hardware platforms and scenarios. Its design follows best practices to ensure extensibility, maintainability, and reusability.
 
 ## 1. High-Level Architecture Overview
 
@@ -19,13 +19,13 @@ This document provides an overview of the Code Green tool’s architecture. Code
 
 2. **Instrumentation and Parsing Engine**
    - **Purpose:**  
-     Uses Tree-sitter to parse source code, detect method/function boundaries, and inject instrumentation hooks.
+     Uses language-specific parsers to analyze source code, detect method/function boundaries, and inject instrumentation hooks.
    - **Responsibilities:**  
-     - Integrate with Tree-sitter for language-agnostic parsing.
-     - Provide a unified API to “instrument” code blocks (e.g., wrap methods with measurement calls).
+     - Integrate with language-specific parsing libraries for accurate code analysis.
+     - Provide a unified API to "instrument" code blocks (e.g., wrap methods with measurement calls).
      - Expose a plugin system for language-specific query definitions.
    - **Key Patterns:**  
-     - **Plugin Architecture:** So that each language can have its own query files and instrumentation rules.
+     - **Plugin Architecture:** So that each language can have its own parsing rules and instrumentation logic.
      - **Separation of Concerns:** Ensuring parsing logic remains independent of measurement logic.
 
 3. **IDE Integration / User Interface**
@@ -81,66 +81,61 @@ This document provides an overview of the Code Green tool’s architecture. Code
 
 ## 2. Repository Structure and Modules
 
-The Code Green project is organized as a monorepo where each module is developed and tested as an independent package. This modular structure promotes code reuse and simplifies the process of adding new features or supporting additional languages and hardware platforms.
+The CodeGreen project is organized as a monorepo where each module is developed and tested as an independent package. This modular structure promotes code reuse and simplifies the process of adding new features or supporting additional languages and hardware platforms.
 
 ```
-/code-green/
+/codegreen/
+├── CMakeLists.txt                  # Main CMake configuration
+├── src/                            # Main application source
+│   └── main.cpp                   # Entry point
+├── core/                           # Core measurement engine library
+│   ├── CMakeLists.txt             # Core library build config
+│   ├── include/                    # Public headers
+│   │   ├── measurement_engine.hpp
+│   │   ├── energy_monitor.hpp
+│   │   ├── measurement_session.hpp
+│   │   ├── measurement.hpp
+│   │   ├── plugin/
+│   │   │   ├── hardware_plugin.hpp
+│   │   │   └── plugin_registry.hpp
+│   │   └── adapters/
+│   │       └── language_adapter.hpp
+│   └── src/                        # Implementation files
+│       ├── measurement_engine.cpp
+│       ├── energy_monitor.cpp
+│       ├── measurement_session.cpp
+│       └── plugin/
+│           └── plugin_registry.cpp
+├── packages/                        # Feature packages
+│   ├── ide/                        # IDE integration
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   └── src/
+│   ├── optimizer/                  # Code optimization
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   └── src/
+│   ├── visualization/              # Data visualization
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   └── src/
+│   ├── instrumentation/            # Code instrumentation
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   └── src/
+│   ├── hardware-plugins/           # Hardware monitoring plugins
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   └── src/
+│   └── language-adapters/          # Language-specific adapters
+│       ├── CMakeLists.txt
+│       ├── include/
+│       └── src/
 ├── docs/                           # Architecture docs, design guidelines, tutorials, etc.
 │   └── design/
-│       └── architecture.md         # Updated design document (see below)
-├── packages/
-│   ├── energy-core/                # Core measurement engine library
-│   │   ├── src/
-│   │   │   ├── hal/               # Hardware abstraction layer (Intel RAPL, ARM, external meter adapters)
-│   │   │   ├── interfaces/        # Common interfaces & API definitions for measurement
-│   │   │   └── engine/            # Core logic for measurement start/stop and delta calculations
-│   │   ├── tests/                 # Unit tests for core measurement logic
-│   │   └── README.md
-│   │
-│   ├── energy-instrumentation/     # Instrumentation & parsing engine
-│   │   ├── src/
-│   │   │   ├── parsers/           # Tree-sitter integration and language-agnostic parsing logic
-│   │   │   ├── instrumenters/     # Code to insert measurement hooks around method blocks
-│   │   │   └── plugins/           # Language-specific query files and instrumentation rules
-│   │   ├── tests/                 # Unit tests for parsing and instrumentation
-│   │   └── README.md
-│   │
-│   ├── energy-ide/                 # IDE integration layer (e.g., VSCode, IntelliJ plugins)
-│   │   ├── src/
-│   │   │   ├── vscode-plugin/     # Example: VSCode integration
-│   │   │   ├── intellij-plugin/   # Example: IntelliJ integration
-│   │   │   └── ui/                # Shared UI components and reporting dashboards
-│   │   ├── tests/                 # Integration tests, if applicable
-│   │   └── README.md
-│   │
-│   ├── energy-language-adapters/   # Language-specific extensions
-│   │   ├── src/
-│   │   │   ├── java/              # Java-specific instrumentation queries
-│   │   │   ├── python/            # Python-specific instrumentation queries
-│   │   │   └── cpp/               # C/C++ specific instrumentation queries
-│   │   ├── tests/
-│   │   └── README.md
-│   │
-│   ├── energy-hardware-plugins/    # Hardware-specific plugins for measurement
-│   │   ├── src/
-│   │   │   ├── intel-rapl/        # Intel RAPL plugin
-│   │   │   ├── arm-counters/      # ARM measurement plugin
-│   │   │   └── external-meter/    # Plugin for external measurement devices
-│   │   ├── tests/
-│   │   └── README.md
-│   │
-│   ├── energy-visualization/       # Visualization and dashboard module
-│   │   ├── src/
-│   │   │   └── dashboard/         # Dashboard components, charts, and plot generators
-│   │   ├── tests/                 # Unit and integration tests for visualization components
-│   │   └── README.md
-│   │
-│   └── energy-optimizer/           # Energy optimizers and refactoring module
-│       ├── src/
-│       │   └── optimizers/        # Code analysis and optimization routines
-│       ├── tests/                 # Unit and integration tests for optimization logic
-│       └── README.md
-│
+│       └── architecture.md         # This design document
+├── scripts/                        # Build and utility scripts
+│   └── build.sh                   # Build script
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -166,7 +161,7 @@ The Code Green project is organized as a monorepo where each module is developed
   Implement CI pipelines (e.g., via GitHub Actions, Travis CI, or GitLab CI) to automatically run tests and build packages, ensuring that updates in one module do not adversely affect others.
 
 - **Versioning and Dependency Management:**  
-  Use semantic versioning for each package and employ package management tools (e.g., pip, Poetry) for dependency resolution.
+  Use semantic versioning for each package and employ CMake for dependency resolution and build management.
 
 - **IDE and User Experience:**  
   The IDE integration layer is decoupled from core functionality, allowing independent development of plugins for different IDEs while reusing the underlying measurement and instrumentation libraries.
@@ -179,18 +174,18 @@ The Code Green project is organized as a monorepo where each module is developed
 ## 4. How It Works Together
 
 1. **User Workflow:**
-   - A developer clicks a button in their IDE (via the energy-ide module).
-   - The IDE plugin invokes the Instrumentation Engine (energy-instrumentation) to parse the currently open file using Tree-sitter.
-   - Detected method blocks are instrumented by injecting calls to the Measurement Engine (energy-core).
-   - As the application executes, the Measurement Engine (utilizing hardware plugins from energy-hardware-plugins) records energy consumption.
+   - A developer clicks a button in their IDE (via the ide module).
+   - The IDE plugin invokes the Instrumentation Engine (instrumentation) to parse the currently open file using language-specific parsers.
+   - Detected method blocks are instrumented by injecting calls to the Measurement Engine (core).
+   - As the application executes, the Measurement Engine (utilizing hardware plugins from hardware-plugins) records energy consumption.
    - Once execution is complete, the data is aggregated and presented in a structured report via the IDE plugin.
 
 2. **Extensibility:**
    - **Adding a New Language:**  
-     Implement new Tree-sitter queries and instrumentation rules in the energy-language-adapters module.
+     Implement new parsing rules and instrumentation logic in the language-adapters module.
    - **Supporting New Hardware:**  
-     Develop and integrate a new hardware plugin within the energy-hardware-plugins module that conforms to the common measurement interface.
+     Develop and integrate a new hardware plugin within the hardware-plugins module that conforms to the common measurement interface.
    - **Enhancing the UI:**  
-     Extend the energy-ide module with additional features or support for other IDEs without altering the core measurement or instrumentation components.
+     Extend the ide module with additional features or support for other IDEs without altering the core measurement or instrumentation components.
 
 ---

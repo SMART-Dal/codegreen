@@ -38,70 +38,47 @@ check_dependency() {
 }
 
 print_status "Checking dependencies..."
-check_dependency rustc
-check_dependency cargo
+check_dependency cmake
+check_dependency make
+check_dependency g++
+check_dependency pkg-config
 check_dependency docker
 check_dependency docker-compose
-check_dependency python3
-check_dependency pip3
+
+# Check for required libraries
+check_library() {
+    if ! pkg-config --exists $1; then
+        print_error "$1 development library is required but not installed"
+        print_error "Install with: sudo apt-get install lib$1-dev"
+        exit 1
+    fi
+}
+
+print_status "Checking required libraries..."
+check_library jsoncpp
+check_library libcurl
 
 # Create build directory
 print_status "Creating build directory..."
 mkdir -p build
+cd build
 
-# Build all packages
-print_status "Building packages..."
+# Configure with CMake
+print_status "Configuring project with CMake..."
+cmake .. -DCMAKE_BUILD_TYPE=Release
 
-# Build energy-core
-print_status "Building energy-core..."
-cd packages/energy-core
-cargo build --release
-cd ../..
+# Build the project
+print_status "Building project..."
+make -j$(nproc)
 
-# Build energy-instrumentation
-print_status "Building energy-instrumentation..."
-cd packages/energy-instrumentation
-cargo build --release
-cd ../..
-
-# Build energy-language-adapters
-print_status "Building energy-language-adapters..."
-cd packages/energy-language-adapters
-cargo build --release
-cd ../..
-
-# Build energy-hardware-plugins
-print_status "Building energy-hardware-plugins..."
-cd packages/energy-hardware-plugins
-cargo build --release
-cd ../..
-
-# Build energy-visualization
-print_status "Building energy-visualization..."
-cd packages/energy-visualization
-cargo build --release
-cd ../..
-
-# Build energy-optimizer
-print_status "Building energy-optimizer..."
-cd packages/energy-optimizer
-cargo build --release
-cd ../..
-
-# Build Python bindings
-print_status "Building Python bindings..."
-cd packages/energy-instrumentation
-maturin build
-cd ../..
-
-# Copy binaries to build directory
-print_status "Copying binaries to build directory..."
-mkdir -p build/bin
-cp packages/*/target/release/* build/bin/ 2>/dev/null || true
+# Install
+print_status "Installing..."
+sudo make install
 
 # Create symlinks
 print_status "Creating symlinks..."
-ln -sf "$(pwd)/build/bin/energy-instrumentation" /usr/local/bin/codegreen
+sudo ln -sf /usr/local/bin/codegreen /usr/local/bin/codegreen
 
 print_status "Build completed successfully!"
-print_status "You can now use the 'codegreen' command" 
+print_status "You can now use the 'codegreen' command"
+print_status "Binary location: /usr/local/bin/codegreen" 

@@ -4,11 +4,19 @@ dist/
 build/
 *.log
 
-# Rust specific
-/target/
-**/*.rs.bk
-Cargo.lock
-*.pdb
+# C++ specific
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.exe
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
 
 # IDE specific
 .idea/

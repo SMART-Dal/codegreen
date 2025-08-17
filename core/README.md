@@ -1,6 +1,6 @@
-# Codegreen Core
+# CodeGreen Core
 
-The **Codegreen Core** is the central orchestration layer of the Codegreen system. It provides the foundation for energy measurement and analysis across multiple programming languages and hardware architectures.
+The **CodeGreen Core** is the central orchestration layer of the CodeGreen system. It provides the foundation for energy measurement and analysis across multiple programming languages and hardware architectures.
 
 ## Architecture
 
@@ -27,25 +27,39 @@ The core module:
 - Provides code analysis capabilities
 - Enables energy-aware code optimization
 
+## Building
+
+```bash
+# From the project root
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make codegreen-core
+```
+
+## Testing
+
+```bash
+# Run core tests
+ctest -R core
+```
+
 ## Usage
 
-```rust
-use codegreen_core::{MeasurementEngine, EnergyResult};
+```cpp
+#include "core/measurement_engine.hpp"
+#include "core/energy_monitor.hpp"
 
-async fn measure_energy() -> EnergyResult<()> {
-    let mut engine = MeasurementEngine::new();
-    
-    // Start measurements
-    let start_measurements = engine.start_measurements().await?;
-    
-    // Analyze code
-    engine.analyze_code(source_code, "python")?;
-    
-    // Stop measurements
-    let sessions = engine.stop_measurements(start_measurements).await?;
-    
-    Ok(())
-}
+auto engine = std::make_unique<codegreen::MeasurementEngine>();
+auto monitor = std::make_unique<codegreen::EnergyMonitor>();
+
+// Start measurements
+auto session = monitor->start_measurement();
+
+// Analyze code
+engine->analyze_code(source_code, "cpp");
+
+// Stop measurements
+auto final_session = monitor->stop_measurement(std::move(session));
 ```
 
 ## Integration
@@ -55,3 +69,15 @@ The core module integrates with:
 - Language adapters for code analysis
 - Storage systems for data persistence
 - Visualization tools for data presentation
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Implement your core features
+4. Add tests
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details

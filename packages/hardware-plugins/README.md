@@ -5,7 +5,7 @@ This package provides hardware-specific energy measurement plugins for CodeGreen
 ## Architecture
 
 The package follows a plugin-based architecture where each hardware-specific implementation:
-1. Implements the `HardwarePlugin` trait
+1. Inherits from the `HardwarePlugin` base class
 2. Provides hardware-specific measurement logic
 3. Exposes a consistent interface for energy measurement
 
@@ -21,41 +21,60 @@ The package follows a plugin-based architecture where each hardware-specific imp
 
 To add a new hardware plugin:
 
-1. Create a new module in `src/plugins/`
-2. Implement the `HardwarePlugin` trait
-3. Add the plugin to `src/plugins/mod.rs`
-4. Register the plugin in the `PluginRegistry`
+1. Create a new header file in `include/`
+2. Create a new implementation file in `src/`
+3. Inherit from the `HardwarePlugin` base class
+4. Implement the required virtual methods
+5. Register the plugin in the `PluginRegistry`
 
 Example:
-```rust
-use energy_hardware_plugins::{HardwarePlugin, HardwareError, Measurement};
+```cpp
+#include "hardware_plugin.hpp"
 
-pub struct MyHardwarePlugin {
-    // Plugin-specific fields
-}
-
-impl HardwarePlugin for MyHardwarePlugin {
-    // Implement required methods
-}
+class MyHardwarePlugin : public HardwarePlugin {
+public:
+    std::string name() const override {
+        return "my_hardware";
+    }
+    
+    std::unique_ptr<Measurement> get_measurement() override {
+        // Implementation
+        return std::make_unique<Measurement>();
+    }
+    
+    bool init() override {
+        // Initialize hardware
+        return true;
+    }
+    
+    void cleanup() override {
+        // Cleanup hardware
+    }
+    
+    bool is_available() const override {
+        // Check if hardware is available
+        return true;
+    }
+};
 ```
 
 ## Usage
 
-```rust
-use energy_hardware_plugins::{PluginRegistry, IntelRAPLPlugin};
+```cpp
+#include "plugin_registry.hpp"
+#include "intel_rapl_plugin.hpp"
 
-let mut registry = PluginRegistry::new();
-registry.register_plugin(Box::new(IntelRAPLPlugin::new()));
+auto registry = std::make_unique<PluginRegistry>();
+registry->register_plugin(std::make_unique<IntelRAPLPlugin>());
 
 // Get available plugins
-let available_plugins = registry.get_available_plugins();
+auto available_plugins = registry->get_available_plugins();
 
 // Use a specific plugin
-if let Some(plugin) = registry.get_plugin_by_name("intel_rapl") {
-    plugin.initialize()?;
-    plugin.start_measurement()?;
-    let measurement = plugin.get_measurement()?;
-    plugin.stop_measurement()?;
+if (auto plugin = registry->get_plugin("intel_rapl")) {
+    plugin->init();
+    auto measurement = plugin->get_measurement();
+    plugin->cleanup();
 }
 ```
 
@@ -64,12 +83,20 @@ if let Some(plugin) = registry.get_plugin_by_name("intel_rapl") {
 - Linux operating system
 - Root access for hardware sensors
 - Appropriate hardware support (e.g., Intel CPU for RAPL)
+- C++17 compatible compiler
 
 ## Testing
 
 Run the tests with:
 ```bash
-cargo test
+# From the project root
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+make
+make test
+
+# Or run specific tests
+ctest -R hardware_plugins
 ```
 
 Note: Some tests require hardware support and may be skipped if the required hardware is not available.

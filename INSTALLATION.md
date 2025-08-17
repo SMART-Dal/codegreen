@@ -1,189 +1,259 @@
-# Codegreen Installation Guide
+# CodeGreen Installation Guide
 
-Codegreen is a comprehensive energy measurement tool that provides insights across multiple programming languages and hardware architectures. This guide will help you set up and run the tool.
+This guide will help you install CodeGreen on your system.
 
 ## Prerequisites
 
 ### System Requirements
-- Linux operating system (tested on Ubuntu 20.04+)
-- Rust toolchain (latest stable)
-- Docker and Docker Compose
-- Python 3.8+ (for Python bindings)
-- CMake 3.10+
-- Build essentials (gcc, make, etc.)
+- Linux (Ubuntu 18.04+, Debian 10+, CentOS 7+)
+- x86_64 or ARM64 architecture
+- At least 2GB RAM
+- 1GB free disk space
 
-### Required Hardware Support
-- Intel CPU with RAPL support (for CPU energy measurements)
-- NVIDIA GPU (optional, for GPU energy measurements)
-- ARM CPU (optional, for ARM-specific measurements)
+### Required Software
+- CMake 3.16 or higher
+- GCC 7.0 or higher (or compatible C++17 compiler)
+- Make
+- pkg-config
+- Git
 
-## Quick Start
+### Required Libraries
+- libjsoncpp-dev
+- libcurl4-openssl-dev
 
-### 1. Install Dependencies
+## Installation Steps
+
+### 1. Install System Dependencies
 
 #### Ubuntu/Debian
 ```bash
-# System dependencies
 sudo apt-get update
 sudo apt-get install -y \
     build-essential \
     cmake \
     pkg-config \
-    libssl-dev \
-    python3-dev \
-    python3-pip \
-    docker.io \
-    docker-compose
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-
-# Install Python dependencies
-pip3 install maturin
+    libjsoncpp-dev \
+    libcurl4-openssl-dev \
+    git
 ```
 
 #### CentOS/RHEL
 ```bash
-# System dependencies
-sudo yum groupinstall "Development Tools"
-sudo yum install cmake openssl-devel python3-devel python3-pip docker docker-compose
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-
-# Install Python dependencies
-pip3 install maturin
+sudo yum groupinstall -y "Development Tools"
+sudo yum install -y \
+    cmake3 \
+    pkgconfig \
+    jsoncpp-devel \
+    libcurl-devel \
+    git
 ```
 
-### 2. Clone and Build
-
+#### Arch Linux
 ```bash
-# Clone the repository
-git clone ...
-cd codegreen
+sudo pacman -S \
+    base-devel \
+    cmake \
+    pkg-config \
+    jsoncpp \
+    curl \
+    git
+```
 
-# Build all packages
+### 2. Clone the Repository
+```bash
+git clone https://github.com/your-org/codegreen.git
+cd codegreen
+```
+
+### 3. Build and Install
+
+#### Option A: Using the Build Script (Recommended)
+```bash
+# Make the build script executable
+chmod +x scripts/build.sh
+
+# Run the build script
 ./scripts/build.sh
 ```
 
-### 3. Start Services
+The build script will:
+- Check all dependencies
+- Configure the project with CMake
+- Build all components
+- Install the binary to `/usr/local/bin/codegreen`
+
+#### Option B: Manual Build
+```bash
+# Create build directory
+mkdir build
+cd build
+
+# Configure with CMake
+cmake .. -DCMAKE_BUILD_TYPE=Release
+
+# Build
+make -j$(nproc)
+
+# Install
+sudo make install
+```
+
+### 4. Verify Installation
+```bash
+# Check if codegreen is available
+which codegreen
+
+# Check version
+codegreen --version
+
+# Test basic functionality
+codegreen --help
+```
+
+## Post-Installation
+
+### 1. Add to PATH (if not already added)
+The binary is installed to `/usr/local/bin/` which should already be in your PATH. If not, add it:
 
 ```bash
-# Start required services (InfluxDB, Prometheus, Grafana)
-./scripts/start-services.sh
+echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
-### 4. Install Python Package (Optional)
+### 2. Create Configuration Directory
+```bash
+mkdir -p ~/.config/codegreen
+```
+
+### 3. Set Up Hardware Monitoring (Optional)
+Some hardware monitoring features may require additional setup:
 
 ```bash
-# Install Python package
-cd packages/energy-instrumentation
-maturin develop
-```
-
-## Project Structure
-
-```
-codegreen/
-├── packages/
-│   ├── energy-core/           # Core measurement engine
-│   ├── energy-instrumentation/ # Code instrumentation
-│   ├── energy-language-adapters/ # Language-specific adapters
-│   ├── energy-hardware-plugins/  # Hardware measurement plugins
-│   ├── energy-visualization/     # Visualization and dashboards
-│   └── energy-optimizer/         # Energy optimization tools
-├── scripts/
-│   ├── build.sh              # Build script
-│   ├── start-services.sh     # Service startup script
-│   └── install-deps.sh       # Dependency installation
-├── docker/
-│   ├── influxdb/            # InfluxDB configuration
-│   ├── prometheus/          # Prometheus configuration
-│   └── grafana/             # Grafana configuration
-└── docs/                    # Documentation
-```
-
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file in the project root:
-
-```env
-INFLUXDB_URL=http://localhost:8086
-PROMETHEUS_URL=http://localhost:9090
-GRAFANA_URL=http://localhost:3000
-```
-
-### Hardware Configuration
-
-#### Intel RAPL
-```bash
-# Enable RAPL access
+# For Intel RAPL (if supported)
 sudo modprobe msr
-sudo chmod 666 /dev/cpu/*/msr
-```
 
-#### NVIDIA GPU
-```bash
-# Install NVIDIA drivers and CUDA toolkit
-sudo apt-get install nvidia-driver-xxx cuda-toolkit
-```
+# For GPU monitoring (NVIDIA)
+sudo nvidia-smi
 
-## Usage Examples
-
-### Basic Usage
-
-```python
-from codegreen import EnergyInstrumentation
-
-# Initialize the instrumentation engine
-engine = EnergyInstrumentation()
-
-# Instrument Python code
-instrumented_code = engine.instrument("""
-def calculate_sum(a, b):
-    return a + b
-""", "python")
-```
-
-### Command Line Usage
-
-```bash
-# Run energy measurement
-codegreen measure --file example.py --language python
-
-# View energy consumption dashboard
-codegreen dashboard
+# For ARM energy counters
+# May require kernel configuration
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Permission Denied for RAPL**
-   ```bash
-   sudo chmod 666 /dev/cpu/*/msr
-   ```
+#### CMake Not Found
+```bash
+# Ubuntu/Debian
+sudo apt-get install cmake
 
-2. **Docker Service Issues**
-   ```bash
-   sudo systemctl restart docker
-   ```
+# CentOS/RHEL
+sudo yum install cmake3
+```
 
-3. **Build Failures**
-   ```bash
-   # Clean and rebuild
-   ./scripts/clean.sh
-   ./scripts/build.sh
-   ```
+#### Compiler Not Found
+```bash
+# Ubuntu/Debian
+sudo apt-get install build-essential
+
+# CentOS/RHEL
+sudo yum groupinstall "Development Tools"
+```
+
+#### Missing Libraries
+```bash
+# Check what's missing
+pkg-config --exists jsoncpp || echo "jsoncpp missing"
+pkg-config --exists libcurl || echo "libcurl missing"
+
+# Install missing libraries
+sudo apt-get install libjsoncpp-dev libcurl4-openssl-dev
+```
+
+#### Permission Denied During Install
+```bash
+# Make sure you have sudo privileges
+sudo -v
+
+# Or install to user directory
+cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/.local
+make install
+```
+
+### Build Errors
+
+#### C++17 Not Supported
+Update your compiler:
+```bash
+# Ubuntu/Debian
+sudo apt-get install g++-8
+
+# Use specific compiler
+cmake .. -DCMAKE_CXX_COMPILER=g++-8
+```
+
+#### Memory Issues During Build
+Reduce parallel jobs:
+```bash
+make -j2  # Use 2 jobs instead of all cores
+```
+
+## Development Installation
+
+For development work, you may want to install in development mode:
+
+```bash
+# Clone and setup
+git clone https://github.com/your-org/codegreen.git
+cd codegreen
+
+# Create development build
+mkdir build-debug
+cd build-debug
+cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=$HOME/.local
+make -j$(nproc)
+make install
+
+# Add to PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+## Uninstallation
+
+To remove CodeGreen:
+
+```bash
+# Remove binary
+sudo rm -f /usr/local/bin/codegreen
+
+# Remove libraries
+sudo rm -rf /usr/local/lib/libcodegreen*
+
+# Remove headers
+sudo rm -rf /usr/local/include/codegreen
+
+# Remove configuration (optional)
+rm -rf ~/.config/codegreen
+```
 
 ## Support
 
-For issues and feature requests, please visit our [GitHub repository](https://github.com/yourusername/codegreen).
+If you encounter issues:
 
-## License
+1. Check the troubleshooting section above
+2. Search existing issues on GitHub
+3. Create a new issue with:
+   - Your system information (`uname -a`)
+   - Error messages
+   - Steps to reproduce
+   - CMake and compiler versions
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
+## Next Steps
+
+After installation, see the main README.md for:
+- Usage examples
+- Configuration options
+- API documentation
+- Contributing guidelines 

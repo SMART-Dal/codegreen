@@ -1,161 +1,136 @@
-# Codegreen
+# CodeGreen - Energy Monitoring and Code Optimization Tool
 
-Codegreen is a comprehensive energy measurement and analysis tool for software systems. It provides a unified interface for measuring energy consumption across different hardware platforms and programming languages.
+CodeGreen is a comprehensive tool for monitoring energy consumption during code execution and providing optimization suggestions to reduce energy usage.
+
+## Features
+
+- **Energy Monitoring**: Real-time monitoring of CPU, GPU, and system energy consumption
+- **Code Analysis**: Language-agnostic code analysis for energy optimization opportunities
+- **IDE Integration**: Support for VSCode, IntelliJ, and other popular IDEs
+- **Hardware Plugins**: Extensible plugin system for different hardware platforms
+- **Visualization**: Charts and reports for energy consumption analysis
+- **Code Instrumentation**: Automatic code instrumentation for energy profiling
 
 ## Project Structure
 
 ```
 codegreen/
-├── core/                           # Core measurement engine and orchestration
-│   ├── src/
-│   │   ├── adapters/              # Hardware adapter interfaces
-│   │   ├── measurement/           # Measurement session management
-│   │   ├── plugin/                # Plugin system
-│   │   └── error.rs               # Error handling
-│   ├── tests/                     # Core tests
-│   └── benches/                   # Benchmark tests
-│
-├── packages/
-│   ├── instrumentation/           # Code instrumentation tools
-│   │   ├── src/
-│   │   ├── examples/             # Usage examples
-│   │   └── tests/                # Package tests
-│   │
-│   ├── hardware-plugins/         # Hardware-specific implementations
-│   │   ├── src/
-│   │   │   ├── intel/           # Intel-specific implementations
-│   │   │   ├── arm/             # ARM-specific implementations
-│   │   │   └── common/          # Shared hardware utilities
-│   │   └── tests/
-│   │
-│   ├── language-adapters/        # Language-specific analyzers
-│   │   ├── src/
-│   │   │   ├── python/          # Python analyzer
-│   │   │   ├── javascript/      # JavaScript/TypeScript analyzer
-│   │   │   └── rust/            # Rust analyzer
-│   │   └── tests/
-│   │
-│   ├── ide/                      # IDE integration
-│   │   ├── src/
-│   │   │   ├── vscode/          # VS Code extension
-│   │   │   └── jetbrains/       # JetBrains plugin
-│   │   └── tests/
-│   │
-│   ├── optimizer/                # Energy optimization tools
-│   │   ├── src/
-│   │   │   ├── analysis/        # Code analysis
-│   │   │   └── suggestions/     # Optimization suggestions
-│   │   └── tests/
-│   │
-│   └── visualization/            # Data visualization
-│       ├── src/
-│       │   ├── dashboards/      # Grafana dashboards
-│       │   └── reports/         # Report generation
-│       └── tests/
-│
-├── docker/                        # Docker configurations
-│   ├── grafana/                  # Grafana setup
-│   ├── prometheus/               # Prometheus setup
-│   └── influxdb/                 # InfluxDB setup
-│
-├── docs/                         # Project documentation
-│   ├── architecture/            # Architecture diagrams and docs
-│   ├── api/                     # API documentation
-│   └── guides/                  # User guides
-│
-├── scripts/                      # Build and utility scripts
-├── Cargo.toml                    # Workspace configuration
-└── README.md                     # This file
+├── CMakeLists.txt              # Main CMake configuration
+├── src/                        # Main application source
+│   └── main.cpp               # Entry point
+├── core/                       # Core library
+│   ├── CMakeLists.txt         # Core library build config
+│   ├── include/                # Public headers
+│   │   ├── measurement_engine.hpp
+│   │   ├── energy_monitor.hpp
+│   │   ├── measurement_session.hpp
+│   │   ├── measurement.hpp
+│   │   ├── plugin/
+│   │   │   ├── hardware_plugin.hpp
+│   │   │   └── plugin_registry.hpp
+│   │   └── adapters/
+│   │       └── language_adapter.hpp
+│   └── src/                    # Implementation files
+│       ├── measurement_engine.cpp
+│       ├── energy_monitor.cpp
+│       ├── measurement_session.cpp
+│       └── plugin/
+│           └── plugin_registry.cpp
+├── packages/                    # Feature packages
+│   ├── ide/                    # IDE integration
+│   ├── optimizer/              # Code optimization
+│   ├── visualization/          # Data visualization
+│   ├── instrumentation/        # Code instrumentation
+│   ├── hardware-plugins/       # Hardware monitoring plugins
+│   └── language-adapters/      # Language-specific adapters
+└── scripts/                     # Build and utility scripts
+    └── build.sh                # Build script
 ```
 
-## Components
+## Building
 
-### Core
-The central orchestration layer that:
-- Manages measurement sessions
-- Coordinates hardware plugins
-- Integrates language adapters
-- Provides unified APIs
+### Prerequisites
 
-### Hardware Plugins
-Platform-specific implementations for:
-- Intel RAPL
-- ARM energy counters
-- External power meters
-- Custom hardware
+- CMake 3.16 or higher
+- GCC 7.0 or higher (or compatible C++17 compiler)
+- pkg-config
+- libjsoncpp-dev
+- libcurl4-openssl-dev
 
-### Language Adapters
-Language-specific analyzers for:
-- Python
-- JavaScript/TypeScript
-- Rust
-- C/C++
+### Install Dependencies (Ubuntu/Debian)
 
-### Instrumentation
-Tools for:
-- Code instrumentation
-- Performance profiling
-- Energy analysis
-
-### IDE Integration
-Editor plugins for:
-- VS Code
-- JetBrains IDEs
-- Real-time energy insights
-
-### Optimizer
-Energy optimization tools:
-- Code analysis
-- Optimization suggestions
-- Best practices
-
-### Visualization
-Data presentation tools:
-- Interactive dashboards
-- Custom reports
-- Trend analysis
-
-## Development Guidelines
-
-### Code Organization
-- Follow Rust module organization best practices
-- Keep modules focused and single-responsibility
-- Use feature flags for optional functionality
-- Maintain clear public APIs
-
-### Testing
-- Write unit tests for all public APIs
-- Include integration tests for component interactions
-- Add benchmarks for performance-critical code
-- Maintain high test coverage
-
-### Documentation
-- Document all public APIs with examples
-- Keep README files up to date
-- Include architecture diagrams
-- Write clear commit messages
-
-### Error Handling
-- Use custom error types
-- Provide meaningful error messages
-- Include error context where helpful
-- Handle errors at appropriate levels
-
-## Getting Started
-
-1. Install dependencies:
 ```bash
-cargo build
+sudo apt-get update
+sudo apt-get install cmake build-essential pkg-config libjsoncpp-dev libcurl4-openssl-dev
 ```
 
-2. Run tests:
+### Build
+
 ```bash
-cargo test
+# Clone the repository
+git clone <repository-url>
+cd codegreen
+
+# Build the project
+./scripts/build.sh
 ```
 
-3. Build documentation:
+The build script will:
+1. Check for required dependencies
+2. Configure the project with CMake
+3. Build all components
+4. Install the binary to `/usr/local/bin/codegreen`
+
+### Manual Build
+
 ```bash
-cargo doc --open
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+sudo make install
+```
+
+## Usage
+
+After installation, you can use the `codegreen` command:
+
+```bash
+# Basic usage
+codegreen
+
+# Get help
+codegreen --help
+```
+
+## Development
+
+### Adding New Hardware Plugins
+
+1. Create a new class inheriting from `HardwarePlugin`
+2. Implement the required virtual methods
+3. Register the plugin in the plugin registry
+
+### Adding New Language Adapters
+
+1. Create a new class inheriting from `LanguageAdapter`
+2. Implement language-specific parsing and analysis
+3. Register the adapter in the measurement engine
+
+### Building Individual Components
+
+```bash
+# Build only the core library
+cd core
+mkdir build && cd build
+cmake ..
+make
+
+# Build only a specific package
+cd packages/ide
+mkdir build && cd build
+cmake ..
+make
 ```
 
 ## Contributing
@@ -163,9 +138,22 @@ cargo doc --open
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests and ensure they pass
+4. Add tests if applicable
 5. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License - see LICENSE file for details.
+
+## Architecture
+
+CodeGreen follows a modular architecture with clear separation of concerns:
+
+- **Core Library**: Provides the foundation for energy measurement and plugin management
+- **Hardware Plugins**: Abstract hardware-specific energy monitoring
+- **Language Adapters**: Handle different programming languages for code analysis
+- **IDE Integration**: Provides seamless integration with development environments
+- **Optimization Engine**: Analyzes code and suggests energy-efficient alternatives
+- **Visualization**: Presents energy data in meaningful charts and reports
+
+The system is designed to be extensible, allowing new hardware platforms and programming languages to be easily added through the plugin system.
