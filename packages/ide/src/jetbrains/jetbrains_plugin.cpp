@@ -1,4 +1,4 @@
-#include "jetbrains_plugin.hpp"
+#include "jetbrains/jetbrains_plugin.hpp"
 
 namespace codegreen {
 

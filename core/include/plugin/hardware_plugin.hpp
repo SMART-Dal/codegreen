@@ -15,7 +15,7 @@ public:
     virtual std::string name() const = 0;
 
     /// Get a measurement from the hardware
-    virtual std::unique_ptr<Measurement> get_measurement() = 0;
+    virtual std::unique_ptr<Measurement> get_measurement() const = 0;
 
     /// Initialize the plugin
     virtual bool init() = 0;

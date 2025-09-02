@@ -1,0 +1,256 @@
+
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>CodeGreen Energy Analysis Report</title>
+            <style>
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    line-height: 1.6;
+                    margin: 0;
+                    padding: 20px;
+                    background-color: #f5f5f5;
+                }
+                .container {
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    background: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+                }
+                h1 { color: #2c3e50; text-align: center; margin-bottom: 30px; }
+                h2 { color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 5px; }
+                h3 { color: #7f8c8d; }
+                .session {
+                    margin: 30px 0;
+                    padding: 20px;
+                    border: 1px solid #bdc3c7;
+                    border-radius: 8px;
+                    background-color: #fdfdfd;
+                }
+                .stats {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                    gap: 15px;
+                    margin: 20px 0;
+                }
+                .stat-card {
+                    background: #3498db;
+                    color: white;
+                    padding: 15px;
+                    border-radius: 5px;
+                    text-align: center;
+                }
+                .stat-value { font-size: 24px; font-weight: bold; }
+                .stat-label { font-size: 14px; opacity: 0.9; }
+                .plot-container {
+                    margin: 20px 0;
+                    text-align: center;
+                }
+                .plot-container img {
+                    max-width: 100%;
+                    height: auto;
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
+                }
+                .function-stats {
+                    overflow-x: auto;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 15px 0;
+                }
+                th, td {
+                    padding: 10px;
+                    text-align: left;
+                    border-bottom: 1px solid #ddd;
+                }
+                th {
+                    background-color: #f8f9fa;
+                    font-weight: bold;
+                }
+                .timestamp {
+                    color: #7f8c8d;
+                    font-size: 14px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🔋 CodeGreen Energy Analysis Report</h1>
+                <p class="timestamp">Generated on: 2025-09-02T15:18:33.128982</p>
+        
+                <div class="session">
+                    <h2>Session: session_demo_1</h2>
+                    
+                    <div class="stats">
+                        <div class="stat-card">
+                            <div class="stat-value">2.456</div>
+                            <div class="stat-label">Total Energy (J)</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">0.12</div>
+                            <div class="stat-label">Duration (s)</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">50</div>
+                            <div class="stat-label">Checkpoints</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">PYTHON</div>
+                            <div class="stat-label">Language</div>
+                        </div>
+                    </div>
+            
+                    <div class="plot-container">
+                        <h3>Timeline</h3>
+                        <img src="timeline_session_demo_1.png" alt="timeline visualization">
+                    </div>
+                
+                    <div class="plot-container">
+                        <h3>Function Analysis</h3>
+                        <img src="function_analysis_session_demo_1.png" alt="function_analysis visualization">
+                    </div>
+                
+                    <div class="plot-container">
+                        <h3>Heatmap</h3>
+                        <img src="heatmap_session_demo_1.png" alt="heatmap visualization">
+                    </div>
+                
+                    <div class="plot-container">
+                        <h3>Code Energy Analysis</h3>
+                        <img src="code_energy_analysis_session_demo_1.png" alt="code_energy_analysis visualization">
+                    </div>
+                
+                    <div class="function-stats">
+                        <h3>Function Energy Statistics</h3>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Function</th>
+                                    <th>Total Energy (J)</th>
+                                    <th>Average Energy (J)</th>
+                                    <th>Call Count</th>
+                                    <th>Max Energy (J)</th>
+                                    <th>Min Energy (J)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                
+                        <tr>
+                            <td>fibonacci_iterative</td>
+                            <td>0.367024</td>
+                            <td>0.033366</td>
+                            <td>11</td>
+                            <td>0.068033</td>
+                            <td>0.005544</td>
+                        </tr>
+                    
+                        <tr>
+                            <td>get_statistics</td>
+                            <td>0.550051</td>
+                            <td>0.042312</td>
+                            <td>13</td>
+                            <td>0.088509</td>
+                            <td>0.002247</td>
+                        </tr>
+                    
+                        <tr>
+                            <td>process_data</td>
+                            <td>0.524208</td>
+                            <td>0.058245</td>
+                            <td>9</td>
+                            <td>0.099636</td>
+                            <td>0.032426</td>
+                        </tr>
+                    
+                        <tr>
+                            <td>main</td>
+                            <td>0.557327</td>
+                            <td>0.055733</td>
+                            <td>10</td>
+                            <td>0.096668</td>
+                            <td>0.003790</td>
+                        </tr>
+                    
+                        <tr>
+                            <td>fibonacci_recursive</td>
+                            <td>0.323453</td>
+                            <td>0.046208</td>
+                            <td>7</td>
+                            <td>0.068135</td>
+                            <td>0.016503</td>
+                        </tr>
+                    
+                            </tbody>
+                        </table>
+                    </div>
+                
+                    <div class="code-analysis">
+                        <h3>🔥 Code Energy Analysis & Peak Detection</h3>
+                        <div class="analysis-summary">
+                            <p><strong>Peak Energy Threshold:</strong> 0.083241 J</p>
+                            <p><strong>Noise Threshold:</strong> 0.030862 J</p>
+                            <p><strong>Significant Lines:</strong> 27 | 
+                               <strong>Noise Lines:</strong> 10</p>
+                        </div>
+                        
+                        <h4>Top Energy Hotspot Lines:</h4>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Line #</th>
+                                    <th>Energy (µJ)</th>
+                                    <th>Function</th>
+                                    <th>Classification</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                
+                        <tr>
+                            <td>Line 68</td>
+                            <td>99635.84</td>
+                            <td>process_data</td>
+                            <td>🔥 PEAK</td>
+                        </tr>
+                    
+                        <tr>
+                            <td>Line 77</td>
+                            <td>93086.65</td>
+                            <td>process_data</td>
+                            <td>🔥 PEAK</td>
+                        </tr>
+                    
+                        <tr>
+                            <td>Line 12</td>
+                            <td>86599.38</td>
+                            <td>main</td>
+                            <td>🔥 PEAK</td>
+                        </tr>
+                    
+                            </tbody>
+                        </table>
+                        
+                        <h4>Peak-Contributing Functions:</h4>
+                        <ul>
+                <li><strong>process_data:</strong> 192722.49 µJ peak contribution</li><li><strong>main:</strong> 86599.38 µJ peak contribution</li>
+                        </ul>
+                        
+                        <div class="interpretation">
+                            <h4>📊 Interpretation Guide:</h4>
+                            <ul>
+                                <li><strong>🔥 PEAK lines:</strong> Computational hotspots - optimize these first</li>
+                                <li><strong>⚡ Significant lines:</strong> Normal energy consumption</li>
+                                <li><strong>🔵 Noise lines:</strong> Low impact - measurement noise or trivial operations</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        

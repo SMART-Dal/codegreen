@@ -1,9 +1,11 @@
 # Language adapters package CMakeLists.txt
+
 set(LANGUAGE_ADAPTERS_SOURCES
     src/lib.cpp
     src/common.cpp
     src/cpp.cpp
     src/python.cpp
+    src/tree_sitter_adapter.cpp
 )
 
 # Create language adapters library
@@ -13,11 +15,15 @@ add_library(codegreen-language-adapters STATIC ${LANGUAGE_ADAPTERS_SOURCES})
 target_include_directories(codegreen-language-adapters PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include
+    ${CMAKE_SOURCE_DIR}/third_party/tree-sitter-python/src
 )
 
 # Link libraries
 target_link_libraries(codegreen-language-adapters
     codegreen-core
+    tree-sitter
+    tree-sitter-python
 )
 
 # Install target

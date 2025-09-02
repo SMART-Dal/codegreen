@@ -1,0 +1,18 @@
+[submodule "third_party/tree-sitter"]
+	path = third_party/tree-sitter
+	url = https://github.com/tree-sitter/tree-sitter.git
+[submodule "third_party/tree-sitter-python"]
+	path = third_party/tree-sitter-python
+	url = https://github.com/tree-sitter/tree-sitter-python.git
+[submodule "third_party/pmt"]
+	path = third_party/pmt
+	url = https://git.astron.nl/RD/pmt.git
+[submodule "third_party/tree-sitter-c"]
+	path = third_party/tree-sitter-c
+	url = https://github.com/tree-sitter/tree-sitter-c.git
+[submodule "third_party/tree-sitter-cpp"]
+	path = third_party/tree-sitter-cpp
+	url = https://github.com/tree-sitter/tree-sitter-cpp.git
+[submodule "third_party/tree-sitter-java"]
+	path = third_party/tree-sitter-java
+	url = https://github.com/tree-sitter/tree-sitter-java.git

@@ -1,4 +1,4 @@
-#include "plugin_registry.hpp"
+#include "plugin/plugin_registry.hpp"
 #include <algorithm>
 
 namespace codegreen {

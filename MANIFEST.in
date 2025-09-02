@@ -1,0 +1,37 @@
+# Include documentation and configuration files
+include README.md
+include LICENSE
+include CHANGELOG.md
+include requirements.txt
+include pyproject.toml
+
+# Include configuration files
+recursive-include config *.json
+recursive-include codegreen/bin/config *.json
+
+# Include runtime files  
+recursive-include runtime *.py
+recursive-include codegreen/bin/runtime *.py
+
+# Include binary files (will be added by build process)
+recursive-include codegreen/bin * 
+
+# Include examples
+recursive-include examples *.py *.cpp *.java *.c
+
+# Exclude build artifacts and development files
+exclude build_wheels.py
+exclude .gitignore
+exclude .gitmodules
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * *.so
+recursive-exclude * *.dylib
+recursive-exclude * *.dll
+recursive-exclude build *
+recursive-exclude CMakeFiles *
+recursive-exclude third_party *
+prune .git
+prune docs
+prune grafana
+prune scripts

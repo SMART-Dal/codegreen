@@ -7,6 +7,8 @@ set(CORE_SOURCES
     src/adapters/arm_pmu.cpp
     src/adapters/intel_rapl.cpp
     src/adapters/nvidia_gpu.cpp
+    src/adapters/pmt_adapter.cpp
+    src/energy_storage.cpp
 )
 
 # Create core library
@@ -16,6 +18,8 @@ add_library(codegreen-core STATIC ${CORE_SOURCES})
 target_include_directories(codegreen-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/pmt
+    ${SQLITE3_INCLUDE_DIRS}
 )
 
 # Set compile definitions
@@ -27,6 +31,8 @@ target_compile_definitions(codegreen-core PRIVATE
 target_link_libraries(codegreen-core
     ${JSONCPP_LIBRARIES}
     Threads::Threads
+    pmt
+    ${SQLITE3_LIBRARIES}
 )
 
 # Install target

@@ -1,4 +1,4 @@
-#include "vscode_extension.hpp"
+#include "vscode/vscode_extension.hpp"
 
 namespace codegreen {
 

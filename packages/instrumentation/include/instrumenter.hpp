@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "core/measurement_session.hpp"
+#include "measurement_session.hpp"
 
 namespace codegreen {
 

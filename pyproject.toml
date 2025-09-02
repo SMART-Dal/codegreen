@@ -1,0 +1,145 @@
+[build-system]
+requires = ["setuptools>=64", "wheel", "pybind11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codegreen"
+version = "0.1.0"
+description = "Energy-aware software development tool for measuring and optimizing code energy consumption"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Saurabhsingh Rajput", email = "saurabh@dal.ca"}
+]
+maintainers = [
+    {name = "Saurabhsingh Rajput", email = "saurabh@dal.ca"}
+]
+keywords = [
+    "energy", "measurement", "optimization", "profiling", "green-computing",
+    "sustainability", "power", "performance", "analysis"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Monitoring",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Console"
+]
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.0.0",
+    "rich>=12.0.0",
+    "pydantic>=1.10.0",
+    "sqlite3",  # Built-in but explicit
+    "psutil>=5.9.0",
+    "packaging>=21.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=5.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=2.20.0"
+]
+docs = [
+    "sphinx>=5.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "myst-parser>=0.18.0"
+]
+viz = [
+    "matplotlib>=3.5.0",
+    "pandas>=1.4.0",
+    "plotly>=5.10.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/codegreen/codegreen"
+Documentation = "https://codegreen.readthedocs.io"
+Repository = "https://github.com/codegreen/codegreen"
+"Bug Tracker" = "https://github.com/codegreen/codegreen/issues"
+Changelog = "https://github.com/codegreen/codegreen/blob/main/CHANGELOG.md"
+
+[project.scripts]
+codegreen = "codegreen.cli:main"
+codegreen-analyze = "codegreen.analyze:main"
+codegreen-report = "codegreen.report:main"
+
+[tool.setuptools]
+packages = ["codegreen", "codegreen.core", "codegreen.adapters", "codegreen.utils"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+codegreen = [
+    "bin/*/*",
+    "config/*.json",
+    "runtime/*.py",
+    "LICENSE",
+    "README.md"
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --cov=codegreen"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["codegreen"]
+omit = ["*/tests/*", "*/test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:"
+]
