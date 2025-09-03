@@ -13,67 +13,18 @@
 namespace codegreen::nemb {
 
 namespace {
-    // Simple JSON value class for minimal dependency parsing
-    class JsonValue {
-    public:
-        enum Type { STRING, NUMBER, BOOLEAN, OBJECT, ARRAY, NULL_VALUE };
-        
-        JsonValue() : type_(NULL_VALUE) {}
-        explicit JsonValue(const std::string& s) : type_(STRING), string_value_(s) {}
-        explicit JsonValue(double d) : type_(NUMBER), number_value_(d) {}
-        explicit JsonValue(bool b) : type_(BOOLEAN), bool_value_(b) {}
-        
-        Type type() const { return type_; }
-        std::string as_string() const { return type_ == STRING ? string_value_ : ""; }
-        double as_number() const { return type_ == NUMBER ? number_value_ : 0.0; }
-        bool as_bool() const { return type_ == BOOLEAN ? bool_value_ : false; }
-        
-        const std::unordered_map<std::string, JsonValue>& as_object() const { 
-            static std::unordered_map<std::string, JsonValue> empty;
-            return type_ == OBJECT ? object_value_ : empty;
-        }
-        
-        void set_object(const std::unordered_map<std::string, JsonValue>& obj) {
-            type_ = OBJECT;
-            object_value_ = obj;
-        }
-        
-        bool has_key(const std::string& key) const {
-            return type_ == OBJECT && object_value_.find(key) != object_value_.end();
-        }
-        
-        const JsonValue& operator[](const std::string& key) const {
-            static JsonValue null_value;
-            if (type_ != OBJECT) return null_value;
-            auto it = object_value_.find(key);
-            return it != object_value_.end() ? it->second : null_value;
-        }
-        
-    private:
-        Type type_;
-        std::string string_value_;
-        double number_value_{0.0};
-        bool bool_value_{false};
-        std::unordered_map<std::string, JsonValue> object_value_;
-    };
-    
-    // Minimal JSON parser - sufficient for our config needs
-    JsonValue parse_json_minimal(const std::string& content) {
-        // This is a simplified parser for our specific config structure
-        // In production, consider using a full JSON library like nlohmann/json
-        
-        std::unordered_map<std::string, JsonValue> root;
+    // Simplified config parsing without recursive JSON structures
+    std::map<std::string, std::string> parse_simple_config(const std::string& content) {
+        std::map<std::string, std::string> config;
         std::istringstream stream(content);
         std::string line;
         
-        // Parse key-value pairs in a very simple way
-        // This handles our specific config format
         while (std::getline(stream, line)) {
             // Skip comments and empty lines
             line.erase(0, line.find_first_not_of(" \t"));
-            if (line.empty() || line[0] == '/' || line[0] == '{' || line[0] == '}') continue;
+            if (line.empty() || line[0] == '/' || line[0] == '#' || line[0] == '{' || line[0] == '}') continue;
             
-            // Simple string parsing for "key": value patterns
+            // Simple key-value parsing
             size_t colon = line.find(':');
             if (colon == std::string::npos) continue;
             
@@ -86,24 +37,10 @@ namespace {
             value.erase(0, value.find_first_not_of(" \t\""));
             value.erase(value.find_last_not_of(" \t\",") + 1);
             
-            // Parse different value types
-            if (value == "true" || value == "false") {
-                root[key] = JsonValue(value == "true");
-            } else if (std::isdigit(value[0]) || value[0] == '-' || value[0] == '.') {
-                try {
-                    double num = std::stod(value);
-                    root[key] = JsonValue(num);
-                } catch (...) {
-                    root[key] = JsonValue(value);
-                }
-            } else {
-                root[key] = JsonValue(value);
-            }
+            config[key] = value;
         }
         
-        JsonValue result;
-        result.set_object(root);
-        return result;
+        return config;
     }
     
     std::string expand_path(const std::string& path) {
@@ -160,12 +97,12 @@ std::string ConfigLoader::get_default_config_path() {
     return "./config/codegreen.json";
 }
 
-NEMBConfig ConfigLoader::parse_json_config(const std::string& json_content) {
+ConfigLoader::NEMBConfig ConfigLoader::parse_json_config(const std::string& json_content) {
     NEMBConfig config;
     
     try {
-        // For now, use simplified parsing
-        // This would be replaced with proper JSON parsing in production
+        // Use simplified config parsing
+        auto parsed_config = parse_simple_config(json_content);
         
         // Set accuracy-optimized defaults
         config.enabled = true;
@@ -225,7 +162,7 @@ NEMBConfig ConfigLoader::parse_json_config(const std::string& json_content) {
     return config;
 }
 
-NEMBConfig ConfigLoader::load_config(const std::string& config_path) {
+ConfigLoader::NEMBConfig ConfigLoader::load_config(const std::string& config_path) {
     std::string path_to_use = config_path;
     if (path_to_use.empty()) {
         path_to_use = find_config_file();
@@ -253,7 +190,7 @@ NEMBConfig ConfigLoader::load_config(const std::string& config_path) {
     }
 }
 
-NEMBConfig ConfigLoader::get_accuracy_optimized_config() {
+ConfigLoader::NEMBConfig ConfigLoader::get_accuracy_optimized_config() {
     NEMBConfig config;
     
     config.enabled = true;
@@ -299,7 +236,7 @@ NEMBConfig ConfigLoader::get_accuracy_optimized_config() {
     return config;
 }
 
-NEMBConfig ConfigLoader::get_performance_optimized_config() {
+ConfigLoader::NEMBConfig ConfigLoader::get_performance_optimized_config() {
     NEMBConfig config;
     
     config.enabled = true;

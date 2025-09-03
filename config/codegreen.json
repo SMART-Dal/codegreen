@@ -35,19 +35,24 @@
       "accuracy_mode": "production",
       "providers": {
         "intel_rapl": {
-          "enabled": "auto",
+          "enabled": true,
           "access_method": "auto",
-          "domains": ["package", "pp0", "pp1", "dram"],
+          "domains": [
+            "package",
+            "pp0",
+            "pp1",
+            "dram"
+          ],
           "validation_enabled": true
         },
         "nvidia_gpu": {
-          "enabled": "auto",
+          "enabled": true,
           "device_selection": "all",
           "power_sampling_hz": 100,
           "validation_enabled": true
         },
         "amd_cpu": {
-          "enabled": "auto", 
+          "enabled": true,
           "access_method": "auto",
           "validation_enabled": true
         }
@@ -71,7 +76,11 @@
     },
     "pmt_legacy": {
       "enabled": false,
-      "preferred_sensors": ["rapl", "nvml", "dummy"],
+      "preferred_sensors": [
+        "rapl",
+        "nvml",
+        "dummy"
+      ],
       "fallback_enabled": true,
       "validation_enabled": true,
       "max_init_time_ms": 5000,
@@ -114,17 +123,29 @@
     "python": {
       "executable": "python3",
       "runtime_module": "codegreen_runtime.py",
-      "extensions": [".py", ".pyw", ".pyi"],
+      "extensions": [
+        ".py",
+        ".pyw",
+        ".pyi"
+      ],
       "optimization_enabled": true
     },
     "cpp": {
       "executable": "g++",
-      "extensions": [".cpp", ".cxx", ".cc", ".hpp", ".h"],
+      "extensions": [
+        ".cpp",
+        ".cxx",
+        ".cc",
+        ".hpp",
+        ".h"
+      ],
       "optimization_enabled": false
     },
     "java": {
       "executable": "java",
-      "extensions": [".java"],
+      "extensions": [
+        ".java"
+      ],
       "optimization_enabled": false
     }
   },
@@ -134,5 +155,18 @@
     "preserve_temp_files": false,
     "measurement_validation": true,
     "performance_profiling": false
+  },
+  "initialization": {
+    "completed": true,
+    "timestamp": "2025-09-03T14:59:43.100634",
+    "environment_type": "personal",
+    "detected_sensors": [
+      "intel_rapl",
+      "amd_cpu",
+      "nvidia_gpu",
+      "amd_gpu",
+      "external_sensors"
+    ],
+    "version": "0.1.0"
   }
 }

@@ -1,0 +1,15 @@
+event syntax error: '..pkg/,power/energy-cores/,power/energy-ram/'
+                                  \___ unknown term 'energy-cores' for pmu 'power'
+
+valid terms: event,config,config1,config2,name,period,percore
+
+Initial error:
+event syntax error: '..pkg/,power/energy-cores/,power/energy-ram/'
+                                  \___ unknown term 'energy-cores' for pmu 'power'
+
+valid terms: event,config,config1,config2,name,period,percore
+Run 'perf list' for a list of valid events
+
+ Usage: perf stat [<options>] [<command>]
+
+    -e, --event <event>   event selector. use 'perf list' to list available events

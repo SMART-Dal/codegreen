@@ -1,10 +1,13 @@
 #include "../../../include/nemb/core/energy_provider.hpp"
 #include "../../../include/nemb/drivers/intel_rapl_provider.hpp"
+#include "../../../include/nemb/drivers/nvidia_gpu_provider.hpp"
+#include "../../../include/nemb/drivers/amd_gpu_provider.hpp"
 
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <filesystem>
 
 namespace codegreen::nemb {
 
@@ -12,11 +15,11 @@ namespace codegreen::nemb {
 std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provider_type) {
     if (provider_type == "intel_rapl") {
         return drivers::create_intel_rapl_provider();
+    } else if (provider_type == "nvidia_gpu" || provider_type == "nvidia_nvml") {
+        return drivers::create_nvidia_gpu_provider();
+    } else if (provider_type == "amd_gpu" || provider_type == "amd_rocm_smi") {
+        return drivers::create_amd_gpu_provider();
     }
-    // Add more providers as they are implemented
-    // else if (provider_type == "nvidia_nvml") {
-    //     return drivers::create_nvidia_gpu_provider();
-    // }
     
     std::cerr << "Unknown energy provider type: " << provider_type << std::endl;
     return nullptr;
@@ -54,8 +57,26 @@ namespace {
     
     bool check_intel_rapl_availability() {
         // Check for RAPL interface in sysfs
-        std::ifstream rapl_check("/sys/class/powercap/intel-rapl:0/energy_uj");
-        return rapl_check.good();
+        const std::string rapl_path = "/sys/class/powercap/intel-rapl:0/energy_uj";
+        std::cout << "    🔍 Checking RAPL availability at: " << rapl_path << std::endl;
+        
+        // First check if file exists
+        if (!std::filesystem::exists(rapl_path)) {
+            std::cout << "    ❌ RAPL file does not exist" << std::endl;
+            return false;
+        }
+        
+        // Try to open the file
+        std::ifstream rapl_check(rapl_path);
+        bool is_available = rapl_check.good();
+        
+        if (!is_available) {
+            std::cout << "    ⚠️  RAPL file exists but cannot be opened (permissions?)" << std::endl;
+        } else {
+            std::cout << "    ✅ RAPL interface is accessible" << std::endl;
+        }
+        
+        return is_available;
     }
     
     bool check_nvidia_gpu_availability() {
@@ -98,7 +119,18 @@ std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
             break;
             
         case CPUVendor::AMD:
-            std::cout << "  🚧 AMD RAPL provider not yet implemented" << std::endl;
+            // AMD also supports RAPL on modern processors - use Intel RAPL provider
+            if (check_intel_rapl_availability()) {
+                auto rapl_provider = drivers::create_intel_rapl_provider();
+                if (rapl_provider && rapl_provider->initialize()) {
+                    std::cout << "  ✅ AMD RAPL CPU provider (using Intel RAPL interface)" << std::endl;
+                    providers.push_back(std::move(rapl_provider));
+                } else {
+                    std::cout << "  ❌ AMD RAPL CPU provider failed initialization" << std::endl;
+                }
+            } else {
+                std::cout << "  ⚠️  AMD RAPL interface not available" << std::endl;
+            }
             break;
             
         case CPUVendor::ARM:
@@ -112,17 +144,25 @@ std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
     
     // GPU energy providers
     if (check_nvidia_gpu_availability()) {
-        std::cout << "  🚧 NVIDIA GPU provider not yet implemented" << std::endl;
-        // TODO: Implement NVIDIA provider
-        // auto nvidia_provider = drivers::create_nvidia_gpu_provider();
-        // if (nvidia_provider && nvidia_provider->initialize()) {
-        //     providers.push_back(std::move(nvidia_provider));
-        // }
+        std::cout << "  🔧 Initializing NVIDIA GPU provider..." << std::endl;
+        auto nvidia_provider = drivers::create_nvidia_gpu_provider();
+        if (nvidia_provider && nvidia_provider->initialize()) {
+            std::cout << "  ✅ NVIDIA GPU provider initialized" << std::endl;
+            providers.push_back(std::move(nvidia_provider));
+        } else {
+            std::cout << "  ❌ NVIDIA GPU provider failed to initialize" << std::endl;
+        }
     }
     
     if (check_amd_gpu_availability()) {
-        std::cout << "  🚧 AMD GPU provider not yet implemented" << std::endl;
-        // TODO: Implement AMD GPU provider
+        std::cout << "  🔧 Initializing AMD GPU provider..." << std::endl;
+        auto amd_provider = drivers::create_amd_gpu_provider();
+        if (amd_provider && amd_provider->initialize()) {
+            std::cout << "  ✅ AMD GPU provider initialized" << std::endl;
+            providers.push_back(std::move(amd_provider));
+        } else {
+            std::cout << "  ❌ AMD GPU provider failed to initialize" << std::endl;
+        }
     }
     
     if (providers.empty()) {

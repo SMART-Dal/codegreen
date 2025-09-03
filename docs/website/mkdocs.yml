@@ -1,0 +1,163 @@
+site_name: CodeGreen Documentation
+site_description: Energy-aware software development tool for measuring and optimizing code energy consumption
+site_author: CodeGreen Team
+site_url: https://codegreen.github.io/codegreen
+
+repo_name: codegreen/codegreen
+repo_url: https://github.com/codegreen/codegreen
+edit_uri: edit/main/docs/website/docs/
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      accent: green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      accent: green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - content.action.view
+
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+plugins:
+  - search:
+      lang: en
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [../../]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_toc_entry: true
+            show_object_full_path: true
+            show_category_heading: true
+            show_if_no_docstring: false
+            show_signature_annotations: true
+            show_signature_return_annotations: true
+            separate_signature: true
+            line_length: 88
+            merge_init_into_class: true
+            show_bases: true
+            show_submodules: true
+            filters: ["!^_"]
+            members_order: source
+            docstring_options:
+              ignore_init_summary: true
+  # - mkdocs-gen-files:
+  #     scripts:
+  #       - gen_ref_pages.py
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.snippets:
+      auto_append:
+        - includes/mkdocs.md
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.critic
+  - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
+  - User Guide:
+    - CLI Reference: user-guide/cli-reference.md
+    - Energy Measurement: user-guide/energy-measurement.md
+    - Code Analysis: user-guide/code-analysis.md
+    - Reports and Visualization: user-guide/reports.md
+  - API Reference:
+    - Python API: api/python.md
+    - Core Engine: api/core.md
+    - Configuration: api/config.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Building from Source: development/building.md
+    - Architecture: development/architecture.md
+  - Examples:
+    - Python Examples: examples/python.md
+    - C/C++ Examples: examples/cpp.md
+    - Java Examples: examples/java.md
+  - About:
+    - Changelog: about/changelog.md
+    - License: about/license.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/codegreen/codegreen
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/codegreen/
+  version:
+    provider: mike

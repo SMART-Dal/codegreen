@@ -24,7 +24,16 @@ MeasurementEngine::MeasurementEngine()
     
     // Initialize NEMB (Native Energy Measurement Backend)
     auto nemb_config = nemb::ConfigLoader::load_config();
-    nemb_coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(nemb_config);
+    
+    // Convert to coordinator config
+    nemb::CoordinatorConfig coordinator_config;
+    coordinator_config.temporal_alignment_tolerance_ms = nemb_config.coordinator.temporal_alignment_tolerance_ms;
+    coordinator_config.cross_validation_threshold = nemb_config.coordinator.cross_validation_threshold;
+    coordinator_config.measurement_buffer_size = nemb_config.coordinator.measurement_buffer_size;
+    coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
+    coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
+    
+    nemb_coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
     
     // Initialize energy storage with configured path
     std::string db_path = config.get_database_path().string();
@@ -104,8 +113,11 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
             return result;
         }
         
-        // Set up automatic cleanup of temporary file
-        TempFileGuard temp_guard(result.temp_file_path);
+        // Set up automatic cleanup of temporary file (only if cleanup is enabled)
+        std::unique_ptr<TempFileGuard> temp_guard;
+        if (config.cleanup_temp_files) {
+            temp_guard = std::make_unique<TempFileGuard>(result.temp_file_path);
+        }
         
         // 8. Copy runtime module for Python using configuration
         if (language == "python") {
@@ -136,8 +148,8 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
         
         // Take baseline reading before execution
         nemb::SynchronizedReading baseline_reading;
-        if (nemb_coordinator_ && nemb_coordinator_->is_ready()) {
-            baseline_reading = nemb_coordinator_->read_synchronized();
+        if (nemb_coordinator_ && !nemb_coordinator_->get_active_providers().empty()) {
+            baseline_reading = nemb_coordinator_->get_synchronized_reading();
         }
         
         if (!execute_instrumented_code(result.temp_file_path, exec_args)) {
@@ -147,8 +159,8 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
         
         // Collect final energy measurement and calculate difference
         std::unique_ptr<Measurement> energy_measurement;
-        if (nemb_coordinator_ && nemb_coordinator_->is_ready()) {
-            auto final_reading = nemb_coordinator_->read_synchronized();
+        if (nemb_coordinator_ && !nemb_coordinator_->get_active_providers().empty()) {
+            auto final_reading = nemb_coordinator_->get_synchronized_reading();
             energy_measurement = convert_nemb_difference_to_measurement(final_reading, baseline_reading);
         }
         if (energy_measurement) {
@@ -312,10 +324,11 @@ std::unique_ptr<Measurement> MeasurementEngine::convert_nemb_difference_to_measu
     
     auto measurement = std::make_unique<Measurement>();
     measurement->timestamp = std::chrono::system_clock::now();
-    measurement->valid = final_reading.is_valid && baseline_reading.is_valid;
+    bool measurement_valid = final_reading.temporal_alignment_valid && baseline_reading.temporal_alignment_valid;
     
-    if (!measurement->valid) {
-        measurement->error_message = "Invalid NEMB readings";
+    if (!measurement_valid) {
+        // Set source to indicate error
+        measurement->source = "NEMB_ERROR: Invalid readings";
         return measurement;
     }
     
@@ -323,14 +336,14 @@ std::unique_ptr<Measurement> MeasurementEngine::convert_nemb_difference_to_measu
     double total_energy_joules = 0.0;
     double total_power_watts = 0.0;
     
-    for (const auto& final_provider : final_reading.readings) {
+    for (const auto& final_provider : final_reading.provider_readings) {
         // Find corresponding baseline reading
-        auto baseline_it = std::find_if(baseline_reading.readings.begin(), baseline_reading.readings.end(),
+        auto baseline_it = std::find_if(baseline_reading.provider_readings.begin(), baseline_reading.provider_readings.end(),
             [&final_provider](const nemb::EnergyReading& baseline) {
                 return baseline.provider_id == final_provider.provider_id;
             });
         
-        if (baseline_it != baseline_reading.readings.end()) {
+        if (baseline_it != baseline_reading.provider_readings.end()) {
             double energy_diff = final_provider.energy_joules - baseline_it->energy_joules;
             if (energy_diff >= 0) { // Ensure monotonic energy
                 total_energy_joules += energy_diff;
@@ -339,31 +352,52 @@ std::unique_ptr<Measurement> MeasurementEngine::convert_nemb_difference_to_measu
         }
     }
     
-    measurement->total_joules = total_energy_joules;
-    measurement->average_watts = total_power_watts;
+    measurement->joules = total_energy_joules;
+    measurement->watts = total_power_watts;
+    measurement->source = "NEMB";
+    measurement->sensor_name = "NEMB";
+    measurement->measurement_type = "differential";
+    measurement->valid = true;
     
     // Calculate duration
-    double duration_ns = static_cast<double>(final_reading.timestamp_ns - baseline_reading.timestamp_ns);
+    double duration_ns = static_cast<double>(final_reading.common_timestamp_ns - baseline_reading.common_timestamp_ns);
     measurement->duration_seconds = duration_ns / 1e9;
     
-    // Set component breakdown if available
-    for (const auto& final_provider : final_reading.readings) {
-        auto baseline_it = std::find_if(baseline_reading.readings.begin(), baseline_reading.readings.end(),
+    // Temperature not available from NEMB, set to 0
+    measurement->temperature = 0.0;
+    
+    // Set component breakdown for quality preservation
+    for (const auto& final_provider : final_reading.provider_readings) {
+        auto baseline_it = std::find_if(baseline_reading.provider_readings.begin(), baseline_reading.provider_readings.end(),
             [&final_provider](const nemb::EnergyReading& baseline) {
                 return baseline.provider_id == final_provider.provider_id;
             });
         
-        if (baseline_it != baseline_reading.readings.end()) {
+        if (baseline_it != baseline_reading.provider_readings.end()) {
             double component_energy = final_provider.energy_joules - baseline_it->energy_joules;
+            double component_power = final_provider.average_power_watts;
             if (component_energy >= 0) {
                 measurement->component_joules[final_provider.provider_id] = component_energy;
+                measurement->component_watts[final_provider.provider_id] = component_power;
+                
+                // Include per-domain breakdown if available
+                for (const auto& [domain, domain_energy] : final_provider.domain_energy_joules) {
+                    auto baseline_domain_it = baseline_it->domain_energy_joules.find(domain);
+                    if (baseline_domain_it != baseline_it->domain_energy_joules.end()) {
+                        double domain_diff = domain_energy - baseline_domain_it->second;
+                        if (domain_diff >= 0) {
+                            std::string component_key = final_provider.provider_id + ":" + domain;
+                            measurement->component_joules[component_key] = domain_diff;
+                        }
+                    }
+                }
             }
         }
     }
     
-    // Set measurement metadata
-    measurement->sensor_name = "NEMB";
-    measurement->measurement_type = "differential";
+    // Set quality metrics from synchronized reading
+    measurement->uncertainty_percent = final_reading.max_provider_uncertainty;
+    measurement->confidence = final_reading.measurement_confidence;
     
     return measurement;
 }

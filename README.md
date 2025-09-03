@@ -2,6 +2,36 @@
 
 CodeGreen is a comprehensive tool for monitoring energy consumption during code execution and providing optimization suggestions to reduce energy usage.
 
+## Quick Start
+
+### Installation
+
+```bash
+# Install from PyPI
+pip install codegreen
+
+# Or install from source
+git clone https://github.com/codegreen/codegreen.git
+cd codegreen
+pip install -e .
+```
+
+### Basic Usage
+
+```bash
+# Initialize sensor configuration
+codegreen init
+
+# Measure energy consumption of a script
+codegreen measure python my_script.py
+
+# Get system information
+codegreen info
+
+# Diagnose installation issues
+codegreen doctor
+```
+
 ## Features
 
 - **Energy Monitoring**: Real-time monitoring of CPU, GPU, and system energy consumption

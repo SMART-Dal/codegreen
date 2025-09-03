@@ -184,6 +184,7 @@ private:
     
     // Hardware detection methods
     bool query_energy_units();
+    bool query_energy_unit_from_hardware();
     bool initialize_counters();  
     bool take_initial_readings();
     

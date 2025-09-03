@@ -43,7 +43,7 @@ public:
     void set_bool(const std::string& key, bool value);
     
     // Specialized getters for common configurations
-    std::vector<std::string> get_preferred_pmt_sensors() const;
+    // PMT methods removed - NEMB handles all energy measurement
     std::string get_language_executable(const std::string& language) const;
     std::vector<std::string> get_language_extensions(const std::string& language) const;
     bool is_debug_mode() const;

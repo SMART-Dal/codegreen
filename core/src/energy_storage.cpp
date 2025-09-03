@@ -431,7 +431,7 @@ bool SQLiteEnergyStorage::store_measurements_batch(const std::string& session_id
         sqlite3_bind_text(stmt, 8, "measurement", -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 9, "energy_measurement", -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 10, 0);
-        sqlite3_bind_text(stmt, 11, "PMT measurement", -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 11, "NEMB measurement", -1, SQLITE_STATIC);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             sqlite3_finalize(stmt);

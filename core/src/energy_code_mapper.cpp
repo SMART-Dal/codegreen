@@ -220,7 +220,7 @@ void EnergyCodeMapper::set_nemb_coordinator(std::shared_ptr<nemb::MeasurementCoo
     std::lock_guard<std::mutex> lock(sensor_mutex_);
     
     nemb_coordinator_ = coordinator;
-    if (nemb_coordinator_ && nemb_coordinator_->is_initialized()) {
+    if (nemb_coordinator_ && !nemb_coordinator_->get_active_providers().empty()) {
         auto providers = nemb_coordinator_->get_active_providers();
         sensor_names_ = providers;
         std::cout << "✅ Set NEMB coordinator with " << providers.size() << " providers" << std::endl;
@@ -426,7 +426,7 @@ void EnergyCodeMapper::aggregate_energy_data(EnergyMeasurementSession& session) 
 std::unique_ptr<Measurement> EnergyCodeMapper::collect_nemb_measurements() {
     std::lock_guard<std::mutex> lock(sensor_mutex_);
     
-    if (!nemb_coordinator_ || !nemb_coordinator_->is_initialized()) {
+    if (!nemb_coordinator_ || !!nemb_coordinator_->get_active_providers().empty()) {
         return nullptr;
     }
     
@@ -434,9 +434,9 @@ std::unique_ptr<Measurement> EnergyCodeMapper::collect_nemb_measurements() {
     measurement->timestamp = std::chrono::system_clock::now();
     
     try {
-        auto synchronized_reading = nemb_coordinator_->read_synchronized();
+        auto synchronized_reading = nemb_coordinator_->get_synchronized_reading();
         
-        if (!synchronized_reading.is_valid || synchronized_reading.readings.empty()) {
+        if (!synchronized_reading.temporal_alignment_valid || synchronized_reading.provider_readings.empty()) {
             return nullptr;
         }
         
@@ -444,7 +444,7 @@ std::unique_ptr<Measurement> EnergyCodeMapper::collect_nemb_measurements() {
         double total_joules = 0.0;
         double total_watts = 0.0;
         
-        for (const auto& reading : synchronized_reading.readings) {
+        for (const auto& reading : synchronized_reading.provider_readings) {
             total_joules += reading.energy_joules;
             total_watts += reading.average_power_watts;
             
@@ -456,8 +456,8 @@ std::unique_ptr<Measurement> EnergyCodeMapper::collect_nemb_measurements() {
             measurement->component_joules[component_key] = reading.energy_joules;
         }
         
-        measurement->total_joules = total_joules;
-        measurement->average_watts = total_watts;
+        measurement->joules = total_joules;
+        measurement->watts = total_watts;
         measurement->valid = true;
         measurement->sensor_name = "NEMB";
         
@@ -479,7 +479,7 @@ double EnergyCodeMapper::get_instrumentation_overhead(const std::string& languag
     // Language-specific baseline overheads (in Joules) based on empirical measurements
     static const std::unordered_map<std::string, double> language_baseline_overheads = {
         {"python", 5e-6},      // 5 microjoules - Python function call overhead
-        {"cpp", 1e-6},         // 1 microjoule - C++ direct PMT call
+        {"cpp", 1e-6},         // 1 microjoule - C++ direct NEMB call
         {"java", 3e-6},        // 3 microjoules - Java method call overhead
         {"javascript", 4e-6},  // 4 microjoules - JavaScript runtime overhead
         {"default", 2e-6}      // Default for unknown languages

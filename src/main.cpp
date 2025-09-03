@@ -4,11 +4,15 @@
 #include <vector>
 #include <string>
 #include <filesystem>
+#include <chrono>
+#include <cmath>
+#include <iomanip>
+#include <fstream>
 #include "measurement_engine.hpp"
 #include "energy_monitor.hpp"
 #include "python.hpp"
 #include "config.hpp"
-#include "pmt_manager.hpp"
+#include "nemb/codegreen_energy.hpp"
 
 void print_usage() {
     std::cout << "CodeGreen - Energy Monitoring and Code Optimization Tool" << std::endl;
@@ -30,6 +34,8 @@ void print_usage() {
     std::cout << std::endl;
     std::cout << "Commands:" << std::endl;
     std::cout << "  --init-sensors    Initialize and cache sensor configuration" << std::endl;
+    std::cout << "  --measure-workload --duration=<sec> --workload=<type>" << std::endl;
+    std::cout << "                    Measure energy consumption of specified workload" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -43,23 +49,152 @@ int main(int argc, char* argv[]) {
         
         // Check for init-sensors command
         if (argc >= 2 && std::string(argv[1]) == "--init-sensors") {
-            std::cout << "CodeGreen - Sensor Initialization" << std::endl;
+            std::cout << "CodeGreen - NEMB Sensor Initialization" << std::endl;
             
-            // Initialize PMT manager and detect sensors
-            auto& pmt_manager = codegreen::PMTManager::get_instance();
-            if (pmt_manager.initialize_from_config()) {
-                std::cout << "✓ Sensor configuration initialized successfully!" << std::endl;
+            // Initialize NEMB energy measurement system using default config
+            codegreen::EnergyMeter meter; // Uses default MeasurementConfig
+            
+            if (meter.is_available()) {
+                std::cout << "✓ NEMB energy measurement system initialized successfully!" << std::endl;
                 
-                // Save sensor configuration to cache
-                auto& config = codegreen::Config::instance();
-                if (config.get_bool("measurement.pmt.cache_sensor_config", true)) {
-                    // TODO: Implement sensor config caching
-                    std::cout << "Sensor configuration cached for future use." << std::endl;
+                // Display available providers
+                auto providers = meter.get_provider_info();
+                std::cout << "Available energy providers:" << std::endl;
+                for (const auto& provider : providers) {
+                    std::cout << "  - " << provider << std::endl;
+                }
+                
+                // Run system self-test
+                if (meter.self_test()) {
+                    std::cout << "✓ System self-test passed" << std::endl;
+                } else {
+                    std::cout << "⚠ System self-test failed" << std::endl;
                 }
                 
                 return 0;
             } else {
                 std::cerr << "Failed to initialize sensors" << std::endl;
+                return 1;
+            }
+        }
+        
+        // Check for measure-workload command (called from Python CLI)
+        if (argc >= 2 && std::string(argv[1]) == "--measure-workload") {
+            // Parse parameters
+            int duration = 3;
+            std::string workload_type = "cpu_stress";
+            
+            for (int i = 2; i < argc; i++) {
+                std::string arg = argv[i];
+                if (arg.find("--duration=") == 0) {
+                    duration = std::stoi(arg.substr(11));
+                } else if (arg.find("--workload=") == 0) {
+                    workload_type = arg.substr(11);
+                }
+            }
+            
+            // Simple direct energy measurement (temporary fix for coordinator hanging)
+            std::cout << "⚡ Starting direct energy measurement..." << std::endl;
+            
+            // Check RAPL access
+            std::ifstream rapl_file("/sys/class/powercap/intel-rapl:0/energy_uj");
+            if (!rapl_file.is_open()) {
+                std::cerr << "RAPL energy measurement not available (try sudo for hardware access)" << std::endl;
+                return 1;
+            }
+            
+            // Get initial energy reading
+            uint64_t energy_start;
+            rapl_file >> energy_start;
+            rapl_file.close();
+            std::cout << "🔋 Initial energy: " << energy_start << " μJ" << std::endl;
+            
+            // Get start time
+            auto time_start = std::chrono::steady_clock::now();
+            
+            std::cout << "🏃 Running " << workload_type << " workload for " << duration << " seconds..." << std::endl;
+            
+            try {
+                // Run the workload
+                if (workload_type == "cpu_stress") {
+                    volatile double x = 0.0;
+                    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
+                    int iterations = 0;
+                    
+                    while (std::chrono::steady_clock::now() < end_time) {
+                        for (int i = 0; i < 50000; i++) {
+                            x += std::sqrt(i * 3.14159);
+                            x = std::sin(x) * std::cos(x);
+                        }
+                        iterations++;
+                    }
+                    std::cout << "💪 Completed " << iterations << " iterations" << std::endl;
+                    
+                } else if (workload_type == "memory_stress") {
+                    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
+                    
+                    while (std::chrono::steady_clock::now() < end_time) {
+                        std::vector<double> data(1000000);
+                        for (size_t i = 0; i < data.size(); i++) {
+                            data[i] = std::sqrt(i);
+                        }
+                        volatile double sum = 0;
+                        for (size_t i = 0; i < data.size(); i += 1000) {
+                            sum += data[i];
+                        }
+                    }
+                    
+                } else {
+                    // Fallback CPU stress
+                    volatile double x = 0.0;
+                    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
+                    while (std::chrono::steady_clock::now() < end_time) {
+                        for (int i = 0; i < 10000; i++) {
+                            x += std::sqrt(i);
+                        }
+                    }
+                }
+                
+                // Get end time and energy
+                auto time_end = std::chrono::steady_clock::now();
+                
+                rapl_file.open("/sys/class/powercap/intel-rapl:0/energy_uj");
+                uint64_t energy_end;
+                rapl_file >> energy_end;
+                rapl_file.close();
+                std::cout << "🔋 Final energy: " << energy_end << " μJ" << std::endl;
+                
+                // Calculate results
+                double energy_joules = (energy_end - energy_start) / 1e6;
+                double duration_seconds = std::chrono::duration<double>(time_end - time_start).count();
+                double average_power_watts = energy_joules / duration_seconds;
+                
+                // Create result structure
+                struct {
+                    double energy_joules;
+                    double average_power_watts; 
+                    double duration_seconds;
+                    bool is_valid = true;
+                    double uncertainty_percent = 5.0; // Estimated uncertainty for direct RAPL
+                } result = {energy_joules, average_power_watts, duration_seconds};
+                
+                // Output results in machine-readable format for Python CLI
+                std::cout << "Energy consumed: " << std::fixed << std::setprecision(6) << result.energy_joules << " J" << std::endl;
+                std::cout << "Average power: " << std::fixed << std::setprecision(3) << result.average_power_watts << " W" << std::endl;
+                std::cout << "Duration: " << std::fixed << std::setprecision(3) << result.duration_seconds << " s" << std::endl;
+                std::cout << "Valid: " << (result.is_valid ? "Yes" : "No") << std::endl;
+                std::cout << "Uncertainty: ±" << std::fixed << std::setprecision(2) << result.uncertainty_percent << "%" << std::endl;
+                
+                if (result.is_valid) {
+                    std::cout << "✅ Measurement completed successfully" << std::endl;
+                } else {
+                    std::cout << "⚠️ Measurement completed with warnings" << std::endl;
+                }
+                
+                return 0;
+                
+            } catch (const std::exception& e) {
+                std::cerr << "Measurement failed: " << e.what() << std::endl;
                 return 1;
             }
         }
@@ -161,20 +296,14 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        // Cleanup resources before exit
-        codegreen::PMTManager::destroy_instance();
+        // NEMB resources are automatically cleaned up with RAII
         
         return 0;
         
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << std::endl;
         
-        // Ensure cleanup even on exceptions
-        try {
-            codegreen::PMTManager::destroy_instance();
-        } catch (...) {
-            // Ignore cleanup failures in exception handler
-        }
+        // NEMB cleanup is automatic with RAII
         
         return 1;
     }

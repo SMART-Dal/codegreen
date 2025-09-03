@@ -17,7 +17,7 @@ namespace codegreen {
 // Implementation details hidden using PIMPL pattern
 class EnergyMeter::Impl {
 public:
-    explicit Impl(const MeasurementConfig& config);
+    explicit Impl(const NEMBConfig& config);
     ~Impl();
     
     bool is_available() const;
@@ -25,7 +25,7 @@ public:
     EnergyResult read();
     uint64_t start_session(const std::string& name);
     EnergyDifference end_session(uint64_t session_id);
-    const MeasurementConfig& get_config() const;
+    const NEMBConfig& get_config() const;
     bool self_test();
     std::map<std::string, std::string> get_diagnostics() const;
     
@@ -37,7 +37,7 @@ private:
         bool active{true};
     };
     
-    MeasurementConfig config_;
+    NEMBConfig config_;
     std::unique_ptr<nemb::MeasurementCoordinator> coordinator_;
     nemb::utils::PrecisionTimer timer_;
     std::map<uint64_t, Session> active_sessions_;
@@ -59,8 +59,8 @@ private:
     EnergyResult convert_synchronized_reading(const nemb::SynchronizedReading& sync_reading) const;
 };
 
-EnergyMeter::Impl::Impl(const MeasurementConfig& config) 
-    : config_(config), timer_(nemb::utils::PrecisionTimer::ClockSource::TSC_INVARIANT) {
+EnergyMeter::Impl::Impl(const NEMBConfig& config) 
+    : config_(config), timer_() {
     
     // Load NEMB configuration based on user settings
     auto nemb_config = nemb::ConfigLoader::load_config();
@@ -84,16 +84,37 @@ EnergyMeter::Impl::Impl(const MeasurementConfig& config)
     }
     
     // Initialize measurement coordinator with providers
-    coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(nemb_config.coordinator);
+    // Convert ConfigLoader::CoordinatorConfig to nemb::CoordinatorConfig
+    nemb::CoordinatorConfig coordinator_config;
+    coordinator_config.temporal_alignment_tolerance_ms = nemb_config.coordinator.temporal_alignment_tolerance_ms;
+    coordinator_config.cross_validation_threshold = nemb_config.coordinator.cross_validation_threshold;
+    coordinator_config.measurement_buffer_size = nemb_config.coordinator.measurement_buffer_size;
+    coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
+    coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
+    
+    coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
+    
+    // Add available providers to the coordinator
+    auto providers = nemb::detect_available_providers();
+    for (auto& provider : providers) {
+        if (!coordinator_->add_provider(std::move(provider))) {
+            std::cerr << "Failed to add energy provider to coordinator" << std::endl;
+        }
+    }
+    
+    // Start measurements
+    if (!coordinator_->start_measurements()) {
+        std::cerr << "Failed to start energy measurements" << std::endl;
+    }
     
     // Wait for initialization with timeout
     auto start_time = std::chrono::steady_clock::now();
-    while (!coordinator_->is_initialized() && 
+    while (coordinator_->get_active_providers().empty() && 
            std::chrono::steady_clock::now() - start_time < config.timeout) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
-    if (!coordinator_->is_initialized()) {
+    if (coordinator_->get_active_providers().empty()) {
         throw std::runtime_error("Energy measurement initialization timed out");
     }
 }
@@ -138,8 +159,7 @@ void EnergyMeter::Impl::set_cpu_affinity() {
 }
 
 bool EnergyMeter::Impl::is_available() const {
-    return coordinator_ && coordinator_->is_initialized() && 
-           !coordinator_->get_active_providers().empty();
+    return coordinator_ && !coordinator_->get_active_providers().empty();
 }
 
 std::vector<std::string> EnergyMeter::Impl::get_provider_info() const {
@@ -160,7 +180,7 @@ std::vector<std::string> EnergyMeter::Impl::get_provider_info() const {
 }
 
 EnergyResult EnergyMeter::Impl::read() {
-    if (!coordinator_ || !coordinator_->is_initialized()) {
+    if (!coordinator_ || coordinator_->get_active_providers().empty()) {
         EnergyResult error_result;
         error_result.is_valid = false;
         error_result.error_message = "Energy measurement not available";
@@ -169,7 +189,7 @@ EnergyResult EnergyMeter::Impl::read() {
     
     try {
         // Get synchronized reading from all providers
-        auto sync_reading = coordinator_->read_synchronized();
+        auto sync_reading = coordinator_->get_synchronized_reading();
         
         // Convert to public API format
         EnergyResult result = convert_synchronized_reading(sync_reading);
@@ -204,7 +224,7 @@ EnergyResult EnergyMeter::Impl::read() {
 EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::SynchronizedReading& sync_reading) const {
     EnergyResult result;
     
-    if (sync_reading.readings.empty()) {
+    if (sync_reading.provider_readings.empty()) {
         result.is_valid = false;
         result.error_message = "No provider readings available";
         return result;
@@ -216,7 +236,7 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
     double max_uncertainty = 0.0;
     double min_confidence = 1.0;
     
-    for (const auto& reading : sync_reading.readings) {
+    for (const auto& reading : sync_reading.provider_readings) {
         total_energy += reading.energy_joules;
         total_power += reading.average_power_watts;
         max_uncertainty = std::max(max_uncertainty, reading.uncertainty_percent);
@@ -232,16 +252,16 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
     
     result.energy_joules = total_energy;
     result.power_watts = total_power;
-    result.timestamp_ns = sync_reading.timestamp_ns;
+    result.timestamp_ns = sync_reading.common_timestamp_ns;
     result.uncertainty_percent = max_uncertainty;
     result.confidence = min_confidence;
-    result.is_valid = sync_reading.is_valid;
+    result.is_valid = sync_reading.temporal_alignment_valid && sync_reading.cross_validation_passed;
     
     // Add provider information
     std::ostringstream provider_info;
-    for (size_t i = 0; i < sync_reading.readings.size(); ++i) {
+    for (size_t i = 0; i < sync_reading.provider_readings.size(); ++i) {
         if (i > 0) provider_info << ", ";
-        provider_info << sync_reading.readings[i].provider_id;
+        provider_info << sync_reading.provider_readings[i].provider_id;
     }
     result.provider_info = provider_info.str();
     
@@ -249,20 +269,20 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
 }
 
 bool EnergyMeter::Impl::cross_validate_providers(const nemb::SynchronizedReading& reading) const {
-    if (reading.readings.size() < 2) {
+    if (reading.provider_readings.size() < 2) {
         return true; // Can't cross-validate with single provider
     }
     
     // Check for consistency between providers
     double avg_power = 0.0;
-    for (const auto& r : reading.readings) {
+    for (const auto& r : reading.provider_readings) {
         avg_power += r.average_power_watts;
     }
-    avg_power /= reading.readings.size();
+    avg_power /= reading.provider_readings.size();
     
     // Check if all providers are within reasonable range
     const double VALIDATION_THRESHOLD = config_.target_uncertainty_percent / 100.0 * 2.0;
-    for (const auto& r : reading.readings) {
+    for (const auto& r : reading.provider_readings) {
         double deviation = std::abs(r.average_power_watts - avg_power) / avg_power;
         if (deviation > VALIDATION_THRESHOLD) {
             return false;
@@ -361,7 +381,7 @@ EnergyDifference EnergyMeter::Impl::end_session(uint64_t session_id) {
     return result;
 }
 
-const MeasurementConfig& EnergyMeter::Impl::get_config() const {
+const NEMBConfig& EnergyMeter::Impl::get_config() const {
     return config_;
 }
 
@@ -390,15 +410,24 @@ bool EnergyMeter::Impl::self_test() {
             return false;
         }
         
-        // Test measurement function with simple workload
-        auto test_energy = measure([]() {
-            volatile double x = 0.0;
-            for (int i = 0; i < 1000000; ++i) {
-                x += std::sqrt(i);
-            }
-        }, "self_test");
+        // Test basic read functionality
+        auto baseline = read();
+        if (!baseline.is_valid) {
+            return false;
+        }
         
-        return test_energy.is_valid && test_energy.energy_joules > 0;
+        // Simple workload for testing
+        volatile double x = 0.0;
+        for (int i = 0; i < 1000000; ++i) {
+            x += std::sqrt(i);
+        }
+        
+        auto after_work = read();
+        if (!after_work.is_valid) {
+            return false;
+        }
+        
+        return after_work.energy_joules >= baseline.energy_joules;
         
     } catch (...) {
         return false;
@@ -414,7 +443,7 @@ std::map<std::string, std::string> EnergyMeter::Impl::get_diagnostics() const {
     diagnostics["target_uncertainty"] = std::to_string(config_.target_uncertainty_percent) + "%";
     
     if (coordinator_) {
-        diagnostics["coordinator_ready"] = coordinator_->is_initialized() ? "true" : "false";
+        diagnostics["coordinator_ready"] = !coordinator_->get_active_providers().empty() ? "true" : "false";
         auto providers = coordinator_->get_active_providers();
         diagnostics["active_providers"] = std::to_string(providers.size());
     }
@@ -429,9 +458,9 @@ std::map<std::string, std::string> EnergyMeter::Impl::get_diagnostics() const {
 
 // Public API Implementation
 
-EnergyMeter::EnergyMeter() : EnergyMeter(MeasurementConfig::accuracy_optimized()) {}
+EnergyMeter::EnergyMeter() : EnergyMeter(NEMBConfig::accuracy_optimized()) {}
 
-EnergyMeter::EnergyMeter(const MeasurementConfig& config) 
+EnergyMeter::EnergyMeter(const NEMBConfig& config) 
     : impl_(std::make_unique<Impl>(config)) {}
 
 EnergyMeter::~EnergyMeter() = default;
@@ -459,7 +488,7 @@ EnergyDifference EnergyMeter::end_session(uint64_t session_id) {
     return impl_->end_session(session_id);
 }
 
-const MeasurementConfig& EnergyMeter::get_config() const {
+const NEMBConfig& EnergyMeter::get_config() const {
     return impl_->get_config();
 }
 
@@ -473,8 +502,8 @@ std::map<std::string, std::string> EnergyMeter::get_diagnostics() const {
 
 // Configuration implementations
 
-MeasurementConfig MeasurementConfig::accuracy_optimized() {
-    MeasurementConfig config;
+NEMBConfig NEMBConfig::accuracy_optimized() {
+    NEMBConfig config;
     config.target_uncertainty_percent = 0.5;
     config.enable_cross_validation = true;
     config.enable_outlier_detection = true;
@@ -487,8 +516,8 @@ MeasurementConfig MeasurementConfig::accuracy_optimized() {
     return config;
 }
 
-MeasurementConfig MeasurementConfig::performance_optimized() {
-    MeasurementConfig config;
+NEMBConfig NEMBConfig::performance_optimized() {
+    NEMBConfig config;
     config.target_uncertainty_percent = 2.0;
     config.enable_cross_validation = false;
     config.enable_outlier_detection = false;
@@ -501,11 +530,11 @@ MeasurementConfig MeasurementConfig::performance_optimized() {
     return config;
 }
 
-MeasurementConfig MeasurementConfig::from_config_file(const std::string& config_path) {
-    // Load NEMB config and convert to MeasurementConfig
+NEMBConfig NEMBConfig::from_config_file(const std::string& config_path) {
+    // Load NEMB config and convert to NEMBConfig
     auto nemb_config = nemb::ConfigLoader::load_config(config_path);
     
-    MeasurementConfig config;
+    NEMBConfig config;
     config.target_uncertainty_percent = nemb_config.accuracy.target_uncertainty_percent;
     config.enable_cross_validation = nemb_config.coordinator.cross_validation;
     config.enable_outlier_detection = nemb_config.accuracy.outlier_detection;

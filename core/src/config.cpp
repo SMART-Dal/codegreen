@@ -94,10 +94,7 @@ void Config::load_defaults() {
     // Measurement settings
     config_data_["measurement"]["timing"]["precision"] = "high";
     config_data_["measurement"]["timing"]["sync_method"] = "perf_counter";
-    config_data_["measurement"]["pmt"]["preferred_sensors"].append("rapl");
-    config_data_["measurement"]["pmt"]["preferred_sensors"].append("nvml");
-    config_data_["measurement"]["pmt"]["preferred_sensors"].append("dummy");
-    config_data_["measurement"]["pmt"]["fallback_enabled"] = true;
+    // NEMB handles all energy measurement - no PMT configuration needed
     config_data_["measurement"]["accuracy"]["separate_instrumentation_phase"] = true;
     
     // Performance settings
@@ -263,9 +260,7 @@ void Config::set_bool(const std::string& key, bool value) {
     (*current)[keys.back()] = value;
 }
 
-std::vector<std::string> Config::get_preferred_pmt_sensors() const {
-    return get_string_array("measurement.pmt.preferred_sensors");
-}
+// PMT methods removed - NEMB handles all energy measurement
 
 std::string Config::get_language_executable(const std::string& language) const {
     return get_string("languages." + language + ".executable", language);
@@ -359,11 +354,7 @@ bool Config::validate_configuration() const {
         }
     }
     
-    // Validate PMT sensors
-    auto sensors = get_preferred_pmt_sensors();
-    if (sensors.empty()) {
-        validation_errors_.push_back("No PMT sensors configured");
-    }
+    // NEMB handles sensor validation - no PMT validation needed
     
     return validation_errors_.empty();
 }

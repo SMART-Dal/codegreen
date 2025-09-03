@@ -110,12 +110,12 @@ struct EnergyDifference {
 };
 
 /**
- * @brief Configuration for energy measurements
+ * @brief Configuration for NEMB energy measurements
  * 
  * Allows customization of measurement behavior. Most users should use
  * the defaults, which are optimized for accuracy.
  */
-struct MeasurementConfig {
+struct NEMBConfig {
     // Accuracy settings
     double target_uncertainty_percent{1.0}; ///< Target measurement uncertainty
     bool enable_cross_validation{true};     ///< Validate between multiple sources
@@ -139,18 +139,18 @@ struct MeasurementConfig {
     /**
      * @brief Create default configuration optimized for accuracy
      */
-    static MeasurementConfig accuracy_optimized();
+    static NEMBConfig accuracy_optimized();
     
     /**
      * @brief Create configuration optimized for minimal overhead
      */
-    static MeasurementConfig performance_optimized();
+    static NEMBConfig performance_optimized();
     
     /**
      * @brief Load configuration from CodeGreen config file
      * @param config_path Optional path to config file
      */
-    static MeasurementConfig from_config_file(const std::string& config_path = "");
+    static NEMBConfig from_config_file(const std::string& config_path = "");
 };
 
 /**
@@ -174,7 +174,7 @@ public:
      * @brief Create energy meter with custom configuration
      * @param config Custom measurement configuration
      */
-    explicit EnergyMeter(const MeasurementConfig& config);
+    explicit EnergyMeter(const NEMBConfig& config);
     
     /**
      * @brief Destructor - ensures clean shutdown
@@ -250,7 +250,7 @@ public:
      * @brief Get current measurement configuration
      * @return Current configuration settings
      */
-    const MeasurementConfig& get_config() const;
+    const NEMBConfig& get_config() const;
     
     /**
      * @brief Run self-test to validate measurement accuracy
@@ -396,8 +396,6 @@ EnergyDifference EnergyMeter::measure(Func&& workload, const std::string& name) 
     return result;
 }
 
-} // namespace codegreen
-
 /**
  * @brief Convenience macro for scoped energy measurement
  * 
@@ -418,5 +416,3 @@ EnergyDifference EnergyMeter::measure(Func&& workload, const std::string& name) 
     codegreen::ScopedEnergyMeter _codegreen_energy_meter(__FUNCTION__)
 
 } // namespace codegreen
-
-#endif // CODEGREEN_ENERGY_HPP

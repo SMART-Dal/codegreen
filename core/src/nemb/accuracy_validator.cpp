@@ -15,7 +15,7 @@
 namespace codegreen::nemb {
 
 AccuracyValidator::AccuracyValidator(const ValidationConfig& config)
-    : config_(config), timer_(utils::PrecisionTimer::ClockSource::TSC_INVARIANT) {}
+    : config_(config), timer_() {}
 
 ValidationResult AccuracyValidator::validate_system_accuracy() {
     ValidationResult result;

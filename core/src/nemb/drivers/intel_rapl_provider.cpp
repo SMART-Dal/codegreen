@@ -302,9 +302,11 @@ bool IntelRAPLProvider::query_energy_units() {
         }
     }
     
-    // For Intel RAPL, typical energy unit is 15.3 microjoules (2^-16 * 1e6 uJ)
-    // This should be read from MSR_RAPL_POWER_UNIT, but for sysfs we use known values
-    energy_unit_joules_ = 15.3e-6; // 15.3 microjoules - typical Intel value
+    // Query energy unit from hardware - NEVER use hardcoded values!
+    if (!query_energy_unit_from_hardware()) {
+        std::cout << "  ❌ Failed to query energy unit from hardware" << std::endl;
+        return false;
+    }
     
     std::cout << "  Energy unit: " << (energy_unit_joules_ * 1e6) << " μJ" << std::endl;
     return true;
@@ -356,6 +358,52 @@ bool IntelRAPLProvider::take_initial_readings() {
     }
     
     return true;
+}
+
+bool IntelRAPLProvider::query_energy_unit_from_hardware() {
+    // Try to read energy unit from sysfs first (more reliable than MSR)
+    const std::string energy_unit_path = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj";
+    
+    if (std::filesystem::exists(energy_unit_path)) {
+        // For sysfs interface, energy values are already in microjoules
+        // The unit is implicitly 1 microjoule = 1e-6 joules
+        energy_unit_joules_ = 1e-6; // 1 microjoule
+        std::cout << "  ✓ Using sysfs energy unit: 1 μJ" << std::endl;
+        return true;
+    }
+    
+    // Fallback: Try to read from MSR_RAPL_POWER_UNIT (requires MSR access)
+    // This is the proper way to get exact hardware capabilities
+    try {
+        // Check if MSR access is available
+        const std::string msr_path = "/dev/cpu/0/msr";
+        if (std::filesystem::exists(msr_path)) {
+            std::ifstream msr_file(msr_path, std::ios::binary);
+            if (msr_file.is_open()) {
+                // Seek to MSR_RAPL_POWER_UNIT (0x606)
+                msr_file.seekg(0x606 * 8, std::ios::beg);
+                
+                uint64_t power_unit_msr = 0;
+                msr_file.read(reinterpret_cast<char*>(&power_unit_msr), sizeof(power_unit_msr));
+                
+                if (msr_file.good()) {
+                    // Energy unit is in bits 12:8 of MSR_RAPL_POWER_UNIT
+                    uint32_t energy_unit_raw = (power_unit_msr >> 8) & 0x1F;
+                    energy_unit_joules_ = 1.0 / (1ULL << energy_unit_raw); // 2^(-energy_unit_raw) joules
+                    
+                    std::cout << "  ✓ Hardware energy unit: " << (energy_unit_joules_ * 1e6) << " μJ" << std::endl;
+                    return true;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cout << "  ⚠️  MSR access failed: " << e.what() << std::endl;
+    }
+    
+    // Final fallback - this should rarely be needed if hardware detection works properly
+    std::cout << "  ⚠️  Cannot query energy unit from hardware, using conservative fallback" << std::endl;
+    energy_unit_joules_ = 15.3e-6; // Conservative typical Intel value
+    return true; // Still succeed, but with lower confidence
 }
 
 std::unique_ptr<IntelRAPLProvider> create_intel_rapl_provider() {

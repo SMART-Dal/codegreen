@@ -19,6 +19,34 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
+# Optional GPU library support
+find_library(NVML_LIBRARY nvidia-ml PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu)
+find_path(NVML_INCLUDE_DIR nvml.h PATHS /usr/local/cuda/include /usr/include/nvidia/gdk)
+find_library(ROCM_SMI_LIBRARY rocm_smi64 PATHS /opt/rocm/lib)
+find_path(ROCM_SMI_INCLUDE_DIR rocm_smi.h PATHS /opt/rocm/include/rocm_smi)
+
+if(NVML_LIBRARY AND NVML_INCLUDE_DIR)
+    message(STATUS "✓ NVML library and headers found: ${NVML_LIBRARY}")
+    set(HAVE_NVML ON)
+elseif(NVML_LIBRARY)
+    message(STATUS "⚠ NVML library found but headers missing - NVIDIA GPU energy monitoring will use fallback")
+    set(HAVE_NVML OFF)
+else()
+    message(STATUS "⚠ NVML library not found - NVIDIA GPU energy monitoring will use fallback")
+    set(HAVE_NVML OFF)
+endif()
+
+if(ROCM_SMI_LIBRARY AND ROCM_SMI_INCLUDE_DIR)
+    message(STATUS "✓ ROCm SMI library and headers found: ${ROCM_SMI_LIBRARY}")
+    set(HAVE_ROCM_SMI ON)
+elseif(ROCM_SMI_LIBRARY)
+    message(STATUS "⚠ ROCm SMI library found but headers missing - AMD GPU energy monitoring will use fallback")
+    set(HAVE_ROCM_SMI OFF)  
+else()
+    message(STATUS "⚠ ROCm SMI library not found - AMD GPU energy monitoring will use fallback")
+    set(HAVE_ROCM_SMI OFF)
+endif()
+
 # Find system libraries
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 pkg_check_modules(CURL REQUIRED libcurl)
@@ -28,8 +56,7 @@ pkg_check_modules(SQLITE3 REQUIRED sqlite3)
 include_directories(${CMAKE_SOURCE_DIR}/core/include)
 include_directories(${CMAKE_SOURCE_DIR}/packages/language-adapters/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include)
-include_directories(${CMAKE_SOURCE_DIR}/third_party/pmt)
-include_directories(${CMAKE_SOURCE_DIR}/third_party/pmt/common)
+
 
 # Add tree-sitter submodules
 message(STATUS "Building tree-sitter language parsers...")
@@ -63,137 +90,8 @@ else()
     set(HAS_TREE_SITTER_JAVA OFF)
 endif()
 
-# PMT Configuration with robust sensor detection
-message(STATUS "=== CodeGreen PMT Sensor Detection ===")
-
-# Always enable dummy sensor as fallback
-set(PMT_BUILD_DUMMY ON)
-message(STATUS "✓ Dummy sensor enabled (always available)")
-
-# Smart hardware detection with graceful fallbacks
-set(PMT_BUILD_RAPL OFF)
-set(PMT_BUILD_NVML OFF)
-set(PMT_BUILD_TEGRA OFF)
-set(PMT_BUILD_NVIDIA OFF)
-set(PMT_BUILD_AMDSMI OFF)
-set(PMT_BUILD_ROCM OFF)
-set(PMT_BUILD_POWERSENSOR2 OFF)
-set(PMT_BUILD_POWERSENSOR3 OFF)
-set(PMT_BUILD_LIKWID OFF)
-set(PMT_BUILD_CRAY OFF)
-set(PMT_BUILD_XILINX OFF)
-
-# Check for Intel/AMD RAPL support
-if(EXISTS "/sys/class/powercap/intel-rapl" OR EXISTS "/sys/devices/virtual/powercap")
-    message(STATUS "✓ RAPL interface detected - enabling RAPL sensor")
-    set(PMT_BUILD_RAPL ON)
-else()
-    message(STATUS "⚠ RAPL interface not found - RAPL sensor disabled")
-endif()
-
-# Check for NVIDIA GPU support using safer file-based detection
-if(EXISTS "/dev/nvidia0" OR EXISTS "/dev/nvidiactl" OR EXISTS "/proc/driver/nvidia")
-    message(STATUS "✓ NVIDIA GPU detected via device files")
-    
-    # Check for CUDA development libraries (optional)
-    find_package(CUDAToolkit QUIET)
-    if(CUDAToolkit_FOUND)
-        message(STATUS "  ✓ CUDA toolkit found - full NVML support enabled")
-        set(PMT_BUILD_NVML ON)
-        set(PMT_BUILD_NVIDIA ON)
-        set(PMT_BUILD_TEGRA ON)
-    else()
-        message(STATUS "  ⚠ CUDA toolkit not found - disabling NVIDIA sensors for stability")
-        # Disable NVIDIA sensors to avoid build issues
-        set(PMT_BUILD_NVML OFF)
-        set(PMT_BUILD_NVIDIA OFF)
-        set(PMT_BUILD_TEGRA OFF)
-    endif()
-else()
-    message(STATUS "⚠ No NVIDIA GPU detected - NVIDIA sensors disabled")
-endif()
-
-# Check for AMD processor and GPU support using safer file reading
-if(EXISTS "/proc/cpuinfo")
-    file(READ "/proc/cpuinfo" CPU_INFO)
-    if(CPU_INFO MATCHES ".*AuthenticAMD.*")
-        message(STATUS "✓ AMD processor detected")
-    
-    # Check for AMD SMI library
-    find_library(AMD_SMI_LIB amdsmi QUIET)
-    find_path(AMD_SMI_INCLUDE amdsmi/amdsmi.h QUIET)
-    
-    if(AMD_SMI_LIB AND AMD_SMI_INCLUDE)
-        message(STATUS "  ✓ AMD SMI library found - enabling AMD SMI sensor")
-        set(PMT_BUILD_AMDSMI ON)
-    else()
-        message(STATUS "  ⚠ AMD SMI library not found - AMD SMI sensor disabled")
-    endif()
-    
-    # Check for ROCm
-    if(EXISTS "/opt/rocm" AND EXISTS "/opt/rocm/include")
-        message(STATUS "  ✓ ROCm installation found - enabling ROCm sensor")
-        set(PMT_BUILD_ROCM ON)
-    else()
-        message(STATUS "  ⚠ ROCm not found - ROCm sensor disabled")
-    endif()
-    else()
-        message(STATUS "⚠ AMD processor not detected - AMD sensors disabled")
-    endif()
-else()
-    message(STATUS "⚠ /proc/cpuinfo not available - CPU detection disabled")
-endif()
-
-# Check for PowerSensor USB devices using safer file-based detection
-set(POWERSENSOR_FOUND OFF)
-file(GLOB USB_DEVICES "/sys/bus/usb/devices/*/product")
-foreach(DEVICE_FILE ${USB_DEVICES})
-    if(EXISTS ${DEVICE_FILE})
-        file(READ ${DEVICE_FILE} DEVICE_NAME)
-        if(DEVICE_NAME MATCHES ".*[Pp]ower[Ss]ensor.*")
-            set(POWERSENSOR_FOUND ON)
-            break()
-        endif()
-    endif()
-endforeach()
-
-if(POWERSENSOR_FOUND)
-    message(STATUS "✓ PowerSensor USB device detected - enabling PowerSensor sensors")
-    set(PMT_BUILD_POWERSENSOR3 ON)
-    set(PMT_BUILD_POWERSENSOR2 ON)
-else()
-    message(STATUS "⚠ No PowerSensor USB devices detected - PowerSensor sensors disabled")
-endif()
-
-# Check for LIKWID (optional performance monitoring)
-find_program(LIKWID_CMD likwid-topology QUIET)
-if(LIKWID_CMD)
-    message(STATUS "✓ LIKWID found - enabling LIKWID sensor")
-    set(PMT_BUILD_LIKWID ON)
-else()
-    message(STATUS "⚠ LIKWID not found - LIKWID sensor disabled")
-endif()
-
-# Always disable these for production builds
-set(PMT_BUILD_TESTING OFF)
-set(PMT_BUILD_BINARY OFF)
-set(PMT_BUILD_PYTHON OFF)
-
-message(STATUS "=== PMT Build Summary ===")
-message(STATUS "Dummy: ${PMT_BUILD_DUMMY}")
-message(STATUS "RAPL: ${PMT_BUILD_RAPL}")
-message(STATUS "NVML: ${PMT_BUILD_NVML}")
-message(STATUS "NVIDIA: ${PMT_BUILD_NVIDIA}")
-message(STATUS "TEGRA: ${PMT_BUILD_TEGRA}")
-message(STATUS "AMD SMI: ${PMT_BUILD_AMDSMI}")
-message(STATUS "ROCm: ${PMT_BUILD_ROCM}")
-message(STATUS "PowerSensor2/3: ${PMT_BUILD_POWERSENSOR2}/${PMT_BUILD_POWERSENSOR3}")
-message(STATUS "LIKWID: ${PMT_BUILD_LIKWID}")
-message(STATUS "========================")
-
-# PMT temporarily disabled - replaced by NEMB
-# message(STATUS "Building PMT (Power Measurement Toolkit)...")
-# add_subdirectory(third_party/pmt)
+# NEMB (Native Energy Measurement Backend) handles all energy measurement
+# PMT has been completely replaced by NEMB native implementations
 
 # Core library sources
 set(CORE_SOURCES
@@ -213,6 +111,8 @@ set(NEMB_SOURCES
     core/src/nemb/hal/counter_manager.cpp
     core/src/nemb/utils/precision_timer.cpp
     core/src/nemb/drivers/intel_rapl_provider.cpp
+    core/src/nemb/drivers/nvidia_gpu_provider.cpp
+    core/src/nemb/drivers/amd_gpu_provider.cpp
     core/src/nemb/config_loader.cpp
     core/src/nemb/codegreen_energy.cpp
     core/src/nemb/accuracy_validator.cpp
@@ -276,6 +176,21 @@ target_link_libraries(codegreen-nemb PUBLIC
     Threads::Threads
     m  # Math library for sqrt, etc.
 )
+
+# Add optional GPU libraries
+if(HAVE_NVML)
+    target_link_libraries(codegreen-nemb PRIVATE ${NVML_LIBRARY})
+    target_include_directories(codegreen-nemb PRIVATE ${NVML_INCLUDE_DIR})
+    target_compile_definitions(codegreen-nemb PRIVATE HAVE_NVML=1)
+endif()
+
+if(HAVE_ROCM_SMI)
+    target_link_libraries(codegreen-nemb PRIVATE ${ROCM_SMI_LIBRARY})
+    target_include_directories(codegreen-nemb PRIVATE ${ROCM_SMI_INCLUDE_DIR})
+    target_compile_definitions(codegreen-nemb PRIVATE HAVE_ROCM_SMI=1)
+endif()
+
+target_compile_options(codegreen-nemb PRIVATE -fPIC)
 
 # Create language adapters library
 add_library(codegreen-language-adapters ${LANGUAGE_ADAPTER_SOURCES})
@@ -427,24 +342,8 @@ if(HAS_TREE_SITTER_JAVA)
     message(STATUS "  ✓ Java (tree-sitter)")
 endif()
 message(STATUS "Hardware Sensors:")
-if(PMT_BUILD_RAPL)
-    message(STATUS "  ✓ Intel/AMD RAPL")
-endif()
-if(PMT_BUILD_NVML)
-    message(STATUS "  ✓ NVIDIA NVML")
-endif()
-if(PMT_BUILD_AMDSMI)
-    message(STATUS "  ✓ AMD SMI")
-endif()
-if(PMT_BUILD_ROCM)
-    message(STATUS "  ✓ AMD ROCm")
-endif()
-if(PMT_BUILD_POWERSENSOR3)
-    message(STATUS "  ✓ PowerSensor USB")
-endif()
-if(PMT_BUILD_LIKWID)
-    message(STATUS "  ✓ LIKWID")
-endif()
+message(STATUS "  ✓ Intel/AMD RAPL (NEMB)")
+message(STATUS "  ✓ NVIDIA NVML (NEMB)")
 message(STATUS "  ✓ Dummy sensor (fallback)")
 message(STATUS "")
 message(STATUS "Build Target: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen")
