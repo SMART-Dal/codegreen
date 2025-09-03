@@ -191,9 +191,9 @@ message(STATUS "PowerSensor2/3: ${PMT_BUILD_POWERSENSOR2}/${PMT_BUILD_POWERSENSO
 message(STATUS "LIKWID: ${PMT_BUILD_LIKWID}")
 message(STATUS "========================")
 
-# Add PMT with error handling
-message(STATUS "Building PMT (Power Measurement Toolkit)...")
-add_subdirectory(third_party/pmt)
+# PMT temporarily disabled - replaced by NEMB
+# message(STATUS "Building PMT (Power Measurement Toolkit)...")
+# add_subdirectory(third_party/pmt)
 
 # Core library sources
 set(CORE_SOURCES
@@ -201,12 +201,21 @@ set(CORE_SOURCES
     core/src/energy_monitor.cpp
     core/src/measurement_session.cpp
     core/src/energy_storage.cpp
-            core/src/energy_code_mapper.cpp
-        core/src/plugin/plugin_registry.cpp
-        core/src/adapters/pmt_adapter.cpp
-        core/src/config.cpp
-        core/src/sensor_validator.cpp
-        core/src/pmt_manager.cpp
+    core/src/energy_code_mapper.cpp
+    core/src/plugin/plugin_registry.cpp
+    core/src/config.cpp
+)
+
+# NEMB (Native Energy Measurement Backend) sources
+set(NEMB_SOURCES
+    core/src/nemb/core/energy_provider.cpp
+    core/src/nemb/core/measurement_coordinator.cpp
+    core/src/nemb/hal/counter_manager.cpp
+    core/src/nemb/utils/precision_timer.cpp
+    core/src/nemb/drivers/intel_rapl_provider.cpp
+    core/src/nemb/config_loader.cpp
+    core/src/nemb/codegreen_energy.cpp
+    core/src/nemb/accuracy_validator.cpp
 )
 
 # Verify core source files exist
@@ -243,19 +252,29 @@ add_library(codegreen-core ${CORE_SOURCES})
 
 target_include_directories(codegreen-core PUBLIC
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/third_party/pmt
-    ${CMAKE_SOURCE_DIR}/third_party/pmt/common
     ${JSONCPP_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
     ${SQLITE3_INCLUDE_DIRS}
 )
 
 target_link_libraries(codegreen-core PUBLIC
-    pmt
+    codegreen-nemb
     ${JSONCPP_LIBRARIES}
     ${CURL_LIBRARIES}
     ${SQLITE3_LIBRARIES}
     Threads::Threads
+)
+
+# Create NEMB library (separate from legacy core)
+add_library(codegreen-nemb STATIC ${NEMB_SOURCES})
+
+target_include_directories(codegreen-nemb PUBLIC
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(codegreen-nemb PUBLIC
+    Threads::Threads
+    m  # Math library for sqrt, etc.
 )
 
 # Create language adapters library

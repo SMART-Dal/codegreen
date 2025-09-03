@@ -1,7 +1,6 @@
 #include "energy_code_mapper.hpp"
 #include "energy_storage.hpp"
-#include <pmt/common/PMT.h>
-#include <pmt/common/State.h>
+#include "nemb/core/measurement_coordinator.hpp"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -217,30 +216,21 @@ std::unique_ptr<EnergyMeasurementSession> EnergyCodeMapper::end_session(const st
     return session;
 }
 
-bool EnergyCodeMapper::add_pmt_sensor(std::unique_ptr<pmt::PMT> sensor, const std::string& sensor_name) {
+void EnergyCodeMapper::set_nemb_coordinator(std::shared_ptr<nemb::MeasurementCoordinator> coordinator) {
     std::lock_guard<std::mutex> lock(sensor_mutex_);
     
-    if (!sensor) {
-        std::cerr << "Error: Invalid PMT sensor provided" << std::endl;
-        return false;
-    }
-    
-    try {
-        // Test the sensor by taking a measurement
-        auto test_state = sensor->Read();
-        std::cout << "✅ Added PMT sensor: " << sensor_name << std::endl;
-        
-        pmt_sensors_.push_back(std::move(sensor));
-        sensor_names_.push_back(sensor_name);
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "❌ Failed to add PMT sensor " << sensor_name << ": " << e.what() << std::endl;
-        return false;
+    nemb_coordinator_ = coordinator;
+    if (nemb_coordinator_ && nemb_coordinator_->is_initialized()) {
+        auto providers = nemb_coordinator_->get_active_providers();
+        sensor_names_ = providers;
+        std::cout << "✅ Set NEMB coordinator with " << providers.size() << " providers" << std::endl;
+    } else {
+        std::cerr << "❌ NEMB coordinator not ready" << std::endl;
     }
 }
 
 std::unique_ptr<Measurement> EnergyCodeMapper::get_current_energy_measurement() {
-    return collect_pmt_measurements();
+    return collect_nemb_measurements();
 }
 
 std::string EnergyCodeMapper::generate_energy_report(const EnergyMeasurementSession& session) {
@@ -433,38 +423,50 @@ void EnergyCodeMapper::aggregate_energy_data(EnergyMeasurementSession& session) 
     // This could include grouping by functions, calculating statistics, etc.
 }
 
-std::unique_ptr<Measurement> EnergyCodeMapper::collect_pmt_measurements() {
+std::unique_ptr<Measurement> EnergyCodeMapper::collect_nemb_measurements() {
     std::lock_guard<std::mutex> lock(sensor_mutex_);
     
-    if (pmt_sensors_.empty()) {
+    if (!nemb_coordinator_ || !nemb_coordinator_->is_initialized()) {
         return nullptr;
     }
     
     auto measurement = std::make_unique<Measurement>();
     measurement->timestamp = std::chrono::system_clock::now();
-    measurement->joules = 0.0;
-    measurement->watts = 0.0;
-    measurement->temperature = 0.0;
     
-    bool has_valid_measurement = false;
-    
-    for (size_t i = 0; i < pmt_sensors_.size(); ++i) {
-        try {
-            auto state = pmt_sensors_[i]->Read();
-            
-            if (state.NrMeasurements() > 0) {
-                measurement->joules += state.joules(0);
-                measurement->watts += state.watts(0);
-                measurement->source = sensor_names_[i];
-                has_valid_measurement = true;
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: PMT sensor " << sensor_names_[i] 
-                     << " measurement failed: " << e.what() << std::endl;
+    try {
+        auto synchronized_reading = nemb_coordinator_->read_synchronized();
+        
+        if (!synchronized_reading.is_valid || synchronized_reading.readings.empty()) {
+            return nullptr;
         }
+        
+        // Aggregate energy from all providers
+        double total_joules = 0.0;
+        double total_watts = 0.0;
+        
+        for (const auto& reading : synchronized_reading.readings) {
+            total_joules += reading.energy_joules;
+            total_watts += reading.average_power_watts;
+            
+            // Store component breakdown
+            std::string component_key = reading.provider_id;
+            if (reading.component_name && !reading.component_name->empty()) {
+                component_key += "_" + *reading.component_name;
+            }
+            measurement->component_joules[component_key] = reading.energy_joules;
+        }
+        
+        measurement->total_joules = total_joules;
+        measurement->average_watts = total_watts;
+        measurement->valid = true;
+        measurement->sensor_name = "NEMB";
+        
+        return measurement;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Warning: NEMB measurement failed: " << e.what() << std::endl;
+        return nullptr;
     }
-    
-    return has_valid_measurement ? std::move(measurement) : nullptr;
 }
 
 EnergyMeasurementSession* EnergyCodeMapper::get_session(const std::string& session_id) {

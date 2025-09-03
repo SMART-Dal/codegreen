@@ -25,11 +25,52 @@
   },
   "measurement": {
     "timing": {
-      "precision": "high",
-      "sync_method": "perf_counter",
-      "calibration_samples": 10
+      "precision": "maximum",
+      "clock_source": "auto",
+      "sync_method": "tsc",
+      "calibration_samples": 100
     },
-    "pmt": {
+    "nemb": {
+      "enabled": true,
+      "accuracy_mode": "production",
+      "providers": {
+        "intel_rapl": {
+          "enabled": "auto",
+          "access_method": "auto",
+          "domains": ["package", "pp0", "pp1", "dram"],
+          "validation_enabled": true
+        },
+        "nvidia_gpu": {
+          "enabled": "auto",
+          "device_selection": "all",
+          "power_sampling_hz": 100,
+          "validation_enabled": true
+        },
+        "amd_cpu": {
+          "enabled": "auto", 
+          "access_method": "auto",
+          "validation_enabled": true
+        }
+      },
+      "coordinator": {
+        "cross_validation": true,
+        "cross_validation_threshold": 0.05,
+        "temporal_alignment_tolerance_ms": 0.1,
+        "measurement_buffer_size": 1000,
+        "auto_restart_failed_providers": true,
+        "provider_restart_interval_s": 30
+      },
+      "accuracy": {
+        "target_uncertainty_percent": 1.0,
+        "measurement_validation": true,
+        "outlier_detection": true,
+        "noise_filtering": "adaptive",
+        "statistical_validation": true,
+        "confidence_threshold": 0.95
+      }
+    },
+    "pmt_legacy": {
+      "enabled": false,
       "preferred_sensors": ["rapl", "nvml", "dummy"],
       "fallback_enabled": true,
       "validation_enabled": true,
@@ -37,9 +78,14 @@
       "measurement_interval_ms": 1
     },
     "accuracy": {
+      "priority": "maximum",
       "separate_instrumentation_phase": true,
       "minimize_io_during_measurement": true,
-      "preload_runtime_modules": true
+      "preload_runtime_modules": true,
+      "disable_frequency_scaling": false,
+      "cpu_affinity": "auto",
+      "memory_prefaulting": true,
+      "minimize_system_noise": true
     }
   },
   "performance": {

@@ -6,6 +6,7 @@ This guide shows you how to visualize CodeGreen energy measurements using both *
 
 1. **Clean Grafana Setup**: Removed redundant old dashboard, kept optimized Prometheus-based version
 2. **Enhanced Reports**: Added code-line energy mapping with peak detection algorithm  
+
 3. **Easy Monitoring**: Simple scripts to start/stop Prometheus + Grafana stack
 
 ---

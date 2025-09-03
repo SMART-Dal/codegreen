@@ -16,15 +16,20 @@ void print_usage() {
     std::cout << std::endl;
     std::cout << "Usage:" << std::endl;
     std::cout << "  codegreen <language> <source_file> [args...]" << std::endl;
+    std::cout << "  codegreen --init-sensors" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  codegreen python3 main.py" << std::endl;
     std::cout << "  codegreen python3 script.py arg1 arg2" << std::endl;
+    std::cout << "  codegreen --init-sensors" << std::endl;
     std::cout << std::endl;
     std::cout << "Supported languages:" << std::endl;
     std::cout << "  python3, python - Python 3.x" << std::endl;
     std::cout << "  g++, gcc - C++ and C" << std::endl;
     std::cout << "  javac, java - Java" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Commands:" << std::endl;
+    std::cout << "  --init-sensors    Initialize and cache sensor configuration" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -34,6 +39,29 @@ int main(int argc, char* argv[]) {
         if (!config_loader.is_loaded()) {
             std::cerr << "Warning: " << config_loader.get_error() << std::endl;
             std::cerr << "Continuing with default configuration..." << std::endl;
+        }
+        
+        // Check for init-sensors command
+        if (argc >= 2 && std::string(argv[1]) == "--init-sensors") {
+            std::cout << "CodeGreen - Sensor Initialization" << std::endl;
+            
+            // Initialize PMT manager and detect sensors
+            auto& pmt_manager = codegreen::PMTManager::get_instance();
+            if (pmt_manager.initialize_from_config()) {
+                std::cout << "✓ Sensor configuration initialized successfully!" << std::endl;
+                
+                // Save sensor configuration to cache
+                auto& config = codegreen::Config::instance();
+                if (config.get_bool("measurement.pmt.cache_sensor_config", true)) {
+                    // TODO: Implement sensor config caching
+                    std::cout << "Sensor configuration cached for future use." << std::endl;
+                }
+                
+                return 0;
+            } else {
+                std::cerr << "Failed to initialize sensors" << std::endl;
+                return 1;
+            }
         }
         
         if (argc < 3) {

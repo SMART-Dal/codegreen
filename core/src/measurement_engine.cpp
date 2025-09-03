@@ -1,9 +1,9 @@
 #include "measurement_engine.hpp"
 #include "plugin/plugin_registry.hpp"
-#include "adapters/pmt_adapter.hpp"
 #include "energy_storage.hpp"
 #include "config.hpp"
-#include "pmt_manager.hpp"
+#include "nemb/core/measurement_coordinator.hpp"
+#include "nemb/config_loader.hpp"
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -11,6 +11,8 @@
 #include <sstream>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <thread>
+#include <chrono>
 
 namespace codegreen {
 
@@ -20,11 +22,9 @@ MeasurementEngine::MeasurementEngine()
     // Load configuration
     auto& config = Config::instance();
     
-    // Initialize centralized PMT manager (replaces duplicate initialization)
-    auto& pmt_manager = PMTManager::get_instance();
-    if (!pmt_manager.is_initialized()) {
-        pmt_manager.initialize_from_config();
-    }
+    // Initialize NEMB (Native Energy Measurement Backend)
+    auto nemb_config = nemb::ConfigLoader::load_config();
+    nemb_coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(nemb_config);
     
     // Initialize energy storage with configured path
     std::string db_path = config.get_database_path().string();
@@ -130,16 +130,14 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
         std::vector<std::string> exec_args = config.execution_args;
         exec_args.insert(exec_args.begin(), result.temp_file_path);
         
-        // Start energy monitoring using centralized PMT manager
+        // Start energy monitoring using NEMB coordinator
         std::vector<codegreen::Measurement> energy_measurements;
         auto start_time = std::chrono::system_clock::now();
         
-        // Collect initial energy reading from PMT manager
-        auto& pmt_manager = PMTManager::get_instance();
-        auto start_measurement = pmt_manager.collect_measurement();
-        if (start_measurement) {
-            start_measurement->timestamp = start_time;
-            energy_measurements.push_back(*start_measurement);
+        // Take baseline reading before execution
+        nemb::SynchronizedReading baseline_reading;
+        if (nemb_coordinator_ && nemb_coordinator_->is_ready()) {
+            baseline_reading = nemb_coordinator_->read_synchronized();
         }
         
         if (!execute_instrumented_code(result.temp_file_path, exec_args)) {
@@ -147,12 +145,15 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
             return result;
         }
         
-        // Collect final energy reading from PMT manager
-        auto end_time = std::chrono::system_clock::now();
-        auto end_measurement = pmt_manager.collect_measurement();
-        if (end_measurement) {
-            end_measurement->timestamp = end_time;
-            energy_measurements.push_back(*end_measurement);
+        // Collect final energy measurement and calculate difference
+        std::unique_ptr<Measurement> energy_measurement;
+        if (nemb_coordinator_ && nemb_coordinator_->is_ready()) {
+            auto final_reading = nemb_coordinator_->read_synchronized();
+            energy_measurement = convert_nemb_difference_to_measurement(final_reading, baseline_reading);
+        }
+        if (energy_measurement) {
+            energy_measurement->timestamp = start_time;
+            energy_measurements.push_back(*energy_measurement);
         }
         
         // Store energy measurements if we have any
@@ -303,6 +304,68 @@ bool MeasurementEngine::execute_instrumented_code(const std::string& temp_file, 
         // Fork failed
         return false;
     }
+}
+
+std::unique_ptr<Measurement> MeasurementEngine::convert_nemb_difference_to_measurement(
+    const nemb::SynchronizedReading& final_reading,
+    const nemb::SynchronizedReading& baseline_reading) {
+    
+    auto measurement = std::make_unique<Measurement>();
+    measurement->timestamp = std::chrono::system_clock::now();
+    measurement->valid = final_reading.is_valid && baseline_reading.is_valid;
+    
+    if (!measurement->valid) {
+        measurement->error_message = "Invalid NEMB readings";
+        return measurement;
+    }
+    
+    // Calculate energy difference from all providers
+    double total_energy_joules = 0.0;
+    double total_power_watts = 0.0;
+    
+    for (const auto& final_provider : final_reading.readings) {
+        // Find corresponding baseline reading
+        auto baseline_it = std::find_if(baseline_reading.readings.begin(), baseline_reading.readings.end(),
+            [&final_provider](const nemb::EnergyReading& baseline) {
+                return baseline.provider_id == final_provider.provider_id;
+            });
+        
+        if (baseline_it != baseline_reading.readings.end()) {
+            double energy_diff = final_provider.energy_joules - baseline_it->energy_joules;
+            if (energy_diff >= 0) { // Ensure monotonic energy
+                total_energy_joules += energy_diff;
+                total_power_watts += final_provider.average_power_watts;
+            }
+        }
+    }
+    
+    measurement->total_joules = total_energy_joules;
+    measurement->average_watts = total_power_watts;
+    
+    // Calculate duration
+    double duration_ns = static_cast<double>(final_reading.timestamp_ns - baseline_reading.timestamp_ns);
+    measurement->duration_seconds = duration_ns / 1e9;
+    
+    // Set component breakdown if available
+    for (const auto& final_provider : final_reading.readings) {
+        auto baseline_it = std::find_if(baseline_reading.readings.begin(), baseline_reading.readings.end(),
+            [&final_provider](const nemb::EnergyReading& baseline) {
+                return baseline.provider_id == final_provider.provider_id;
+            });
+        
+        if (baseline_it != baseline_reading.readings.end()) {
+            double component_energy = final_provider.energy_joules - baseline_it->energy_joules;
+            if (component_energy >= 0) {
+                measurement->component_joules[final_provider.provider_id] = component_energy;
+            }
+        }
+    }
+    
+    // Set measurement metadata
+    measurement->sensor_name = "NEMB";
+    measurement->measurement_type = "differential";
+    
+    return measurement;
 }
 
 } // namespace codegreen

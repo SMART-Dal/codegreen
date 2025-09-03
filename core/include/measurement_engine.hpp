@@ -12,6 +12,7 @@
 #include "adapters/language_adapter.hpp"
 #include "energy_storage.hpp"
 #include "energy_code_mapper.hpp"
+#include "nemb/core/measurement_coordinator.hpp"
 #include <iostream>
 
 namespace codegreen {
@@ -107,6 +108,15 @@ public:
         std::string create_temp_directory();
         std::string detect_language_from_file(const std::string& file_path);
         bool execute_instrumented_code(const std::string& temp_file, const std::vector<std::string>& args);
+        
+        
+        // NEMB (Native Energy Measurement Backend)
+        std::unique_ptr<nemb::MeasurementCoordinator> nemb_coordinator_;
+        
+        // NEMB conversion helpers
+        std::unique_ptr<Measurement> convert_nemb_difference_to_measurement(
+            const nemb::SynchronizedReading& final_reading,
+            const nemb::SynchronizedReading& baseline_reading);
 };
 
 } // namespace codegreen

@@ -9,8 +9,8 @@
 #include <unordered_map>
 #include <mutex>
 
-/// Forward declarations for PMT library
-namespace pmt { class PMT; class State; }
+/// Forward declarations for NEMB
+namespace codegreen::nemb { class MeasurementCoordinator; }
 
 namespace codegreen {
 
@@ -92,8 +92,8 @@ public:
     /// End measurement session and finalize energy calculations
     std::unique_ptr<EnergyMeasurementSession> end_session(const std::string& session_id);
 
-    /// Add PMT sensor for energy measurement
-    bool add_pmt_sensor(std::unique_ptr<pmt::PMT> sensor, const std::string& sensor_name);
+    /// Set NEMB measurement coordinator for energy measurement
+    void set_nemb_coordinator(std::shared_ptr<nemb::MeasurementCoordinator> coordinator);
 
     /// Get current energy measurement from all sensors
     std::unique_ptr<Measurement> get_current_energy_measurement();
@@ -111,8 +111,8 @@ private:
     // Active measurement sessions
     std::unordered_map<std::string, std::unique_ptr<EnergyMeasurementSession>> active_sessions_;
     
-    // PMT sensors for energy measurement
-    std::vector<std::unique_ptr<pmt::PMT>> pmt_sensors_;
+    // NEMB measurement coordinator for energy measurement
+    std::shared_ptr<nemb::MeasurementCoordinator> nemb_coordinator_;
     std::vector<std::string> sensor_names_;
     
     // Thread safety
@@ -141,8 +141,8 @@ private:
     /// Aggregate energy data by functions/types
     void aggregate_energy_data(EnergyMeasurementSession& session);
     
-    /// Helper to get energy measurement from PMT sensors
-    std::unique_ptr<Measurement> collect_pmt_measurements();
+    /// Helper to get energy measurement from NEMB coordinator
+    std::unique_ptr<Measurement> collect_nemb_measurements();
     
     /// Get estimated instrumentation overhead for a language
     double get_instrumentation_overhead(const std::string& language, 
