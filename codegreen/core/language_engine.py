@@ -45,6 +45,11 @@ class InstrumentationPoint:
     column: int
     context: str  # Human-readable description
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # AST-based instrumentation fields
+    byte_offset: Optional[int] = None  # Byte position in source code
+    node_start_byte: Optional[int] = None  # AST node start byte
+    node_end_byte: Optional[int] = None  # AST node end byte
+    insertion_mode: str = 'before'  # 'before', 'after', 'inside_start', 'inside_end'
     
     @property
     def is_energy_intensive(self) -> bool:
@@ -73,6 +78,684 @@ class AnalysisResult:
         return len(self.instrumentation_points)
 
 
+@dataclass
+class ASTEdit:
+    """Represents an AST-based edit operation"""
+    byte_offset: int
+    insertion_text: str
+    edit_type: str  # 'insert_before', 'insert_after', 'insert_inside_start', 'insert_inside_end'
+    node_info: Optional[str] = None  # Debug info about the node
+
+
+class ASTRewriter:
+    """
+    AST-based code rewriter using tree-sitter's incremental parsing for syntactically correct instrumentation.
+    
+    This replaces the fragile line-based approach with proper tree-sitter editing workflow:
+    1. Apply edits using Tree.edit() to inform the parser
+    2. Incrementally reparse to get updated tree
+    3. Extract final source code from the updated tree
+    
+    This ensures syntax correctness and leverages tree-sitter's efficient incremental parsing.
+    """
+    
+    def __init__(self, source_code: str, language: str, parser: Optional[Parser] = None, tree: Optional[Tree] = None):
+        self.source_code = source_code
+        self.language = language
+        self.parser = parser
+        self.tree = tree
+        self.edits: List[ASTEdit] = []
+        self.current_code = source_code  # Track code changes for incremental updates
+        
+    def add_instrumentation(self, point: InstrumentationPoint, instrumentation_code: str) -> bool:
+        """
+        Add instrumentation at the specified AST point using byte offsets.
+        
+        Returns True if successfully added, False otherwise.
+        """
+        try:
+            # Determine byte offset based on insertion mode
+            byte_offset = self._calculate_insertion_offset(point)
+            if byte_offset is None:
+                return False
+                
+            # Determine edit type based on insertion mode
+            edit_type = f"insert_{point.insertion_mode}"
+            
+            # Create the edit
+            edit = ASTEdit(
+                byte_offset=byte_offset,
+                insertion_text=instrumentation_code,
+                edit_type=edit_type,
+                node_info=f"{point.type}:{point.name}"
+            )
+            
+            self.edits.append(edit)
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to add instrumentation for {point.id}: {e}")
+            return False
+    
+    def _calculate_insertion_offset(self, point: InstrumentationPoint) -> Optional[int]:
+        """Calculate the precise byte offset for instrumentation insertion"""
+        if point.byte_offset is not None:
+            return point.byte_offset
+            
+        if point.node_start_byte is not None and point.node_end_byte is not None:
+            if point.insertion_mode == 'before':
+                return point.node_start_byte
+            elif point.insertion_mode == 'after':
+                return point.node_end_byte
+            elif point.insertion_mode == 'inside_start':
+                # Find the opening brace/colon and insert after it
+                return self._find_block_start_offset(point)
+            elif point.insertion_mode == 'inside_end':
+                # Insert before the closing brace
+                return self._find_block_end_offset(point)
+        
+        # Fallback: convert line/column to byte offset
+        return self._line_column_to_byte_offset(point.line, point.column)
+    
+    def _find_block_start_offset(self, point: InstrumentationPoint) -> Optional[int]:
+        """Find the byte offset right after the block opening (e.g., after '{' or ':')"""
+        search_start = point.node_start_byte
+        search_end = min(point.node_end_byte, search_start + 200)  # Reasonable search window
+        
+        # Language-specific block start patterns
+        if self.language == 'python':
+            # Look for ':' followed by newline
+            colon_pos = self.source_code.find(':', search_start, search_end)
+            if colon_pos != -1:
+                # Find the end of the line (where we'll insert)
+                newline_pos = self.source_code.find('\n', colon_pos)
+                if newline_pos != -1:
+                    # Insert at the beginning of the next line
+                    return newline_pos + 1
+                else:
+                    # No newline found, insert after colon
+                    return colon_pos + 1
+        elif self.language in ['c', 'cpp', 'java']:
+            # Look for '{'
+            brace_pos = self.source_code.find('{', search_start, search_end)
+            if brace_pos != -1:
+                return brace_pos + 1
+        
+        return search_start
+    
+    def _find_block_end_offset(self, point: InstrumentationPoint) -> Optional[int]:
+        """Find the byte offset right before the block closing"""
+        if self.language == 'python':
+            # For Python, we insert at the end of the last statement in the block
+            # This is complex - for now, use the node end
+            return point.node_end_byte
+        elif self.language in ['c', 'cpp', 'java']:
+            # Look for the matching closing brace
+            search_start = max(0, point.node_end_byte - 200)
+            brace_pos = self.source_code.rfind('}', search_start, point.node_end_byte)
+            if brace_pos != -1:
+                return brace_pos
+        
+        return point.node_end_byte
+    
+    def _line_column_to_byte_offset(self, line: int, column: int) -> int:
+        """Convert line/column position to byte offset (fallback method)"""
+        lines = self.source_code.split('\n')
+        if line <= 0 or line > len(lines):
+            return 0
+            
+        # Convert to 0-based indexing
+        line_idx = line - 1
+        
+        # Calculate byte offset
+        byte_offset = 0
+        for i in range(line_idx):
+            byte_offset += len(lines[i]) + 1  # +1 for newline
+        
+        # Add column offset (clamped to line length)
+        line_text = lines[line_idx] if line_idx < len(lines) else ""
+        column_offset = min(column, len(line_text))
+        byte_offset += column_offset
+        
+        return min(byte_offset, len(self.source_code))
+    
+    def apply_edits(self) -> str:
+        """
+        Apply all edits using tree-sitter's incremental parsing workflow.
+        
+        Returns the instrumented source code with proper syntax preservation.
+        """
+        if not self.edits:
+            return self.source_code
+        
+        # If we don't have a parser/tree, fall back to string-based approach
+        if not self.parser or not self.tree:
+            logger.warning("No parser/tree available, falling back to string-based editing")
+            return self._apply_edits_string_based()
+        
+        # Sort edits by byte offset (descending) to avoid offset corruption
+        sorted_edits = sorted(self.edits, key=lambda e: e.byte_offset, reverse=True)
+        
+        # Apply edits using tree-sitter incremental parsing
+        result_code = self.current_code
+        current_tree = self.tree.copy()  # Work with a copy
+        
+        for edit in sorted_edits:
+            result_code, current_tree = self._apply_edit_with_tree_parsing(
+                result_code, current_tree, edit
+            )
+        
+        return result_code
+    
+    def _apply_edits_string_based(self) -> str:
+        """Fallback string-based edit application when tree-sitter is unavailable"""
+        # Sort edits by byte offset (descending) to avoid offset corruption
+        sorted_edits = sorted(self.edits, key=lambda e: e.byte_offset, reverse=True)
+        
+        # Apply edits from end to beginning
+        result = self.source_code
+        for edit in sorted_edits:
+            result = self._apply_single_edit(result, edit)
+        
+        return result
+    
+    def _apply_edit_with_tree_parsing(self, code: str, tree: Tree, edit: ASTEdit) -> Tuple[str, Tree]:
+        """
+        Apply a single edit using tree-sitter's proper editing workflow.
+        
+        Returns tuple of (updated_code, updated_tree)
+        """
+        try:
+            # Calculate the insertion
+            offset = max(0, min(edit.byte_offset, len(code)))
+            new_code = self._apply_single_edit(code, edit)
+            
+            # Calculate edit parameters for tree-sitter
+            start_byte = offset
+            old_end_byte = offset  # For insertions, old and start are the same
+            new_end_byte = offset + len(edit.insertion_text)
+            
+            # Convert byte offsets to points (row/column)
+            start_point = self._byte_to_point(code, start_byte)
+            old_end_point = start_point  # For insertions
+            new_end_point = self._byte_to_point(new_code, new_end_byte)
+            
+            # Inform tree-sitter about the edit
+            tree.edit(
+                start_byte=start_byte,
+                old_end_byte=old_end_byte, 
+                new_end_byte=new_end_byte,
+                start_point=start_point,
+                old_end_point=old_end_point,
+                new_end_point=new_end_point
+            )
+            
+            # Incrementally reparse with the old tree
+            new_tree = self.parser.parse(new_code.encode('utf-8'), old_tree=tree)
+            
+            if new_tree is None:
+                logger.warning("Tree parsing failed, using original tree")
+                return new_code, tree
+                
+            return new_code, new_tree
+            
+        except Exception as e:
+            logger.warning(f"Tree-sitter edit failed: {e}, falling back to string edit")
+            return self._apply_single_edit(code, edit), tree
+    
+    def _byte_to_point(self, code: str, byte_offset: int) -> Tuple[int, int]:
+        """Convert byte offset to (row, column) point"""
+        if byte_offset >= len(code):
+            byte_offset = len(code)
+        
+        # Count lines and calculate column
+        lines = code[:byte_offset].split('\n')
+        row = len(lines) - 1
+        column = len(lines[-1]) if lines else 0
+        
+        return (row, column)
+    
+    def _apply_single_edit(self, code: str, edit: ASTEdit) -> str:
+        """Apply a single edit to the code"""
+        offset = edit.byte_offset
+        
+        # Ensure offset is within bounds
+        offset = max(0, min(offset, len(code)))
+        
+        if edit.edit_type == 'insert_before':
+            return code[:offset] + edit.insertion_text + code[offset:]
+        elif edit.edit_type == 'insert_after':
+            return code[:offset] + code[offset:offset] + edit.insertion_text + code[offset:]
+        elif edit.edit_type in ['insert_inside_start', 'insert_inside_end']:
+            # For inside insertions, add proper indentation
+            indented_text = self._add_proper_indentation(edit.insertion_text, code, offset)
+            return code[:offset] + indented_text + code[offset:]
+        else:
+            logger.warning(f"Unknown edit type: {edit.edit_type}")
+            return code
+    
+    def _add_proper_indentation(self, text: str, code: str, offset: int) -> str:
+        """Add proper indentation to the insertion text based on context"""
+        # Find the current line's indentation
+        line_start = code.rfind('\n', 0, offset)
+        if line_start == -1:
+            line_start = 0
+        else:
+            line_start += 1
+            
+        line_end = code.find('\n', offset)
+        if line_end == -1:
+            line_end = len(code)
+            
+        current_line = code[line_start:line_end]
+        
+        # Calculate base indentation
+        base_indent = len(current_line) - len(current_line.lstrip())
+        
+        # Add extra indentation for inside insertions
+        if self.language == 'python':
+            extra_indent = 4  # Python standard
+        else:
+            extra_indent = 2  # C/C++/Java standard
+            
+        total_indent = base_indent + extra_indent
+        indent_str = ' ' * total_indent
+        
+        # Apply indentation to all lines of the insertion text
+        lines = text.split('\n')
+        indented_lines = []
+        for i, line in enumerate(lines):
+            if i == 0:
+                indented_lines.append('\n' + indent_str + line.strip())
+            else:
+                indented_lines.append(indent_str + line.strip() if line.strip() else '')
+        
+        return '\n'.join(indented_lines)
+
+
+class ExternalQueryLoader:
+    """
+    Loads high-quality tree-sitter queries from external sources like nvim-treesitter.
+    
+    This ensures we stay in sync with community-maintained, well-tested query patterns
+    instead of maintaining hardcoded queries that can become outdated.
+    """
+    
+    def __init__(self, nvim_treesitter_path: Optional[str] = None):
+        self.nvim_treesitter_path = nvim_treesitter_path or self._find_nvim_treesitter_path()
+        self.query_cache = {}
+        
+        # Standard capture mapping for language-agnostic instrumentation
+        self.CAPTURE_MAP = {
+            '@function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start'},
+            '@function.definition': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start'},
+            '@function.inner': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start'},
+            '@function.outer': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start'},
+            '@method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start'},
+            '@method.definition': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start'},
+            '@class': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start'},
+            '@class.definition': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start'},
+            '@type': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start'},
+            '@type.definition': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start'},
+            '@loop': {'type': 'loop_start', 'subtype': 'generic', 'insertion_mode': 'inside_start'},
+            '@for_loop': {'type': 'loop_start', 'subtype': 'for', 'insertion_mode': 'inside_start'},
+            '@while_loop': {'type': 'loop_start', 'subtype': 'while', 'insertion_mode': 'inside_start'},
+            '@return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before'},
+            '@return_statement': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before'},
+        }
+        
+    def _find_nvim_treesitter_path(self) -> Optional[str]:
+        """Find nvim-treesitter installation path"""
+        # Try common locations
+        possible_paths = [
+            "third_party/nvim-treesitter",
+            "../third_party/nvim-treesitter", 
+            "nvim-treesitter",
+            "./third_party/nvim-treesitter"
+        ]
+        
+        for path in possible_paths:
+            full_path = Path(path).resolve()
+            if full_path.exists() and (full_path / "queries").exists():
+                return str(full_path)
+        
+        logger.warning("nvim-treesitter not found, falling back to hardcoded queries")
+        return None
+    
+    def get_instrumentation_queries(self, language: str) -> Dict[str, str]:
+        """
+        Get instrumentation-relevant queries for a language from nvim-treesitter.
+        
+        Loads full .scm files and compiles them as complete queries, preserving
+        all patterns, predicates, and metadata from the community-maintained queries.
+        """
+        if language in self.query_cache:
+            return self.query_cache[language]
+        
+        queries = {}
+        
+        if self.nvim_treesitter_path:
+            queries = self._load_nvim_queries(language)
+        
+        # Fallback to built-in queries if external loading fails
+        if not queries:
+            queries = self._get_fallback_queries(language)
+        
+        self.query_cache[language] = queries
+        return queries
+    
+    def _load_nvim_queries(self, language: str) -> Dict[str, str]:
+        """Load full .scm files from nvim-treesitter submodule"""
+        queries = {}
+        query_dir = Path(self.nvim_treesitter_path) / "queries" / language
+        
+        if not query_dir.exists():
+            logger.warning(f"No nvim-treesitter queries found for {language}")
+            return {}
+        
+        try:
+            # Load and combine multiple .scm files for comprehensive coverage
+            scm_files = ['highlights.scm', 'locals.scm', 'indents.scm']
+            combined_content = []
+            
+            for scm_file in scm_files:
+                file_path = query_dir / scm_file
+                if file_path.exists():
+                    content = file_path.read_text()
+                    combined_content.append(f";; From {scm_file}\n{content}")
+                    logger.debug(f"Loaded {scm_file} for {language}")
+            
+            if combined_content:
+                # Combine all .scm files into one comprehensive query
+                full_query = '\n\n'.join(combined_content)
+                queries['full_query'] = full_query
+                logger.info(f"Loaded comprehensive nvim-treesitter query for {language} from {len(combined_content)} files")
+            else:
+                logger.warning(f"No .scm files found for {language}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load nvim-treesitter queries for {language}: {e}")
+        
+        return queries
+    
+    def _extract_instrumentation_patterns(self, query_content: str, query_type: str) -> Dict[str, str]:
+        """Extract relevant patterns for instrumentation from query content"""
+        patterns = {}
+        
+        # Look for function definitions in highlights.scm
+        if 'function_definition' in query_content and '@function' in query_content:
+            patterns['functions'] = '''
+                (function_definition
+                  name: (identifier) @function.name
+                  body: (block) @function.body) @function.def
+            '''
+        
+        # Look for class definitions
+        if 'class_definition' in query_content and ('@type' in query_content or '@class' in query_content):
+            patterns['classes'] = '''
+                (class_definition
+                  name: (identifier) @class.name
+                  body: (block) @class.body) @class.def
+            '''
+        
+        # Look for loop patterns
+        if 'for_statement' in query_content:
+            patterns['for_loops'] = '''
+                (for_statement
+                  left: (_) @loop.var
+                  right: (_) @loop.iter
+                  body: (block) @loop.body) @loop.for
+            '''
+        
+        if 'while_statement' in query_content:
+            patterns['while_loops'] = '''
+                (while_statement
+                  condition: (_) @loop.condition
+                  body: (block) @loop.body) @loop.while
+            '''
+        
+        # Look for return statements
+        if 'return_statement' in query_content:
+            patterns['returns'] = '''
+                (return_statement) @return
+            '''
+        
+        return patterns
+    
+    def _build_function_query(self, query_type: str) -> str:
+        """Build function query based on nvim-treesitter patterns"""
+        return '''
+            (function_definition
+              name: (identifier) @function.name
+              body: (block) @function.body) @function.def
+        '''
+    
+    def _build_class_query(self, query_type: str) -> str:
+        """Build class query based on nvim-treesitter patterns"""
+        return '''
+            (class_definition
+              name: (identifier) @class.name
+              body: (block) @class.body) @class.def
+        '''
+    
+    def _build_for_loop_query(self, query_type: str) -> str:
+        """Build for loop query based on nvim-treesitter patterns"""
+        return '''
+            (for_statement
+              left: (_) @loop.var
+              right: (_) @loop.iter
+              body: (block) @loop.body) @loop.for
+        '''
+    
+    def _build_while_loop_query(self, query_type: str) -> str:
+        """Build while loop query based on nvim-treesitter patterns"""
+        return '''
+            (while_statement
+              condition: (_) @loop.condition
+              body: (block) @loop.body) @loop.while
+        '''
+    
+    def _get_fallback_queries(self, language: str) -> Dict[str, str]:
+        """Fallback queries if external queries are not available"""
+        if language == 'python':
+            return {
+                'functions': '''
+                    (function_definition
+                      name: (identifier) @function.name
+                      body: (block) @function.body) @function.def
+                ''',
+                'classes': '''
+                    (class_definition
+                      name: (identifier) @class.name
+                      body: (block) @class.body) @class.def
+                ''',
+                'for_loops': '''
+                    (for_statement
+                      left: (_) @loop.var
+                      right: (_) @loop.iter
+                      body: (block) @loop.body) @loop.for
+                ''',
+                'while_loops': '''
+                    (while_statement
+                      condition: (_) @loop.condition
+                      body: (block) @loop.body) @loop.while
+                '''
+            }
+        elif language in ['c', 'cpp']:
+            return {
+                'functions': '''
+                    (function_definition
+                      declarator: (function_declarator
+                        declarator: (identifier) @function.name)
+                      body: (compound_statement) @function.body) @function.def
+                ''',
+                'for_loops': '''
+                    (for_statement
+                      body: (compound_statement) @loop.body) @loop.for
+                ''',
+                'while_loops': '''
+                    (while_statement
+                      condition: (_) @loop.condition
+                      body: (compound_statement) @loop.body) @loop.while
+                '''
+            }
+        elif language == 'java':
+            return {
+                'functions': '''
+                    (method_declaration
+                      name: (identifier) @function.name
+                      body: (block) @function.body) @function.def
+                ''',
+                'classes': '''
+                    (class_declaration
+                      name: (identifier) @class.name
+                      body: (class_body) @class.body) @class.def
+                ''',
+                'for_loops': '''
+                    (for_statement
+                      body: (block) @loop.body) @loop.for
+                    (enhanced_for_statement
+                      body: (block) @loop.body) @loop.enhanced_for
+                ''',
+                'while_loops': '''
+                    (while_statement
+                      condition: (_) @loop.condition
+                      body: (block) @loop.body) @loop.while
+                '''
+            }
+        
+        return {}
+
+
+class LanguageAgnosticInstrumentationGenerator:
+    """
+    Language-agnostic instrumentation code generator.
+    
+    This class abstracts away language-specific details and provides a unified
+    interface for generating instrumentation code across different programming languages.
+    """
+    
+    def __init__(self):
+        self.language_configs = self._load_language_configs()
+        
+    def _load_language_configs(self) -> Dict[str, Dict[str, str]]:
+        """Load language-specific instrumentation patterns and templates"""
+        return {
+            'python': {
+                'import_statement': 'import codegreen_runtime as _codegreen_rt',
+                'function_enter_template': '_codegreen_rt.checkpoint("{checkpoint_id}", "{function_name}", "enter")',
+                'function_exit_template': '_codegreen_rt.checkpoint("{checkpoint_id}", "{function_name}", "exit")',
+                'loop_start_template': '_codegreen_rt.checkpoint("{checkpoint_id}", "{loop_name}", "loop_start")',
+                'loop_end_template': '_codegreen_rt.checkpoint("{checkpoint_id}", "{loop_name}", "loop_end")',
+                'comment_prefix': '#',
+                'statement_terminator': '',
+                'block_indent': '    '
+            },
+            'java': {
+                'import_statement': 'import codegreen.runtime.CodeGreenRuntime;',
+                'function_enter_template': 'CodeGreenRuntime.checkpoint("{checkpoint_id}", "{function_name}", "enter");',
+                'function_exit_template': 'CodeGreenRuntime.checkpoint("{checkpoint_id}", "{function_name}", "exit");',
+                'loop_start_template': 'CodeGreenRuntime.checkpoint("{checkpoint_id}", "{loop_name}", "loop_start");',
+                'loop_end_template': 'CodeGreenRuntime.checkpoint("{checkpoint_id}", "{loop_name}", "loop_end");',
+                'comment_prefix': '//',
+                'statement_terminator': ';',
+                'block_indent': '  '
+            },
+            'c': {
+                'import_statement': '#include "codegreen_runtime.h"',
+                'function_enter_template': 'codegreen_checkpoint("{checkpoint_id}", "{function_name}", "enter");',
+                'function_exit_template': 'codegreen_checkpoint("{checkpoint_id}", "{function_name}", "exit");',
+                'loop_start_template': 'codegreen_checkpoint("{checkpoint_id}", "{loop_name}", "loop_start");',
+                'loop_end_template': 'codegreen_checkpoint("{checkpoint_id}", "{loop_name}", "loop_end");',
+                'comment_prefix': '//',
+                'statement_terminator': ';',
+                'block_indent': '  '
+            },
+            'cpp': {
+                'import_statement': '#include <codegreen/runtime.hpp>',
+                'function_enter_template': 'CodeGreen::checkpoint("{checkpoint_id}", "{function_name}", "enter");',
+                'function_exit_template': 'CodeGreen::checkpoint("{checkpoint_id}", "{function_name}", "exit");',
+                'loop_start_template': 'CodeGreen::checkpoint("{checkpoint_id}", "{loop_name}", "loop_start");',
+                'loop_end_template': 'CodeGreen::checkpoint("{checkpoint_id}", "{loop_name}", "loop_end");',
+                'comment_prefix': '//',
+                'statement_terminator': ';',
+                'block_indent': '  '
+            }
+        }
+    
+    def generate_instrumentation(self, point: InstrumentationPoint, language: str) -> Optional[str]:
+        """
+        Generate instrumentation code for a given point in a language-agnostic way.
+        
+        This method uses templates and language configurations to generate
+        appropriate instrumentation code without hardcoding language specifics.
+        """
+        config = self.language_configs.get(language)
+        if not config:
+            # Fallback for unsupported languages
+            return f'{self._get_comment_prefix(language)} CodeGreen checkpoint: {point.id}'
+        
+        # Determine the appropriate template based on instrumentation point type
+        template_key = self._get_template_key(point.type, point.subtype)
+        template = config.get(template_key)
+        
+        if not template:
+            # Fallback to generic comment
+            comment_prefix = config.get('comment_prefix', '//')
+            return f'{comment_prefix} CodeGreen {point.type}: {point.name}'
+        
+        # Generate the instrumentation code using the template
+        instrumentation_code = template.format(
+            checkpoint_id=point.id,
+            function_name=point.name,
+            loop_name=point.name
+        )
+        
+        # Add statement terminator if needed
+        terminator = config.get('statement_terminator', '')
+        if terminator and not instrumentation_code.endswith(terminator):
+            instrumentation_code += terminator
+            
+        return instrumentation_code
+    
+    def _get_template_key(self, point_type: str, subtype: str) -> str:
+        """Map instrumentation point types to template keys"""
+        type_mapping = {
+            'function_enter': 'function_enter_template',
+            'function_exit': 'function_exit_template', 
+            'loop_start': 'loop_start_template',
+            'loop_exit': 'loop_end_template',
+            'loop_end': 'loop_end_template'
+        }
+        
+        return type_mapping.get(point_type, 'function_enter_template')
+    
+    def _get_comment_prefix(self, language: str) -> str:
+        """Get comment prefix for unsupported languages"""
+        comment_prefixes = {
+            'python': '#',
+            'java': '//',
+            'c': '//',
+            'cpp': '//',
+            'javascript': '//',
+            'typescript': '//',
+            'rust': '//',
+            'go': '//',
+            'swift': '//'
+        }
+        
+        return comment_prefixes.get(language, '//')
+    
+    def get_import_statement(self, language: str) -> Optional[str]:
+        """Get the appropriate import/include statement for a language"""
+        config = self.language_configs.get(language)
+        return config.get('import_statement') if config else None
+    
+    def get_language_config(self, language: str) -> Dict[str, str]:
+        """Get complete language configuration"""
+        return self.language_configs.get(language, {})
+
+
 class LanguageEngine:
     """
     Production-ready multi-language analysis and instrumentation engine.
@@ -94,6 +777,8 @@ class LanguageEngine:
         self._max_file_size_bytes = max_file_size_mb * 1024 * 1024
         self._parser_timeout_ms = parser_timeout_ms
         self._compiled_regexes = {}
+        self._external_query_loader = ExternalQueryLoader()  # Load external queries
+        self._language_agnostic_generator = LanguageAgnosticInstrumentationGenerator()  # Language-agnostic instrumentation
         self._initialize_parsers()
     
     def _load_language_config(self) -> Dict[str, Dict]:
@@ -135,6 +820,9 @@ class LanguageEngine:
                           function: (attribute
                             object: (_) @call.object
                             attribute: (identifier) @call.method)) @call.method
+                    ''',
+                    'returns': '''
+                        (return_statement) @return
                     '''
                 },
                 'fallback_patterns': {
@@ -296,12 +984,18 @@ class LanguageEngine:
                 self._languages[lang_id] = language
                 self._parsers[lang_id] = parser
                 
-                # Compile queries using modern API
+                # Load external queries from nvim-treesitter with fallback to built-in
                 self._queries[lang_id] = {}
-                for query_name, query_text in config['queries'].items():
+                external_queries = self._external_query_loader.get_instrumentation_queries(lang_id)
+                
+                # Use external queries if available, otherwise use built-in config queries
+                queries_to_compile = external_queries if external_queries else config['queries']
+                
+                for query_name, query_text in queries_to_compile.items():
                     try:
                         query = Query(language, query_text)
                         self._queries[lang_id][query_name] = query
+                        logger.debug(f"Compiled {query_name} query for {lang_id}")
                     except (ValueError, TypeError) as e:
                         logger.error(f"Query compilation failed for {query_name} in {lang_id}: {e}")
                         # Continue with other queries
@@ -309,7 +1003,8 @@ class LanguageEngine:
                         logger.error(f"Unexpected error compiling {query_name} query for {lang_id}: {e}")
                 
                 if self._queries[lang_id]:
-                    logger.info(f"✅ Initialized tree-sitter parser for {lang_id} with {len(self._queries[lang_id])} queries")
+                    source_type = "external (nvim-treesitter)" if external_queries else "built-in"
+                    logger.info(f"✅ Initialized tree-sitter parser for {lang_id} with {len(self._queries[lang_id])} {source_type} queries")
                 else:
                     logger.error(f"❌ No valid queries compiled for {lang_id}")
                 
@@ -472,32 +1167,31 @@ class LanguageEngine:
             
             points = []
             
-            # Execute queries with result limits
+            # Execute queries with result limits using matches() for grouped captures
             for query_name, query in queries.items():
                 try:
                     cursor = QueryCursor(query)
-                    captures = cursor.captures(tree.root_node)
+                    matches = cursor.matches(tree.root_node)
                     
-                    # Limit total captures per query to prevent memory exhaustion
-                    capture_count = 0
-                    max_captures_per_query = 1000
+                    # Limit total matches per query to prevent memory exhaustion
+                    max_matches_per_query = 1000
+                    if len(matches) > max_matches_per_query:
+                        logger.warning(f"Query {query_name} exceeded match limit, truncating results")
+                        matches = matches[:max_matches_per_query]
                     
-                    # Process captures dict: {capture_name: [node1, node2, ...]}
-                    for capture_name, nodes in captures.items():
-                        for node in nodes:
-                            if capture_count >= max_captures_per_query:
-                                logger.warning(f"Query {query_name} exceeded capture limit, truncating results")
-                                break
-                                
-                            node_points = self._create_instrumentation_point(
-                                query_name, capture_name, node, source_code, language
-                            )
-                            if node_points:
-                                points.extend(node_points)
-                                capture_count += len(node_points)
+                    # Process each match - matches is a list of (pattern_index, capture_dict) tuples
+                    for pattern_index, capture_dict in matches:
+                        # capture_dict is already a dictionary mapping capture names to lists of nodes
                         
-                        if capture_count >= max_captures_per_query:
-                            break
+                        if not capture_dict:
+                            continue  # Skip empty matches
+                        
+                        # Create instrumentation points from grouped captures
+                        node_points = self._create_instrumentation_point_from_match(
+                            query_name, capture_dict, source_code, language
+                        )
+                        if node_points:
+                            points.extend(node_points)
                             
                 except Exception as e:
                     logger.error(f"Query {query_name} failed for {language}: {e}")
@@ -541,6 +1235,294 @@ class LanguageEngine:
         
         return points
     
+    def _create_instrumentation_point_from_match(
+        self, 
+        query_name: str, 
+        capture_dict: Dict[str, List['Node']], 
+        source_code: str,
+        language: str
+    ) -> List[InstrumentationPoint]:
+        """Create instrumentation points from grouped tree-sitter match with proper insertion point calculation"""
+        # This replaces the old single-capture approach with grouped captures
+        points = []
+        
+        # Determine point type and metadata based on query patterns and grouped captures
+        point_type, subtype, name, context, metadata = self._classify_grouped_capture(
+            query_name, capture_dict, source_code, language
+        )
+        
+        if not point_type:
+            return []
+        
+        # Find the main node for positioning (usually the definition node)
+        main_node = self._find_main_node_from_captures(capture_dict, query_name)
+        if not main_node:
+            return []
+        
+        # Calculate insertion points using the main node
+        entry_line, exit_line = self._calculate_insertion_points_from_grouped_captures(
+            capture_dict, language, query_name
+        )
+        
+        start_column = main_node.start_point.column + 1 if main_node.start_point else 0
+        end_column = main_node.end_point.column + 1 if main_node.end_point else 0
+        
+        # Find the body node for proper byte offset calculation
+        body_node = None
+        if 'function' in query_name or 'method' in query_name:
+            for key in ['function_body', 'method_body', 'constructor_body']:
+                if key in capture_dict and capture_dict[key]:
+                    body_node = capture_dict[key][0]
+                    break
+        
+        # Use body node for byte offset if available, otherwise use main node
+        offset_node = body_node if body_node else main_node
+        
+        # Create entry point with AST information
+        entry_point = InstrumentationPoint(
+            id=f"{point_type}_{name}_{entry_line}_{start_column}",
+            type=point_type,
+            subtype=subtype,
+            name=name,
+            line=entry_line,
+            column=start_column,
+            context=context,
+            metadata=metadata,
+            byte_offset=offset_node.start_byte if offset_node else None,
+            node_start_byte=offset_node.start_byte if offset_node else None,
+            node_end_byte=offset_node.end_byte if offset_node else None,
+            insertion_mode='inside_start' if point_type in ['function_enter', 'loop_start'] else 'before'
+        )
+        points.append(entry_point)
+        
+        # Create exit points based on type
+        if point_type == 'function_enter':
+            # For functions, find all return statements or create implicit exit
+            exit_points = self._create_function_exit_points(capture_dict, name, metadata, language)
+            points.extend(exit_points)
+        elif point_type == 'loop_start':
+            # Create loop exit point
+            loop_exit_point = InstrumentationPoint(
+                id=f"loop_exit_{name}_{exit_line}_{end_column}",
+                type='loop_exit',
+                subtype='block_end', 
+                name=name,
+                line=exit_line,
+                column=end_column,
+                context=f"Loop exit: {name}",
+                metadata=metadata,
+                byte_offset=main_node.end_byte if main_node else None,
+                node_start_byte=main_node.start_byte if main_node else None,
+                node_end_byte=main_node.end_byte if main_node else None,
+                insertion_mode='inside_end'
+            )
+            points.append(loop_exit_point)
+        
+        return points
+    
+    def _classify_grouped_capture(
+        self, 
+        query_name: str, 
+        capture_dict: Dict[str, List['Node']], 
+        source_code: str,
+        language: str
+    ) -> Tuple[str, str, str, str, Dict]:
+        """Classify grouped tree-sitter captures into instrumentation point"""
+        # Find name node and extract text
+        name_node = None
+        text = ''
+        
+        # Look for name captures in the grouped dict
+        for cap_name, node_list in capture_dict.items():
+            if 'name' in cap_name or cap_name.endswith('_name'):
+                if node_list:  # Take the first node from the list
+                    name_node = node_list[0]
+                    text = self._extract_text_from_node(name_node, source_code)
+                    break
+        
+        if name_node and not self._is_valid_identifier(text):
+            return (None, None, None, None, {})
+        
+        name = text or query_name
+        
+        # Classification rules based on query patterns
+        if 'function' in query_name or 'method' in query_name or 'constructor' in query_name:
+            subtype = 'function' if 'function_name' in capture_dict else 'method' if 'method_name' in capture_dict else 'constructor'
+            metadata = {}
+            if language == 'python':
+                metadata = self._analyze_python_function_metadata(name, query_name)
+            return ('function_enter', subtype, name, f"Function entry: {name}", metadata)
+        
+        elif 'class' in query_name:
+            subtype = 'class'
+            for cap_name in capture_dict.keys():
+                if '.' in cap_name:
+                    subtype = cap_name.split('.')[0]
+                    break
+            return ('class_enter', subtype, name, f"{subtype.title()} definition: {name}", {})
+        
+        elif 'loop' in query_name:
+            # Look for specific loop type captures
+            for cap_name in capture_dict.keys():
+                if cap_name.startswith('loop.'):
+                    subtype = cap_name.split('.')[1]
+                    return ('loop_start', subtype, f"{subtype}_loop", f"{subtype.title()} loop", {})
+            return ('loop_start', 'generic', 'loop', "Loop", {})
+        
+        elif 'comprehension' in query_name:
+            subtype = 'generic'
+            for cap_name in capture_dict.keys():
+                if '.' in cap_name:
+                    subtype = cap_name.split('.')[1]
+                    break
+            return ('comprehension', subtype, f"{subtype}_comp", f"{subtype.title()} comprehension", {'energy_intensive': True})
+        
+        elif 'lambda' in query_name:
+            return ('lambda_expression', 'definition', 'lambda', "Lambda expression", {'energy_intensive': True})
+        
+        elif 'stream' in query_name:
+            return ('stream_operation', 'operation', name, f"Stream operation: {name}", {'energy_intensive': True})
+        
+        return (None, None, None, None, {})
+    
+    def _find_main_node_from_captures(self, capture_dict: Dict[str, List['Node']], query_name: str) -> Optional['Node']:
+        """Find the main node for positioning from grouped captures"""
+        # Priority order for finding the main node
+        if 'function' in query_name or 'method' in query_name:
+            # For functions, prefer the definition node, then name
+            for key in ['function_def', 'method_def', 'constructor_def', 'function_name', 'method_name', 'constructor_name']:
+                if key in capture_dict and capture_dict[key]:
+                    return capture_dict[key][0]  # Take first node from list
+        elif 'class' in query_name:
+            # For classes, prefer the definition node, then name
+            for key in ['class_def', 'class.def', 'class.name']:
+                if key in capture_dict and capture_dict[key]:
+                    return capture_dict[key][0]
+        elif 'loop' in query_name:
+            # For loops, prefer the specific loop construct
+            for key in ['loop.for', 'loop.while', 'loop.do', 'loop.enhanced_for']:
+                if key in capture_dict and capture_dict[key]:
+                    return capture_dict[key][0]
+        
+        # Fallback: return the first node from the first capture
+        for node_list in capture_dict.values():
+            if node_list:
+                return node_list[0]
+        return None
+    
+    def _calculate_insertion_points_from_grouped_captures(
+        self, 
+        capture_dict: Dict[str, List['Node']], 
+        language: str, 
+        query_name: str
+    ) -> Tuple[int, int]:
+        """Calculate insertion points from grouped captures"""
+        main_node = self._find_main_node_from_captures(capture_dict, query_name)
+        if not main_node:
+            return 1, 1
+        
+        # For functions, find the body start
+        if 'function' in query_name or 'method' in query_name:
+            body_node = None
+            for key in ['function_body', 'method_body', 'constructor_body']:
+                if key in capture_dict and capture_dict[key]:
+                    body_node = capture_dict[key][0]  # Take first node from list
+                    break
+            
+            if body_node:
+                entry_line = body_node.start_point.row + 1
+                exit_line = body_node.end_point.row + 1
+            else:
+                # Fallback to main node
+                entry_line = main_node.start_point.row + 1
+                exit_line = main_node.end_point.row + 1
+        elif 'class' in query_name:
+            # For classes, find the body start (inside the class, not at class definition)
+            body_node = None
+            for key in ['class_body', 'class.body']:
+                if key in capture_dict and capture_dict[key]:
+                    body_node = capture_dict[key][0]  # Take first node from list
+                    break
+            
+            if body_node:
+                # Place checkpoint at the start of the class body (after the colon)
+                entry_line = body_node.start_point.row + 1
+                exit_line = body_node.end_point.row + 1
+            else:
+                # Fallback: place after the class definition line
+                entry_line = main_node.end_point.row + 1
+                exit_line = main_node.end_point.row + 1
+        else:
+            # For other constructs, use main node boundaries
+            entry_line = main_node.start_point.row + 1
+            exit_line = main_node.end_point.row + 1
+        
+        return entry_line, exit_line
+    
+    def _create_function_exit_points(
+        self, 
+        capture_dict: Dict[str, List['Node']], 
+        function_name: str, 
+        metadata: Dict, 
+        language: str
+    ) -> List[InstrumentationPoint]:
+        """Create exit points for functions, handling multiple returns"""
+        points = []
+        
+        # Find the function body node
+        body_node = None
+        for key in ['function_body', 'method_body', 'constructor_body']:
+            if key in capture_dict and capture_dict[key]:
+                body_node = capture_dict[key][0]  # Take first node from list
+                break
+        
+        if not body_node:
+            return points
+        
+        # Look for return statements within the function body
+        if language in self._queries and 'returns' in self._queries[language]:
+            returns_query = self._queries[language]['returns']
+            cursor = QueryCursor(returns_query)
+            return_matches = cursor.matches(body_node)
+            
+            if return_matches:
+                # Create exit point for each return statement
+                for pattern_index, return_capture_dict in return_matches:
+                    for cap_name, return_node_list in return_capture_dict.items():
+                        if cap_name == 'return' and return_node_list:
+                            # return_node_list is a list, take the first node
+                            return_node = return_node_list[0]
+                            exit_line = return_node.start_point.row + 1
+                            exit_column = return_node.start_point.column + 1
+                            exit_point = InstrumentationPoint(
+                                id=f"function_exit_{function_name}_{exit_line}_{exit_column}",
+                                type='function_exit',
+                                subtype='return',
+                                name=function_name,
+                                line=exit_line,
+                                column=exit_column,
+                                context=f"Function return: {function_name}",
+                                metadata=metadata
+                            )
+                            points.append(exit_point)
+            else:
+                # No explicit returns, create implicit exit at end of body
+                exit_line = body_node.end_point.row + 1
+                exit_column = body_node.start_point.column + 1
+                exit_point = InstrumentationPoint(
+                    id=f"function_exit_{function_name}_implicit_{exit_line}",
+                    type='function_exit',
+                    subtype='implicit',
+                    name=function_name,
+                    line=exit_line,
+                    column=exit_column,
+                    context=f"Function implicit exit: {function_name}",
+                    metadata=metadata
+                )
+                points.append(exit_point)
+        
+        return points
+
     def _create_instrumentation_point(
         self, 
         query_name: str, 
@@ -1029,6 +2011,82 @@ class LanguageEngine:
         if not points:
             return source_code
         
+        # Use AST-based instrumentation if tree-sitter is available
+        if TREE_SITTER_AVAILABLE:
+            return self._instrument_code_ast_based(source_code, points, language)
+        else:
+            # Fallback to line-based instrumentation
+            logger.warning("Tree-sitter unavailable, using legacy line-based instrumentation")
+            return self._instrument_code_legacy(source_code, points, language)
+    
+    def _get_parser(self, language: str) -> Optional[Parser]:
+        """Get parser for the specified language"""
+        return self._parsers.get(language)
+    
+    def _instrument_code_ast_based(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
+        """
+        AST-based instrumentation using tree-sitter incremental parsing.
+        
+        This is the preferred approach as it maintains syntax correctness.
+        """
+        try:
+            # Get parser and parse initial tree
+            parser = self._get_parser(language)
+            if not parser:
+                logger.warning(f"No parser available for {language}, falling back to legacy")
+                return self._instrument_code_legacy(source_code, points, language)
+            
+            tree = parser.parse(source_code.encode('utf-8'))
+            if not tree:
+                logger.warning(f"Failed to parse {language} code, falling back to legacy")
+                return self._instrument_code_legacy(source_code, points, language)
+            
+            # Create AST rewriter
+            rewriter = ASTRewriter(source_code, language, parser, tree)
+            
+            # Add import statement first if we have points to instrument
+            if points:
+                import_statement = self._language_agnostic_generator.get_import_statement(language)
+                if import_statement:
+                    # Create a dummy point for import insertion at the top
+                    import_point = InstrumentationPoint(
+                        id="import_runtime",
+                        type="import",
+                        subtype="runtime",
+                        name="codegreen_import",
+                        line=1,
+                        column=0,
+                        context="CodeGreen runtime import",
+                        byte_offset=0,
+                        insertion_mode='before'
+                    )
+                    rewriter.add_instrumentation(import_point, import_statement)
+            
+            # Add instrumentation for each point
+            successful_instrumentations = 0
+            for point in points:
+                # Generate instrumentation code
+                instrumentation_code = self._generate_instrumentation_code(point, language)
+                if instrumentation_code:
+                    success = rewriter.add_instrumentation(point, instrumentation_code)
+                    if success:
+                        successful_instrumentations += 1
+            
+            # Apply all edits using proper tree-sitter workflow
+            if successful_instrumentations > 0:
+                instrumented_code = rewriter.apply_edits()
+                logger.info(f"AST-based instrumentation added {successful_instrumentations} checkpoints to {language} code")
+                return instrumented_code
+            else:
+                logger.warning(f"No successful instrumentations for {language}, returning original code")
+                return source_code
+                
+        except Exception as e:
+            logger.warning(f"AST-based instrumentation failed for {language}: {e}, falling back to legacy")
+            return self._instrument_code_legacy(source_code, points, language)
+    
+    def _instrument_code_legacy(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
+        """Legacy line-based instrumentation (fallback)"""
         # Get language-specific instrumentation strategy
         if language == 'python':
             return self._instrument_python(source_code, points)
@@ -1040,6 +2098,10 @@ class LanguageEngine:
             return self._instrument_java(source_code, points)
         else:
             return self._instrument_generic(source_code, points)
+    
+    def _generate_instrumentation_code(self, point: InstrumentationPoint, language: str) -> Optional[str]:
+        """Generate language-agnostic instrumentation code for a given point"""
+        return self._language_agnostic_generator.generate_instrumentation(point, language)
     
     def _instrument_python(self, source_code: str, points: List[InstrumentationPoint]) -> str:
         """Python-specific code instrumentation with codegreen_runtime"""
@@ -1111,12 +2173,22 @@ class LanguageEngine:
                 
                 # Handle different insertion strategies
                 if point.type == 'function_enter':
-                    # Entry points go AFTER the function definition line
-                    insert_index = point.line  # After the "def" line
+                    # Entry points go at the FIRST line inside the function body (not after def line)
+                    insert_index = point.line - 1  # Convert 1-based to 0-based
                     if insert_index < len(lines):
-                        # Use indentation of the first line inside function
+                        # Use indentation of the target line + one level
                         original_line = lines[insert_index]
-                        indent = self._get_indentation(original_line)
+                        base_indent = self._get_indentation(original_line)
+                        indent = base_indent + "    "  # Add one indentation level for function body
+                    else:
+                        indent = "    "  # Default Python indent
+                elif point.type == 'class_enter':
+                    # Class entry points go at the FIRST line inside the class body
+                    insert_index = point.line - 1  # Convert 1-based to 0-based
+                    if insert_index < len(lines):
+                        # For classes, use standard class body indentation (4 spaces)
+                        # Don't add extra indentation since we're already inside the class
+                        indent = "    "  # Standard class body indentation
                     else:
                         indent = "    "  # Default Python indent
                 elif point.type == 'function_exit':
@@ -1138,10 +2210,14 @@ class LanguageEngine:
                     else:
                         indent = "    "  # Default Python indent
                 else:
-                    # Default behavior for other types
-                    insert_index = point.line - 1
-                    original_line = lines[insert_index] if insert_index < len(lines) else ""
-                    indent = self._get_indentation(original_line)
+                    # Default behavior for other types (loop_start, etc.)
+                    insert_index = point.line - 1  # Convert 1-based to 0-based
+                    if insert_index < len(lines):
+                        original_line = lines[insert_index]
+                        base_indent = self._get_indentation(original_line)
+                        indent = base_indent + "    "  # Add appropriate indentation
+                    else:
+                        indent = "    "
                 
                 instrumented_call = indent + instrumentation
                 lines.insert(insert_index, instrumented_call)

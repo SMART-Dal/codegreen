@@ -19,3 +19,6 @@
 [submodule "third_party/tree-climber"]
 	path = third_party/tree-climber
 	url = git@github.com:bstee615/tree-climber.git
+[submodule "third_party/nvim-treesitter"]
+	path = third_party/nvim-treesitter
+	url = https://github.com/nvim-treesitter/nvim-treesitter.git
