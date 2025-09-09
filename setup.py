@@ -82,20 +82,27 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "codegreen=codegreen.cli:main_cli",
+            "codegreen=codegreen_cli:main",
         ],
     },
-    # C++ extensions will be added in future releases
-    # ext_modules=[
-    #     CMakeExtension(
-    #         name="codegreen_cpp",
-    #         install_prefix="codegreen",
-    #         cmake_configure_options=cmake_options,
-    #     ),
-    # ],
-    # cmdclass={
-    #     "build_ext": BuildExtension,
-    # },
+    # Include the CLI script and binary
+    scripts=['codegreen_cli.py'],
+    data_files=[
+        ('bin', ['bin/codegreen']),
+        ('bin/runtime', ['src/instrumentation/codegreen_runtime.py']),
+        ('config', ['config/codegreen.json']),
+    ],
+    # C++ extensions for integrated builds
+    ext_modules=[
+        CMakeExtension(
+            name="codegreen_cpp",
+            install_prefix="codegreen",
+            cmake_configure_options=cmake_options,
+        ),
+    ],
+    cmdclass={
+        "build_ext": BuildExtension,
+    },
     zip_safe=False,
     classifiers=[
         "Development Status :: 3 - Alpha",

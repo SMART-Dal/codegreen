@@ -1,0 +1,172 @@
+{
+  "version": "0.1.0",
+  "paths": {
+    "runtime_modules": {
+      "python": "runtime/codegreen_runtime.py",
+      "base_directory": "${EXECUTABLE_DIR}/runtime"
+    },
+    "temp_directory": {
+      "base": "${SYSTEM_TEMP}",
+      "prefix": "codegreen_",
+      "cleanup_on_exit": true,
+      "max_age_hours": 24
+    },
+    "database": {
+      "default_path": "${USER_HOME}/.codegreen/energy_data.db",
+      "backup_enabled": true,
+      "max_size_mb": 1024
+    },
+    "logs": {
+      "directory": "${USER_HOME}/.codegreen/logs",
+      "level": "INFO",
+      "max_files": 10,
+      "max_size_mb": 50
+    }
+  },
+  "measurement": {
+    "timing": {
+      "precision": "maximum",
+      "clock_source": "auto",
+      "sync_method": "tsc",
+      "calibration_samples": 100
+    },
+    "nemb": {
+      "enabled": true,
+      "accuracy_mode": "production",
+      "providers": {
+        "intel_rapl": {
+          "enabled": true,
+          "access_method": "auto",
+          "domains": [
+            "package",
+            "pp0",
+            "pp1",
+            "dram"
+          ],
+          "validation_enabled": true
+        },
+        "nvidia_gpu": {
+          "enabled": true,
+          "device_selection": "all",
+          "power_sampling_hz": 100,
+          "validation_enabled": true
+        },
+        "amd_cpu": {
+          "enabled": true,
+          "access_method": "auto",
+          "validation_enabled": true
+        }
+      },
+      "coordinator": {
+        "cross_validation": true,
+        "cross_validation_threshold": 0.05,
+        "temporal_alignment_tolerance_ms": 0.1,
+        "measurement_buffer_size": 1000,
+        "auto_restart_failed_providers": true,
+        "provider_restart_interval_s": 30
+      },
+      "accuracy": {
+        "target_uncertainty_percent": 1.0,
+        "measurement_validation": true,
+        "outlier_detection": true,
+        "noise_filtering": "adaptive",
+        "statistical_validation": true,
+        "confidence_threshold": 0.95
+      }
+    },
+    "pmt_legacy": {
+      "enabled": false,
+      "preferred_sensors": [
+        "rapl",
+        "nvml",
+        "dummy"
+      ],
+      "fallback_enabled": true,
+      "validation_enabled": true,
+      "max_init_time_ms": 5000,
+      "measurement_interval_ms": 1
+    },
+    "accuracy": {
+      "priority": "maximum",
+      "separate_instrumentation_phase": true,
+      "minimize_io_during_measurement": true,
+      "preload_runtime_modules": true,
+      "disable_frequency_scaling": false,
+      "cpu_affinity": "auto",
+      "memory_prefaulting": true,
+      "minimize_system_noise": true
+    }
+  },
+  "performance": {
+    "string_optimization": {
+      "cache_checkpoint_calls": true,
+      "precompile_templates": true,
+      "max_cache_size": 1000
+    },
+    "database": {
+      "batch_operations": true,
+      "transaction_size": 1000,
+      "connection_pool_size": 5,
+      "prepare_statements": true
+    },
+    "threading": {
+      "max_worker_threads": 4,
+      "measurement_thread_priority": "high"
+    }
+  },
+  "security": {
+    "sql_injection_protection": true,
+    "path_validation": true,
+    "temp_file_permissions": "0600"
+  },
+  "languages": {
+    "python": {
+      "executable": "python3",
+      "runtime_module": "codegreen_runtime.py",
+      "extensions": [
+        ".py",
+        ".pyw",
+        ".pyi"
+      ],
+      "optimization_enabled": true
+    },
+    "cpp": {
+      "executable": "g++",
+      "extensions": [
+        ".cpp",
+        ".cxx",
+        ".cc",
+        ".hpp",
+        ".h"
+      ],
+      "optimization_enabled": false
+    },
+    "java": {
+      "executable": "java",
+      "extensions": [
+        ".java"
+      ],
+      "optimization_enabled": false
+    }
+  },
+  "developer": {
+    "debug_mode": false,
+    "verbose_logging": false,
+    "preserve_temp_files": false,
+    "measurement_validation": true,
+    "performance_profiling": false
+  },
+  "initialization": {
+    "completed": true,
+    "timestamp": "2025-09-03T14:59:43.100634",
+    "environment_type": "personal",
+    "detected_sensors": [
+      "intel_rapl",
+      "amd_cpu",
+      "nvidia_gpu",
+      "amd_gpu",
+      "external_sensors"
+    ],
+    "version": "0.1.0"
+  }
+}

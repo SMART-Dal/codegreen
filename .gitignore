@@ -18,6 +18,11 @@ cmake_install.cmake
 Makefile
 *.cmake
 
+# Runtime data
+*.db
+*.log
+*.pid
+
 # IDE specific
 .idea/
 .vscode/
@@ -61,7 +66,7 @@ dist/
 *.tmp
 *.temp
 test_*
-reports_*/
+reports*/
 *.db
 *.sqlite
 *.sqlite3
