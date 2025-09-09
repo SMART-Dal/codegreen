@@ -60,7 +60,7 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include)
 
 # Add tree-sitter submodules
 message(STATUS "Building tree-sitter language parsers...")
-add_subdirectory(third_party/tree-sitter)
+add_subdirectory(third_party/tree-sitter/lib)
 
 # Use EXCLUDE_FROM_ALL to avoid test target conflicts but still build libraries
 add_subdirectory(third_party/tree-sitter-python EXCLUDE_FROM_ALL)
@@ -98,10 +98,12 @@ endif()
 
 # Core library sources are now defined in src/measurement/CMakeLists.txt
 
+
 # Language adapters are now created in src/instrumentation/CMakeLists.txt
 
 # Add instrumentation module
-add_subdirectory(src/instrumentation)
+# Instrumentation is now Python-based, no C++ build needed
+# add_subdirectory(src/instrumentation)
 
 # Main executable
 add_executable(codegreen 
@@ -112,7 +114,6 @@ add_executable(codegreen
 target_link_libraries(codegreen PRIVATE
     codegreen-core
     codegreen-nemb
-    codegreen-language-adapters
     ${JSONCPP_LIBRARIES}
     ${CURL_LIBRARIES}
     Threads::Threads
@@ -136,9 +137,39 @@ endif()
 
 # Copy runtime modules to build directory
 file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime)
+file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation)
 configure_file(
     ${CMAKE_SOURCE_DIR}/src/instrumentation/codegreen_runtime.py
     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime/codegreen_runtime.py
+    COPYONLY
+)
+
+# Copy Python bridge scripts
+configure_file(
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py
+    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/bridge_analyze.py
+    COPYONLY
+)
+configure_file(
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py
+    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/bridge_instrument.py
+    COPYONLY
+)
+
+# Copy Python instrumentation modules
+configure_file(
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py
+    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/language_engine.py
+    COPYONLY
+)
+configure_file(
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py
+    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/ast_processor.py
+    COPYONLY
+)
+configure_file(
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py
+    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/language_configs.py
     COPYONLY
 )
 
