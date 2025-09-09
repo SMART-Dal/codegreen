@@ -242,7 +242,7 @@ class ExternalQueryLoader:
             return {}
         
         # Return built-in queries from configuration
-        return self._get_builtin_queries(language)
+        return config.analysis_patterns
 
 
 class LanguageAgnosticInstrumentationGenerator:
