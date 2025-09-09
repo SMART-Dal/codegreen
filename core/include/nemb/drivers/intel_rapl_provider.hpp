@@ -1,11 +1,13 @@
 #pragma once
 
 #include "../core/energy_provider.hpp"
+#include "../utils/non_blocking_file_reader.hpp"
 #include <map>
 #include <mutex>
 #include <fstream>
 #include <vector>
 #include <chrono>
+#include <memory>
 
 namespace codegreen::nemb::drivers {
 
@@ -185,7 +187,8 @@ private:
     // Hardware detection methods
     bool query_energy_units();
     bool query_energy_unit_from_hardware();
-    bool initialize_counters();  
+    bool initialize_counters();
+    bool initialize_file_readers();
     bool take_initial_readings();
     
     // Access method (MSR vs sysfs)
@@ -199,6 +202,9 @@ private:
     // MSR access
     int msr_fd_{-1};
     std::map<std::string, uint32_t> domain_msr_map_;
+    
+    // Non-blocking file readers for sysfs access
+    std::map<std::string, std::unique_ptr<utils::NonBlockingFileReader>> domain_file_readers_;
     
     // sysfs access
     std::map<std::string, std::string> domain_sysfs_map_;

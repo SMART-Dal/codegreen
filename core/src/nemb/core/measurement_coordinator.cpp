@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <iomanip>
+#include <future>
 
 namespace codegreen::nemb {
 
@@ -298,6 +299,7 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
         }
         
         try {
+            // Direct provider reading - no timeout needed with non-blocking I/O
             auto reading = state.provider->get_reading();
             readings[name] = reading;
             
@@ -315,6 +317,12 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
         } catch (const std::exception& e) {
             state.consecutive_failures++;
             std::cerr << "Exception reading from " << name << ": " << e.what() << std::endl;
+            
+            // Mark provider as failed if too many exceptions
+            if (state.consecutive_failures > 3) {
+                state.failed = true;
+                std::cerr << "Provider " << name << " marked as failed due to repeated exceptions" << std::endl;
+            }
         }
     }
     

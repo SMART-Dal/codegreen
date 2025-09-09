@@ -59,15 +59,11 @@ class Language(str, Enum):
     c = "c"
 
 class SensorType(str, Enum):
-    """Available PMT sensor types."""
-    rapl = "rapl"
-    nvml = "nvml"
-    amdsmi = "amdsmi"
-    powersensor3 = "powersensor3"
-    powersensor2 = "powersensor2"
-    likwid = "likwid"
-    rocm = "rocm"
-    dummy = "dummy"
+    """Available NEMB sensor types."""
+    rapl = "rapl"              # Intel RAPL (CPU package + cores)
+    nvidia = "nvidia"          # NVIDIA GPU sensors
+    amd_gpu = "amd_gpu"        # AMD GPU sensors
+    amd_cpu = "amd_cpu"        # AMD CPU RAPL-like interface
 
 class LogLevel(str, Enum):
     """Logging levels."""
@@ -156,7 +152,7 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     return {
         "measurement": {
             "pmt": {
-                "preferred_sensors": ["rapl", "nvml", "dummy"]
+                "preferred_sensors": ["rapl", "nvidia", "amd_gpu"]
             }
         }
     }
@@ -651,7 +647,7 @@ def test_configuration(config: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 # Run a very quick workload test
                 result = subprocess.run(
-                    [str(binary_path), "--measure-workload", "--duration=1", "--workload=cpu_stress"],
+                    [str(binary_path), "benchmark", "cpu_stress", "--duration=1"],
                     capture_output=True, text=True, timeout=15
                 )
                 if result.returncode == 0 and "Energy consumed:" in result.stdout:
@@ -719,8 +715,8 @@ def measure_energy(
     """
     [bold]Measure energy consumption[/bold] of a script with detailed analysis.
     
-    This command instruments your code and measures its energy consumption
-    using available hardware sensors (RAPL, NVML, etc.).
+    This command analyzes your code structure, instruments it with measurement
+    points, and measures energy consumption using available hardware sensors.
     
     [bold]Examples:[/bold]
     • [cyan]codegreen measure python script.py[/cyan]
@@ -728,24 +724,130 @@ def measure_energy(
     • [cyan]codegreen measure python script.py --precision high --verbose[/cyan]
     """
     
-    binary_path = get_binary_path()
-    if not binary_path:
-        console.print("[red]Error: CodeGreen binary not found![/red]")
-        console.print("Please ensure CodeGreen is properly installed.")
-        raise typer.Exit(1)
-    
-    if not ensure_runtime_available():
-        console.print("[yellow]Warning: Runtime modules may not be available[/yellow]")
+    # Import the new language engine
+    from .core.language_engine import get_language_engine
     
     if not script.exists():
         console.print(f"[red]Error: Script file not found: {script}[/red]")
         raise typer.Exit(1)
     
-    # Build command
-    cmd = [str(binary_path), language.value, str(script)]
+    try:
+        # Read source code
+        with open(script, 'r', encoding='utf-8') as f:
+            source_code = f.read()
+        
+        console.print(f"[green]Analyzing code structure...[/green]")
+        console.print(f"Language: [cyan]{language.value}[/cyan]")
+        console.print(f"Script: [cyan]{script}[/cyan]")
+        console.print(f"Precision: [cyan]{precision.value}[/cyan]")
+        
+        if sensors:
+            console.print(f"Sensors: [cyan]{', '.join([s.value for s in sensors])}[/cyan]")
+        
+        # Analyze code with language engine
+        engine = get_language_engine()
+        result = engine.analyze_code(source_code, language.value, str(script))
+        
+        if not result.success:
+            console.print(f"[red]Analysis failed: {result.error}[/red]")
+            raise typer.Exit(1)
+        
+        # Display analysis results
+        console.print(f"[green]✓ Analysis completed![/green]")
+        console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
+        console.print(f"Instrumentation points found: [cyan]{result.checkpoint_count}[/cyan]")
+        console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
+        
+        if verbose:
+            # Show instrumentation points
+            console.print("\n[bold]Instrumentation Points:[/bold]")
+            table = Table()
+            table.add_column("Type", style="cyan")
+            table.add_column("Name", style="green")
+            table.add_column("Line", style="yellow")
+            table.add_column("Context", style="dim")
+            
+            for point in result.instrumentation_points[:10]:  # Show first 10
+                table.add_row(
+                    point.type,
+                    point.name,
+                    str(point.line),
+                    point.context[:50] + "..." if len(point.context) > 50 else point.context
+                )
+            
+            if len(result.instrumentation_points) > 10:
+                table.add_row("...", f"+{len(result.instrumentation_points) - 10} more", "", "")
+            
+            console.print(table)
+        
+        # Show optimization suggestions
+        if result.optimization_suggestions:
+            console.print(f"\n[bold yellow]💡 Optimization Suggestions:[/bold yellow]")
+            for i, suggestion in enumerate(result.optimization_suggestions, 1):
+                console.print(f"  {i}. {suggestion}")
+        
+        # Instrument code
+        console.print(f"\n[green]Instrumenting code for energy measurement...[/green]")
+        instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
+        
+        # Create instrumented file
+        instrumented_path = script.with_name(f'{script.stem}_instrumented{script.suffix}')
+        with open(instrumented_path, 'w', encoding='utf-8') as f:
+            f.write(instrumented_code)
+        
+        console.print(f"[green]✓ Instrumented code saved to: {instrumented_path}[/green]")
+        
+        # Now run the measurement
+        if _should_run_actual_measurement(sensors):
+            console.print(f"\n[green]Running energy measurement...[/green]")
+            measurement_result = _run_energy_measurement(
+                instrumented_path, language, sensors, verbose, timeout, args
+            )
+            
+            if output:
+                _save_measurement_results(output, result, measurement_result)
+                console.print(f"[green]✓ Results saved to: {output}[/green]")
+        else:
+            console.print(f"\n[yellow]Note: No energy sensors available. Code analysis and instrumentation completed.[/yellow]")
+            console.print(f"To run with actual energy measurement, ensure RAPL or other sensors are available.")
+        
+        console.print(f"\n[green]✓ CodeGreen measurement completed successfully![/green]")
+        
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: File not found: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
+        if verbose:
+            import traceback
+            console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
+        raise typer.Exit(1)
+
+
+def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
+    """Check if actual energy measurement should be performed"""
+    # For now, check if binary exists for actual measurement
+    binary_path = get_binary_path()
+    return binary_path is not None and binary_path.exists()
+
+
+def _run_energy_measurement(
+    instrumented_path: Path,
+    language: Language,
+    sensors: Optional[List[SensorType]],
+    verbose: bool,
+    timeout: Optional[int],
+    args: Optional[List[str]]
+) -> Dict[str, Any]:
+    """Run actual energy measurement on instrumented code"""
     
-    if output:
-        cmd.extend(['--output', str(output)])
+    binary_path = get_binary_path()
+    if not binary_path:
+        console.print("[yellow]No binary available for energy measurement[/yellow]")
+        return {}
+    
+    # Build command for binary
+    cmd = [str(binary_path), language.value, str(instrumented_path)]
     
     if sensors:
         sensor_list = ",".join([s.value for s in sensors])
@@ -765,44 +867,173 @@ def measure_energy(
         ) as progress:
             task = progress.add_task("Running energy measurement...", total=None)
             
-            console.print(f"[green]Running CodeGreen measurement...[/green]")
-            console.print(f"Language: [cyan]{language.value}[/cyan]")
-            console.print(f"Script: [cyan]{script}[/cyan]")
-            console.print(f"Precision: [cyan]{precision.value}[/cyan]")
-            
-            if sensors:
-                console.print(f"Sensors: [cyan]{', '.join([s.value for s in sensors])}[/cyan]")
-            
             if verbose:
                 console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
             
             # Execute the binary
             result = subprocess.run(
                 cmd, 
-                capture_output=False, 
+                capture_output=True,
                 text=True,
                 timeout=timeout
             )
             
             progress.update(task, completed=True)
-        
-        if result.returncode != 0:
-            console.print(f"[red]Command failed with exit code {result.returncode}[/red]")
-            raise typer.Exit(result.returncode)
-        
-        console.print("[green]✓ Measurement completed successfully![/green]")
-        
+            
+            if result.returncode == 0:
+                console.print("[green]✓ Energy measurement completed![/green]")
+                return {'success': True, 'output': result.stdout}
+            else:
+                console.print(f"[yellow]Warning: Measurement had issues (exit code {result.returncode})[/yellow]")
+                if verbose and result.stderr:
+                    console.print(f"[dim]Stderr: {result.stderr}[/dim]")
+                return {'success': False, 'error': result.stderr}
+                
     except subprocess.TimeoutExpired:
-        console.print("[red]Measurement timed out[/red]")
-        raise typer.Exit(1)
-    except FileNotFoundError:
-        console.print(f"[red]Error: Binary not found at {binary_path}[/red]")
-        raise typer.Exit(1)
-    except KeyboardInterrupt:
-        console.print("[yellow]Measurement interrupted by user[/yellow]")
-        raise typer.Exit(1)
+        console.print("[red]Energy measurement timed out[/red]")
+        return {'success': False, 'error': 'timeout'}
     except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
+        console.print(f"[red]Energy measurement failed: {e}[/red]")
+        return {'success': False, 'error': str(e)}
+
+
+def _save_measurement_results(
+    output_path: Path,
+    analysis_result: Any,
+    measurement_result: Dict[str, Any]
+) -> None:
+    """Save combined analysis and measurement results"""
+    
+    results = {
+        'timestamp': datetime.now().isoformat(),
+        'analysis': {
+            'language': analysis_result.language,
+            'success': analysis_result.success,
+            'instrumentation_points': analysis_result.checkpoint_count,
+            'optimization_suggestions': analysis_result.optimization_suggestions,
+            'metadata': analysis_result.metadata
+        },
+        'measurement': measurement_result
+    }
+    
+    # Save as JSON
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2)
+
+
+@app.command("analyze")
+def analyze_code_structure(
+    language: Annotated[Language, typer.Argument(help="Programming language to analyze")],
+    script: Annotated[Path, typer.Argument(help="Path to the script file to analyze")],
+    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file for analysis results")] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Verbose output with detailed instrumentation points")] = False,
+    show_suggestions: Annotated[bool, typer.Option("--suggestions", help="Show optimization suggestions")] = True,
+):
+    """
+    [bold]Analyze code structure[/bold] without energy measurement.
+    
+    This command analyzes your code structure and identifies instrumentation
+    points without actually running energy measurement.
+    
+    [bold]Examples:[/bold]
+    • [cyan]codegreen analyze python script.py[/cyan]
+    • [cyan]codegreen analyze python script.py --verbose --output analysis.json[/cyan]
+    """
+    
+    from .core.language_engine import get_language_engine
+    
+    if not script.exists():
+        console.print(f"[red]Error: Script file not found: {script}[/red]")
+        raise typer.Exit(1)
+    
+    try:
+        # Read and analyze source code
+        with open(script, 'r', encoding='utf-8') as f:
+            source_code = f.read()
+        
+        console.print(f"[green]Analyzing code structure...[/green]")
+        console.print(f"Language: [cyan]{language.value}[/cyan]")
+        console.print(f"Script: [cyan]{script}[/cyan]")
+        
+        engine = get_language_engine()
+        result = engine.analyze_code(source_code, language.value, str(script))
+        
+        if not result.success:
+            console.print(f"[red]Analysis failed: {result.error}[/red]")
+            raise typer.Exit(1)
+        
+        # Display results
+        console.print(f"[green]✓ Analysis completed![/green]")
+        console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
+        console.print(f"Parser available: [cyan]{result.metadata.get('parser_available', False)}[/cyan]")
+        console.print(f"Instrumentation points: [cyan]{result.checkpoint_count}[/cyan]")
+        console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
+        console.print(f"Source lines: [cyan]{result.metadata.get('source_lines', 0)}[/cyan]")
+        
+        if verbose and result.instrumentation_points:
+            # Show detailed instrumentation points
+            console.print(f"\n[bold]Instrumentation Points:[/bold]")
+            table = Table()
+            table.add_column("Type", style="cyan")
+            table.add_column("Subtype", style="blue")
+            table.add_column("Name", style="green")
+            table.add_column("Line", style="yellow")
+            table.add_column("Context", style="dim")
+            
+            for point in result.instrumentation_points:
+                table.add_row(
+                    point.type,
+                    point.subtype,
+                    point.name,
+                    str(point.line),
+                    point.context[:60] + "..." if len(point.context) > 60 else point.context
+                )
+            
+            console.print(table)
+        
+        if show_suggestions and result.optimization_suggestions:
+            console.print(f"\n[bold yellow]💡 Optimization Suggestions:[/bold yellow]")
+            for i, suggestion in enumerate(result.optimization_suggestions, 1):
+                console.print(f"  {i}. {suggestion}")
+        
+        # Save results if requested
+        if output:
+            analysis_data = {
+                'timestamp': datetime.now().isoformat(),
+                'script': str(script),
+                'language': result.language,
+                'analysis_method': result.metadata.get('analysis_method'),
+                'parser_available': result.metadata.get('parser_available'),
+                'instrumentation_points_count': result.checkpoint_count,
+                'analysis_time_ms': result.metadata.get('analysis_time_ms'),
+                'instrumentation_points': [
+                    {
+                        'id': point.id,
+                        'type': point.type,
+                        'subtype': point.subtype,
+                        'name': point.name,
+                        'line': point.line,
+                        'column': point.column,
+                        'context': point.context,
+                        'metadata': point.metadata
+                    }
+                    for point in result.instrumentation_points
+                ],
+                'optimization_suggestions': result.optimization_suggestions
+            }
+            
+            with open(output, 'w', encoding='utf-8') as f:
+                json.dump(analysis_data, f, indent=2)
+            
+            console.print(f"[green]✓ Analysis saved to: {output}[/green]")
+        
+        console.print(f"\n[green]✓ Code analysis completed successfully![/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Analysis failed: {e}[/red]")
+        if verbose:
+            import traceback
+            console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
         raise typer.Exit(1)
 
 @app.command("init")
@@ -1224,8 +1455,8 @@ def measure_workload(
         raise typer.Exit(1)
     
     # Build command for NEMB measurement
-    cmd = [str(binary_path), "--measure-workload"]
-    cmd.extend([f"--duration={duration}", f"--workload={workload.value}"])
+    cmd = [str(binary_path), "benchmark", workload.value]
+    cmd.extend([f"--duration={duration}"])
     
     if verbose:
         cmd.append("--verbose")

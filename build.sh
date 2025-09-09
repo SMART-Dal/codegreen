@@ -166,7 +166,7 @@ echo "4️⃣  Testing CPU stress benchmark..."
 echo "   🏃 Running 3-second CPU stress test..."
 
 # Capture benchmark output using the C++ binary directly
-BENCHMARK_OUTPUT=$(timeout 20s "$BINARY_PATH" --measure-workload --duration=3 --workload=cpu_stress 2>&1 || echo "TIMEOUT_OR_ERROR")
+BENCHMARK_OUTPUT=$(timeout 20s "$BINARY_PATH" benchmark cpu_stress --duration=3 2>&1 || echo "TIMEOUT_OR_ERROR")
 
 if echo "$BENCHMARK_OUTPUT" | grep -q "Energy consumed:.*J" && echo "$BENCHMARK_OUTPUT" | grep -q "Average power:.*W"; then
     # Extract key metrics

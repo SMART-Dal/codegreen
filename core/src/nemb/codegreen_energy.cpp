@@ -387,26 +387,34 @@ const NEMBConfig& EnergyMeter::Impl::get_config() const {
 
 bool EnergyMeter::Impl::self_test() {
     if (!is_available()) {
+        std::cout << "🔍 Self-test failed: System not available" << std::endl;
         return false;
     }
     
     try {
         // Perform basic functionality test
+        std::cout << "🧪 Self-test: Taking first reading..." << std::endl;
         auto reading1 = read();
         if (!reading1.is_valid) {
+            std::cout << "🔍 Self-test failed: First reading invalid - " << reading1.error_message << std::endl;
             return false;
         }
+        std::cout << "✓ First reading: " << reading1.energy_joules << " J" << std::endl;
         
         // Wait a short time and take another reading
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
+        std::cout << "🧪 Self-test: Taking second reading..." << std::endl;
         auto reading2 = read();
         if (!reading2.is_valid) {
+            std::cout << "🔍 Self-test failed: Second reading invalid - " << reading2.error_message << std::endl;
             return false;
         }
+        std::cout << "✓ Second reading: " << reading2.energy_joules << " J" << std::endl;
         
         // Verify readings are progressing (energy is cumulative)
         if (reading2.energy_joules < reading1.energy_joules) {
+            std::cout << "🔍 Self-test failed: Energy not progressing (" << reading1.energy_joules << " -> " << reading2.energy_joules << ")" << std::endl;
             return false;
         }
         

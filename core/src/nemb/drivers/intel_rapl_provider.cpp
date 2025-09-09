@@ -6,6 +6,7 @@
 #include <thread>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 
 namespace codegreen::nemb::drivers {
 
@@ -35,6 +36,12 @@ bool IntelRAPLProvider::initialize() {
     // Initialize counter management for wraparound handling
     if (!initialize_counters()) {
         std::cout << "❌ Counter initialization failed" << std::endl;
+        return false;
+    }
+    
+    // Initialize non-blocking file readers
+    if (!initialize_file_readers()) {
+        std::cout << "❌ Failed to initialize file readers" << std::endl;
         return false;
     }
     
@@ -177,6 +184,16 @@ bool IntelRAPLProvider::is_available() const {
 }
 
 void IntelRAPLProvider::shutdown() {
+    std::cout << "🔌 Shutting down Intel RAPL provider..." << std::endl;
+    
+    // Close all file readers
+    for (auto& [domain, reader] : domain_file_readers_) {
+        if (reader) {
+            reader->close_file();
+        }
+    }
+    domain_file_readers_.clear();
+    
     initialized_ = false;
 }
 
@@ -330,17 +347,38 @@ bool IntelRAPLProvider::initialize_counters() {
     return true;
 }
 
-bool IntelRAPLProvider::take_initial_readings() {
-    std::cout << "🔍 Taking initial baseline readings..." << std::endl;
+bool IntelRAPLProvider::initialize_file_readers() {
+    std::cout << "🔧 Initializing non-blocking file readers..." << std::endl;
+    
+    // Clear any existing readers
+    domain_file_readers_.clear();
     
     for (const std::string& domain : available_domains_) {
         const std::string& path = domain_paths_[domain];
         
+        auto reader = std::make_unique<utils::NonBlockingFileReader>(path);
+        if (!reader->open_file()) {
+            std::cout << "❌ Failed to open file reader for domain: " << domain 
+                      << " (path: " << path << ")" << std::endl;
+            return false;
+        }
+        
+        domain_file_readers_[domain] = std::move(reader);
+        std::cout << "✓ File reader initialized for domain: " << domain << std::endl;
+    }
+    
+    return true;
+}
+
+bool IntelRAPLProvider::take_initial_readings() {
+    std::cout << "🔍 Taking initial baseline readings..." << std::endl;
+    
+    for (const std::string& domain : available_domains_) {
         try {
-            std::ifstream energy_file(path);
-            if (energy_file.is_open()) {
-                uint64_t energy_uj;
-                energy_file >> energy_uj;
+            auto& reader = domain_file_readers_[domain];
+            uint64_t energy_uj;
+            
+            if (reader && reader->read_uint64_with_timeout(energy_uj, std::chrono::milliseconds(100))) {
                 
                 // Update counter with initial reading
                 counter_manager_->update_counter(domain, energy_uj, 32);

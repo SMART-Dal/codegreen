@@ -25,6 +25,7 @@ set(NEMB_HAL_SOURCES
 
 set(NEMB_UTILS_SOURCES
     src/nemb/utils/precision_timer.cpp
+    src/nemb/utils/non_blocking_file_reader.cpp
 )
 
 set(NEMB_DRIVERS_SOURCES

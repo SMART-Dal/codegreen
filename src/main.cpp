@@ -78,8 +78,8 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        // Check for measure-workload command (called from Python CLI)
-        if (argc >= 2 && std::string(argv[1]) == "--measure-workload") {
+        // Check for workload measurement commands
+        if (argc >= 2 && (std::string(argv[1]) == "--measure-workload" || std::string(argv[1]) == "benchmark")) {
             // Parse parameters
             int duration = 3;
             std::string workload_type = "cpu_stress";

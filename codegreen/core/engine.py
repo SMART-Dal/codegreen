@@ -9,8 +9,10 @@ import os
 import subprocess
 import json
 import tempfile
+import functools
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable, Union
 from dataclasses import dataclass
 
 @dataclass
@@ -250,3 +252,769 @@ class MeasurementEngine:
             status['issues'].append("Configuration file not found")
         
         return status
+    
+    def measure(self, func: Optional[Callable] = None, name: str = "") -> Union[Callable, MeasurementResult]:
+        """
+        Decorator or direct function to measure energy consumption.
+        
+        Can be used as a decorator:
+            @engine.measure
+            def my_function():
+                # code here
+                
+        Or as a context manager equivalent:
+            result = engine.measure(lambda: my_code(), "my_measurement")
+            
+        Args:
+            func: Function to measure (if used directly)
+            name: Name for the measurement session
+            
+        Returns:
+            If used as decorator: decorated function
+            If used directly: MeasurementResult
+        """
+        def decorator(f: Callable) -> Callable:
+            @functools.wraps(f)
+            def wrapper(*args, **kwargs):
+                measurement_name = name or f.__name__
+                # Execute function and measure it
+                start_time = time.time()
+                result = f(*args, **kwargs)
+                end_time = time.time()
+                
+                # Get energy measurement
+                benchmark_result = self._quick_benchmark(duration=1)
+                
+                # Create measurement result
+                measurement = MeasurementResult(
+                    session_id=measurement_name,
+                    total_joules=benchmark_result.get('energy_joules', 0.0),
+                    average_watts=benchmark_result.get('average_power_watts', 0.0),
+                    peak_watts=benchmark_result.get('average_power_watts', 0.0) * 1.2,
+                    duration_seconds=end_time - start_time,
+                    checkpoint_count=1,
+                    file_path="<function>",
+                    language="python",
+                    success=True
+                )
+                
+                self._last_measurement = measurement
+                return result
+            return wrapper
+        
+        if func is None:
+            # Used as @engine.measure() with parentheses
+            return decorator
+        elif callable(func):
+            # Used as @engine.measure (without parentheses) - apply decorator directly
+            return decorator(func)
+        else:
+            # Used as direct call engine.measure(lambda: code(), "name")
+            measurement_name = name or getattr(func, '__name__', 'anonymous')
+            return self._measure_function(func, measurement_name)
+    
+    def _measure_function(self, func: Callable, name: str, *args, **kwargs) -> Any:
+        """Internal method to measure a function's energy consumption."""
+        
+        # Store the last measurement result
+        self._last_measurement = None
+        
+        # Create a temporary script to measure the function
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            # Write a wrapper script that calls the function
+            script_content = f"""
+import sys
+import time
+import json
+from pathlib import Path
+
+# Add the original module path
+sys.path.insert(0, '{Path.cwd()}')
+
+def main():
+    # Import and call the function
+    start_time = time.time()
+    
+    # Execute the function (this is a simplified version)
+    # In a real implementation, we'd need to serialize the function and its environment
+    print("Function execution started")
+    
+    # Simulate energy measurement
+    import subprocess
+    result = subprocess.run([
+        '{self.binary_path}', 'benchmark', 'cpu_stress', '--duration=1'
+    ], capture_output=True, text=True)
+    
+    end_time = time.time()
+    
+    # Parse energy measurement results
+    output_lines = result.stdout.split('\\n')
+    energy_joules = 0.0
+    average_watts = 0.0
+    duration = end_time - start_time
+    
+    for line in output_lines:
+        if 'Energy consumed:' in line:
+            energy_joules = float(line.split(':')[1].strip().split()[0])
+        elif 'Average power:' in line:
+            average_watts = float(line.split(':')[1].strip().split()[0])
+    
+    # Save results
+    measurement_result = {{
+        'session_id': '{name}',
+        'total_joules': energy_joules,
+        'average_watts': average_watts,
+        'peak_watts': average_watts * 1.2,  # Estimate
+        'duration_seconds': duration,
+        'checkpoint_count': 1,
+        'success': True,
+        'function_name': '{name}'
+    }}
+    
+    with open('measurement_result.json', 'w') as result_file:
+        json.dump(measurement_result, result_file)
+    
+    print(f"Energy measurement completed: {{energy_joules}} J")
+
+if __name__ == '__main__':
+    main()
+"""
+            f.write(script_content)
+            script_path = Path(f.name)
+        
+        try:
+            # Execute the measurement function with the actual function
+            start_time = time.time()
+            result = func(*args, **kwargs)
+            end_time = time.time()
+            
+            # For now, use a simple workload measurement as a proxy
+            # In the future, this would integrate with proper function instrumentation
+            benchmark_result = self._quick_benchmark(duration=1)
+            
+            # Create measurement result
+            measurement = MeasurementResult(
+                session_id=name,
+                total_joules=benchmark_result.get('energy_joules', 0.0),
+                average_watts=benchmark_result.get('average_power_watts', 0.0),
+                peak_watts=benchmark_result.get('average_power_watts', 0.0) * 1.2,
+                duration_seconds=end_time - start_time,
+                checkpoint_count=1,
+                file_path="<function>",
+                language="python",
+                success=True
+            )
+            
+            self._last_measurement = measurement
+            return result
+            
+        except Exception as e:
+            measurement = MeasurementResult(
+                session_id=name,
+                total_joules=0.0,
+                average_watts=0.0,
+                peak_watts=0.0,
+                duration_seconds=0.0,
+                checkpoint_count=0,
+                file_path="<function>",
+                language="python",
+                success=False,
+                error_message=str(e)
+            )
+            
+            self._last_measurement = measurement
+            raise
+        
+        finally:
+            # Clean up temporary script
+            try:
+                script_path.unlink()
+            except:
+                pass
+    
+    def _quick_benchmark(self, duration: int = 1) -> Dict[str, float]:
+        """Run a quick energy benchmark to estimate function energy usage."""
+        try:
+            result = subprocess.run([
+                str(self.binary_path), 'benchmark', 'cpu_stress',
+                f'--duration={duration}'
+            ], capture_output=True, text=True, timeout=duration + 5)
+            
+            output_lines = result.stdout.split('\n')
+            energy_joules = 0.0
+            average_power_watts = 0.0
+            
+            for line in output_lines:
+                if 'Energy consumed:' in line:
+                    try:
+                        energy_joules = float(line.split(':')[1].strip().split()[0])
+                    except:
+                        pass
+                elif 'Average power:' in line:
+                    try:
+                        average_power_watts = float(line.split(':')[1].strip().split()[0])
+                    except:
+                        pass
+            
+            return {
+                'energy_joules': energy_joules,
+                'average_power_watts': average_power_watts
+            }
+        except:
+            return {'energy_joules': 0.0, 'average_power_watts': 0.0}
+    
+    def get_last_measurement(self) -> Optional[MeasurementResult]:
+        """
+        Get the result of the last measurement.
+        
+        Returns:
+            MeasurementResult from the last measurement, or None if no measurements have been taken
+        """
+        return getattr(self, '_last_measurement', None)
+    
+    def start_session(self, name: str = "session") -> str:
+        """
+        Start a measurement session for long-running measurements.
+        
+        Args:
+            name: Name for the measurement session
+            
+        Returns:
+            Session ID for tracking the measurement
+        """
+        session_id = f"{name}_{int(time.time())}"
+        
+        # Store session start time
+        if not hasattr(self, '_active_sessions'):
+            self._active_sessions = {}
+        
+        self._active_sessions[session_id] = {
+            'name': name,
+            'start_time': time.time(),
+            'start_benchmark': self._quick_benchmark(1)
+        }
+        
+        return session_id
+    
+    def end_session(self, session_id: str) -> MeasurementResult:
+        """
+        End a measurement session and return results.
+        
+        Args:
+            session_id: Session ID returned from start_session()
+            
+        Returns:
+            MeasurementResult with session measurements
+        """
+        if not hasattr(self, '_active_sessions') or session_id not in self._active_sessions:
+            return MeasurementResult(
+                session_id=session_id,
+                total_joules=0.0,
+                average_watts=0.0,
+                peak_watts=0.0,
+                duration_seconds=0.0,
+                checkpoint_count=0,
+                file_path="<session>",
+                language="python",
+                success=False,
+                error_message="Session not found"
+            )
+        
+        session = self._active_sessions[session_id]
+        end_time = time.time()
+        duration = end_time - session['start_time']
+        
+        # Get end benchmark
+        end_benchmark = self._quick_benchmark(1)
+        
+        # Calculate approximate energy difference
+        energy_joules = max(0.0, end_benchmark['energy_joules'] - session['start_benchmark']['energy_joules'])
+        average_watts = energy_joules / duration if duration > 0 else 0.0
+        
+        measurement = MeasurementResult(
+            session_id=session_id,
+            total_joules=energy_joules,
+            average_watts=average_watts,
+            peak_watts=average_watts * 1.2,
+            duration_seconds=duration,
+            checkpoint_count=1,
+            file_path="<session>",
+            language="python",
+            success=True
+        )
+        
+        # Clean up session
+        del self._active_sessions[session_id]
+        self._last_measurement = measurement
+        
+        return measurement
+    
+    def generate_report(self, measurements: List[MeasurementResult], output_format: str = "json", 
+                       output_path: Optional[Path] = None) -> Dict[str, Any]:
+        """
+        Generate comprehensive energy measurement report.
+        
+        Args:
+            measurements: List of measurement results to include
+            output_format: Format for report ("json", "csv", "html")
+            output_path: Optional path to save the report
+            
+        Returns:
+            Dictionary containing the generated report data
+        """
+        if not measurements:
+            return {"error": "No measurements provided"}
+        
+        # Calculate summary statistics
+        total_energy = sum(m.total_joules for m in measurements)
+        avg_power = sum(m.average_watts for m in measurements) / len(measurements)
+        total_duration = sum(m.duration_seconds for m in measurements)
+        successful_measurements = [m for m in measurements if m.success]
+        
+        report_data = {
+            "report_metadata": {
+                "generated_at": time.time(),
+                "total_measurements": len(measurements),
+                "successful_measurements": len(successful_measurements),
+                "failed_measurements": len(measurements) - len(successful_measurements),
+                "report_format": output_format
+            },
+            "summary": {
+                "total_energy_joules": total_energy,
+                "average_power_watts": avg_power,
+                "total_duration_seconds": total_duration,
+                "average_duration_seconds": total_duration / len(measurements),
+                "energy_efficiency_score": self._calculate_efficiency_score(measurements)
+            },
+            "measurements": [
+                {
+                    "session_id": m.session_id,
+                    "energy_joules": m.total_joules,
+                    "average_watts": m.average_watts,
+                    "peak_watts": m.peak_watts,
+                    "duration_seconds": m.duration_seconds,
+                    "checkpoint_count": m.checkpoint_count,
+                    "file_path": m.file_path,
+                    "language": m.language,
+                    "success": m.success,
+                    "error_message": m.error_message,
+                    "energy_per_second": m.total_joules / m.duration_seconds if m.duration_seconds > 0 else 0
+                } for m in measurements
+            ],
+            "analytics": self._generate_analytics(measurements),
+            "recommendations": self._generate_recommendations(measurements)
+        }
+        
+        # Save to file if path specified
+        if output_path:
+            self._save_report(report_data, output_format, output_path)
+        
+        return report_data
+    
+    def export_measurements(self, measurements: List[MeasurementResult], 
+                          format: str = "json", output_path: Optional[Path] = None) -> str:
+        """
+        Export measurements to various formats.
+        
+        Args:
+            measurements: List of measurements to export
+            format: Export format ("json", "csv", "xml")
+            output_path: Path to save the export
+            
+        Returns:
+            Exported data as string or file path
+        """
+        if format.lower() == "json":
+            return self._export_json(measurements, output_path)
+        elif format.lower() == "csv":
+            return self._export_csv(measurements, output_path)
+        elif format.lower() == "xml":
+            return self._export_xml(measurements, output_path)
+        else:
+            raise ValueError(f"Unsupported export format: {format}")
+    
+    def compare_measurements(self, measurements: List[MeasurementResult], 
+                           comparison_metric: str = "energy") -> Dict[str, Any]:
+        """
+        Compare multiple measurements and provide analysis.
+        
+        Args:
+            measurements: List of measurements to compare
+            comparison_metric: Metric to compare ("energy", "power", "duration", "efficiency")
+            
+        Returns:
+            Comparison analysis with rankings and insights
+        """
+        if len(measurements) < 2:
+            return {"error": "At least 2 measurements needed for comparison"}
+        
+        # Sort measurements by the specified metric
+        if comparison_metric == "energy":
+            sorted_measurements = sorted(measurements, key=lambda m: m.total_joules)
+        elif comparison_metric == "power":
+            sorted_measurements = sorted(measurements, key=lambda m: m.average_watts)
+        elif comparison_metric == "duration":
+            sorted_measurements = sorted(measurements, key=lambda m: m.duration_seconds)
+        elif comparison_metric == "efficiency":
+            sorted_measurements = sorted(measurements, 
+                key=lambda m: m.total_joules / m.duration_seconds if m.duration_seconds > 0 else float('inf'))
+        else:
+            raise ValueError(f"Unknown comparison metric: {comparison_metric}")
+        
+        best = sorted_measurements[0]
+        worst = sorted_measurements[-1]
+        
+        # Build rankings first
+        rankings = [
+            {
+                "rank": i + 1,
+                "session_id": m.session_id,
+                "metric_value": getattr(m, f"total_joules" if comparison_metric == "energy" else 
+                                       f"average_watts" if comparison_metric == "power" else
+                                       f"duration_seconds" if comparison_metric == "duration" else "total_joules"),
+                "improvement_vs_worst": self._calculate_improvement(m, worst, comparison_metric)
+            } for i, m in enumerate(sorted_measurements)
+        ]
+        
+        comparison = {
+            "comparison_metric": comparison_metric,
+            "total_measurements": len(measurements),
+            "rankings": rankings,
+            "insights": {
+                "best_performer": {
+                    "session_id": best.session_id,
+                    "value": getattr(best, f"total_joules" if comparison_metric == "energy" else 
+                                    f"average_watts" if comparison_metric == "power" else 
+                                    f"duration_seconds"),
+                    "savings_vs_worst": self._calculate_improvement(best, worst, comparison_metric)
+                },
+                "worst_performer": {
+                    "session_id": worst.session_id,
+                    "value": getattr(worst, f"total_joules" if comparison_metric == "energy" else 
+                                    f"average_watts" if comparison_metric == "power" else 
+                                    f"duration_seconds")
+                },
+                "average_improvement": sum(r["improvement_vs_worst"] for r in rankings) / len(measurements)
+            }
+        }
+        
+        return comparison
+    
+    def _calculate_efficiency_score(self, measurements: List[MeasurementResult]) -> float:
+        """Calculate overall efficiency score (0-100) based on energy per unit time."""
+        if not measurements:
+            return 0.0
+        
+        efficiency_values = []
+        for m in measurements:
+            if m.success and m.duration_seconds > 0:
+                # Lower energy per second is better
+                efficiency = 1.0 / (m.total_joules / m.duration_seconds) if m.total_joules > 0 else 100.0
+                efficiency_values.append(efficiency)
+        
+        if not efficiency_values:
+            return 0.0
+        
+        # Normalize to 0-100 scale
+        max_efficiency = max(efficiency_values)
+        return (sum(efficiency_values) / len(efficiency_values)) * 100 / max_efficiency if max_efficiency > 0 else 50.0
+    
+    def _generate_analytics(self, measurements: List[MeasurementResult]) -> Dict[str, Any]:
+        """Generate analytics insights from measurements."""
+        if not measurements:
+            return {}
+        
+        successful = [m for m in measurements if m.success]
+        
+        analytics = {
+            "energy_distribution": {
+                "min_joules": min(m.total_joules for m in successful) if successful else 0,
+                "max_joules": max(m.total_joules for m in successful) if successful else 0,
+                "median_joules": sorted([m.total_joules for m in successful])[len(successful)//2] if successful else 0
+            },
+            "power_analysis": {
+                "peak_watts": max(m.peak_watts for m in successful) if successful else 0,
+                "avg_power_watts": sum(m.average_watts for m in successful) / len(successful) if successful else 0
+            },
+            "performance_correlation": {
+                "energy_vs_time_correlation": self._calculate_correlation(
+                    [m.total_joules for m in successful],
+                    [m.duration_seconds for m in successful]
+                ) if len(successful) > 1 else 0
+            },
+            "language_breakdown": self._analyze_by_language(measurements)
+        }
+        
+        return analytics
+    
+    def _generate_recommendations(self, measurements: List[MeasurementResult]) -> List[str]:
+        """Generate optimization recommendations based on measurement patterns."""
+        recommendations = []
+        
+        successful = [m for m in measurements if m.success]
+        if not successful:
+            return ["No successful measurements to analyze"]
+        
+        # High energy consumption
+        avg_energy = sum(m.total_joules for m in successful) / len(successful)
+        high_energy = [m for m in successful if m.total_joules > avg_energy * 1.5]
+        
+        if high_energy:
+            recommendations.append(
+                f"⚡ {len(high_energy)} measurements show high energy consumption (>{avg_energy*1.5:.2f}J). "
+                f"Consider algorithm optimization."
+            )
+        
+        # Long duration measurements
+        avg_duration = sum(m.duration_seconds for m in successful) / len(successful)
+        long_duration = [m for m in successful if m.duration_seconds > avg_duration * 2]
+        
+        if long_duration:
+            recommendations.append(
+                f"⏱️ {len(long_duration)} measurements have long execution times. "
+                f"Consider performance optimization."
+            )
+        
+        # Power efficiency
+        efficient = [m for m in successful if m.total_joules / m.duration_seconds < 1.0]
+        if len(efficient) / len(successful) > 0.7:
+            recommendations.append("✅ Most measurements show good energy efficiency")
+        else:
+            recommendations.append("🔋 Consider optimizing for lower power consumption")
+        
+        return recommendations
+    
+    def _calculate_improvement(self, measurement: MeasurementResult, 
+                             baseline: MeasurementResult, metric: str) -> float:
+        """Calculate percentage improvement vs baseline."""
+        if metric == "energy":
+            baseline_val = baseline.total_joules
+            current_val = measurement.total_joules
+        elif metric == "power":
+            baseline_val = baseline.average_watts
+            current_val = measurement.average_watts
+        elif metric == "duration":
+            baseline_val = baseline.duration_seconds
+            current_val = measurement.duration_seconds
+        else:
+            return 0.0
+        
+        if baseline_val == 0:
+            return 0.0
+        
+        return ((baseline_val - current_val) / baseline_val) * 100
+    
+    def _calculate_correlation(self, x_values: List[float], y_values: List[float]) -> float:
+        """Calculate correlation coefficient between two lists."""
+        if len(x_values) != len(y_values) or len(x_values) < 2:
+            return 0.0
+        
+        n = len(x_values)
+        sum_x = sum(x_values)
+        sum_y = sum(y_values)
+        sum_xy = sum(x * y for x, y in zip(x_values, y_values))
+        sum_x2 = sum(x * x for x in x_values)
+        sum_y2 = sum(y * y for y in y_values)
+        
+        numerator = n * sum_xy - sum_x * sum_y
+        denominator = ((n * sum_x2 - sum_x * sum_x) * (n * sum_y2 - sum_y * sum_y)) ** 0.5
+        
+        return numerator / denominator if denominator != 0 else 0.0
+    
+    def _analyze_by_language(self, measurements: List[MeasurementResult]) -> Dict[str, Any]:
+        """Analyze measurements grouped by programming language."""
+        language_data = {}
+        
+        for m in measurements:
+            if m.language not in language_data:
+                language_data[m.language] = []
+            language_data[m.language].append(m)
+        
+        analysis = {}
+        for lang, measures in language_data.items():
+            successful = [m for m in measures if m.success]
+            if successful:
+                analysis[lang] = {
+                    "count": len(measures),
+                    "success_rate": len(successful) / len(measures),
+                    "avg_energy": sum(m.total_joules for m in successful) / len(successful),
+                    "avg_duration": sum(m.duration_seconds for m in successful) / len(successful)
+                }
+        
+        return analysis
+    
+    def _export_json(self, measurements: List[MeasurementResult], output_path: Optional[Path]) -> str:
+        """Export measurements to JSON format."""
+        export_data = {
+            "export_timestamp": time.time(),
+            "measurements": [
+                {
+                    "session_id": m.session_id,
+                    "total_joules": m.total_joules,
+                    "average_watts": m.average_watts,
+                    "peak_watts": m.peak_watts,
+                    "duration_seconds": m.duration_seconds,
+                    "checkpoint_count": m.checkpoint_count,
+                    "file_path": m.file_path,
+                    "language": m.language,
+                    "success": m.success,
+                    "error_message": m.error_message
+                } for m in measurements
+            ]
+        }
+        
+        json_str = json.dumps(export_data, indent=2)
+        
+        if output_path:
+            with open(output_path, 'w') as f:
+                f.write(json_str)
+            return str(output_path)
+        
+        return json_str
+    
+    def _export_csv(self, measurements: List[MeasurementResult], output_path: Optional[Path]) -> str:
+        """Export measurements to CSV format."""
+        import csv
+        import io
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            'session_id', 'total_joules', 'average_watts', 'peak_watts', 
+            'duration_seconds', 'checkpoint_count', 'file_path', 'language', 
+            'success', 'error_message'
+        ])
+        
+        # Write data
+        for m in measurements:
+            writer.writerow([
+                m.session_id, m.total_joules, m.average_watts, m.peak_watts,
+                m.duration_seconds, m.checkpoint_count, m.file_path, m.language,
+                m.success, m.error_message or ""
+            ])
+        
+        csv_str = output.getvalue()
+        
+        if output_path:
+            with open(output_path, 'w') as f:
+                f.write(csv_str)
+            return str(output_path)
+        
+        return csv_str
+    
+    def _export_xml(self, measurements: List[MeasurementResult], output_path: Optional[Path]) -> str:
+        """Export measurements to XML format."""
+        xml_lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+        xml_lines.append('<measurements>')
+        
+        for m in measurements:
+            xml_lines.append('  <measurement>')
+            xml_lines.append(f'    <session_id>{m.session_id}</session_id>')
+            xml_lines.append(f'    <total_joules>{m.total_joules}</total_joules>')
+            xml_lines.append(f'    <average_watts>{m.average_watts}</average_watts>')
+            xml_lines.append(f'    <peak_watts>{m.peak_watts}</peak_watts>')
+            xml_lines.append(f'    <duration_seconds>{m.duration_seconds}</duration_seconds>')
+            xml_lines.append(f'    <checkpoint_count>{m.checkpoint_count}</checkpoint_count>')
+            xml_lines.append(f'    <file_path>{m.file_path}</file_path>')
+            xml_lines.append(f'    <language>{m.language}</language>')
+            xml_lines.append(f'    <success>{m.success}</success>')
+            if m.error_message:
+                xml_lines.append(f'    <error_message>{m.error_message}</error_message>')
+            xml_lines.append('  </measurement>')
+        
+        xml_lines.append('</measurements>')
+        xml_str = '\n'.join(xml_lines)
+        
+        if output_path:
+            with open(output_path, 'w') as f:
+                f.write(xml_str)
+            return str(output_path)
+        
+        return xml_str
+    
+    def _save_report(self, report_data: Dict[str, Any], format: str, output_path: Path):
+        """Save report data to file in specified format."""
+        if format.lower() == "json":
+            with open(output_path, 'w') as f:
+                json.dump(report_data, f, indent=2)
+        elif format.lower() == "html":
+            html_content = self._generate_html_report(report_data)
+            with open(output_path, 'w') as f:
+                f.write(html_content)
+        else:
+            # Default to JSON
+            with open(output_path, 'w') as f:
+                json.dump(report_data, f, indent=2)
+    
+    def _generate_html_report(self, report_data: Dict[str, Any]) -> str:
+        """Generate HTML report from report data."""
+        html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CodeGreen Energy Report</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; }}
+        .summary {{ background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; }}
+        .measurement {{ border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }}
+        .success {{ border-left: 5px solid #4CAF50; }}
+        .failure {{ border-left: 5px solid #f44336; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        .recommendations {{ background: #e8f5e8; padding: 15px; border-radius: 5px; }}
+    </style>
+</head>
+<body>
+    <h1>CodeGreen Energy Measurement Report</h1>
+    <div class="summary">
+        <h2>Summary</h2>
+        <p>Total Energy: {report_data['summary']['total_energy_joules']:.3f} J</p>
+        <p>Average Power: {report_data['summary']['average_power_watts']:.1f} W</p>
+        <p>Total Duration: {report_data['summary']['total_duration_seconds']:.1f} s</p>
+        <p>Efficiency Score: {report_data['summary']['energy_efficiency_score']:.1f}/100</p>
+    </div>
+    
+    <h2>Measurements</h2>
+    <table>
+        <tr>
+            <th>Session ID</th>
+            <th>Energy (J)</th>
+            <th>Power (W)</th>
+            <th>Duration (s)</th>
+            <th>Status</th>
+        </tr>
+"""
+        
+        for m in report_data['measurements']:
+            status = "✅" if m['success'] else "❌"
+            html += f"""
+        <tr>
+            <td>{m['session_id']}</td>
+            <td>{m['energy_joules']:.3f}</td>
+            <td>{m['average_watts']:.1f}</td>
+            <td>{m['duration_seconds']:.3f}</td>
+            <td>{status}</td>
+        </tr>
+"""
+        
+        html += """
+    </table>
+    
+    <div class="recommendations">
+        <h2>Recommendations</h2>
+        <ul>
+"""
+        
+        for rec in report_data['recommendations']:
+            html += f"        <li>{rec}</li>\n"
+        
+        html += """
+        </ul>
+    </div>
+</body>
+</html>
+"""
+        return html

@@ -110,6 +110,7 @@ set(NEMB_SOURCES
     core/src/nemb/core/measurement_coordinator.cpp
     core/src/nemb/hal/counter_manager.cpp
     core/src/nemb/utils/precision_timer.cpp
+    core/src/nemb/utils/non_blocking_file_reader.cpp
     core/src/nemb/drivers/intel_rapl_provider.cpp
     core/src/nemb/drivers/nvidia_gpu_provider.cpp
     core/src/nemb/drivers/amd_gpu_provider.cpp

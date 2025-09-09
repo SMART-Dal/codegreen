@@ -1,0 +1,208 @@
+{
+  "name": "codegreen-energy-analyzer",
+  "displayName": "CodeGreen Energy Analyzer",
+  "description": "Visualize energy consumption hotspots in your code with CodeGreen integration",
+  "version": "0.1.0",
+  "publisher": "codegreen",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other",
+    "Linters",
+    "Debuggers"
+  ],
+  "keywords": [
+    "energy",
+    "performance",
+    "optimization",
+    "sustainability",
+    "green-coding"
+  ],
+  "activationEvents": [
+    "onCommand:codegreen.analyzeEnergy",
+    "onLanguage:python",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:java",
+    "onLanguage:cpp",
+    "onLanguage:c"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codegreen.analyzeEnergy",
+        "title": "Analyze Energy Consumption",
+        "category": "CodeGreen",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "codegreen.clearHotspots",
+        "title": "Clear Energy Hotspots",
+        "category": "CodeGreen",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codegreen.showReport",
+        "title": "Show Energy Report",
+        "category": "CodeGreen",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codegreen.toggleAutoAnalysis",
+        "title": "Toggle Auto Analysis",
+        "category": "CodeGreen",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codegreen.showEnergyPanel",
+        "title": "Show Energy Panel",
+        "category": "CodeGreen",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "codegreen.aiOptimize",
+        "title": "AI Optimize Energy",
+        "category": "CodeGreen",
+        "icon": "$(robot)"
+      },
+      {
+        "command": "codegreen.predictEnergy",
+        "title": "Predict Energy Impact",
+        "category": "CodeGreen",
+        "icon": "$(graph-line)"
+      }
+    ],
+    "configuration": {
+      "title": "CodeGreen",
+      "properties": {
+        "codegreen.autoAnalysis": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically analyze energy consumption on file save"
+        },
+        "codegreen.energyThreshold": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Energy threshold (in Joules) for highlighting hotspots"
+        },
+        "codegreen.hotspotIcon": {
+          "type": "string",
+          "default": "flame",
+          "enum": [
+            "flame",
+            "zap",
+            "alert",
+            "warning"
+          ],
+          "description": "Icon to use for energy hotspots"
+        },
+        "codegreen.showTooltips": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show energy consumption tooltips on hover"
+        },
+        "codegreen.codegreenPath": {
+          "type": "string",
+          "default": "codegreen",
+          "description": "Path to the CodeGreen executable"
+        },
+        "codegreen.uiStyle": {
+          "type": "string",
+          "default": "subtle",
+          "enum": ["subtle", "prominent", "minimal"],
+          "description": "UI style for energy indicators"
+        },
+        "codegreen.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show energy metrics in status bar"
+        },
+        "codegreen.enableAIOptimization": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered optimization suggestions"
+        },
+        "codegreen.enablePredictiveModeling": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable predictive energy modeling"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codegreen.analyzeEnergy",
+          "when": "editorHasSelection",
+          "group": "codegreen"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codegreen.analyzeEnergy"
+        },
+        {
+          "command": "codegreen.clearHotspots"
+        },
+        {
+          "command": "codegreen.showReport"
+        },
+        {
+          "command": "codegreen.toggleAutoAnalysis"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "codegreen.analyzeEnergy",
+          "when": "resourceExtname == .py || resourceExtname == .js || resourceExtname == .ts || resourceExtname == .java || resourceExtname == .cpp || resourceExtname == .c",
+          "group": "navigation"
+        }
+      ]
+    },
+    "views": {
+      "codegreen": [
+        {
+          "id": "codegreenEnergyView",
+          "name": "Energy Analysis"
+        }
+      ],
+      "codegreen-panel": [
+        {
+          "id": "codegreenReportView",
+          "name": "Energy Report"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codegreen",
+          "title": "CodeGreen",
+          "icon": "$(zap)"
+        }
+      ],
+      "panel": [
+        {
+          "id": "codegreen-panel",
+          "title": "CodeGreen Energy Report",
+          "icon": "$(graph)"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "echo 'Extension ready'",
+    "test": "echo 'Tests not implemented yet'"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "10.x",
+    "@types/mocha": "^5.2.7",
+    "@types/glob": "^7.2.0",
+    "glob": "^7.2.0",
+    "mocha": "^5.2.0",
+    "typescript": "^3.9.10"
+  }
+}
