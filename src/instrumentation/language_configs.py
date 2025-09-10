@@ -197,6 +197,16 @@ class LanguageConfigManager:
                         "mode": "inside_end",
                         "find_last_statement": True
                     },
+                    "class_enter": {
+                        "mode": "inside_start",
+                        "find_first_statement": True,
+                        "skip_docstrings": True,
+                        "skip_comments": True
+                    },
+                    "class_exit": {
+                        "mode": "inside_end",
+                        "find_last_statement": True
+                    },
                     "before": {
                         "mode": "before"
                     },
@@ -311,6 +321,16 @@ class LanguageConfigManager:
                         "mode": "inside_end",
                         "find_last_statement": True
                     },
+                    "class_enter": {
+                        "mode": "inside_start",
+                        "find_first_statement": True,
+                        "skip_docstrings": False,
+                        "skip_comments": True
+                    },
+                    "class_exit": {
+                        "mode": "inside_end",
+                        "find_last_statement": True
+                    },
                     "before": {
                         "mode": "before"
                     },
@@ -418,6 +438,16 @@ class LanguageConfigManager:
                         "skip_comments": True
                     },
                     "function_exit": {
+                        "mode": "inside_end",
+                        "find_last_statement": True
+                    },
+                    "class_enter": {
+                        "mode": "inside_start",
+                        "find_first_statement": True,
+                        "skip_docstrings": False,
+                        "skip_comments": True
+                    },
+                    "class_exit": {
                         "mode": "inside_end",
                         "find_last_statement": True
                     },
@@ -532,6 +562,16 @@ class LanguageConfigManager:
                         "skip_comments": True
                     },
                     "function_exit": {
+                        "mode": "inside_end",
+                        "find_last_statement": True
+                    },
+                    "class_enter": {
+                        "mode": "inside_start",
+                        "find_first_statement": True,
+                        "skip_docstrings": False,
+                        "skip_comments": True
+                    },
+                    "class_exit": {
                         "mode": "inside_end",
                         "find_last_statement": True
                     },
@@ -651,6 +691,16 @@ class LanguageConfigManager:
                         "skip_comments": True
                     },
                     "function_exit": {
+                        "mode": "inside_end",
+                        "find_last_statement": True
+                    },
+                    "class_enter": {
+                        "mode": "inside_start",
+                        "find_first_statement": True,
+                        "skip_docstrings": False,
+                        "skip_comments": True
+                    },
+                    "class_exit": {
                         "mode": "inside_end",
                         "find_last_statement": True
                     },

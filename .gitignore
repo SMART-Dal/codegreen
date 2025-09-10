@@ -74,3 +74,8 @@ reports*/
 # Backup files
 *.bak
 *.backup
+
+# ./codegreen
+bin/codegreen
+./codegreen/
+./codegreen/lib/pkgconfig/tree-sitter.pc

@@ -1630,8 +1630,8 @@ class LanguageEngine:
         if 'nested_loops' in patterns:
             import re
             nested_loops = len(re.findall(patterns['nested_loops'], source_code, re.MULTILINE))
-        if nested_loops > 0:
-            suggestions.append(f"Found {nested_loops} nested loops - consider algorithmic optimizations")
+            if nested_loops > 0:
+                suggestions.append(f"Found {nested_loops} nested loops - consider algorithmic optimizations")
         
         # Language-agnostic optimizations based on patterns
         for pattern_name, pattern in patterns.items():
@@ -1687,40 +1687,59 @@ class LanguageEngine:
         in_docstring = False
         docstring_marker = None
         
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            
-            # Handle shebang
-            if stripped.startswith('#!'):
-                insert_line = i + 1
-                continue
-                
-            # Handle docstring start
-            if not in_docstring and (stripped.startswith('"""') or stripped.startswith("'''")):
-                docstring_marker = stripped[:3]
-                # Check if single-line docstring
-                if stripped.count(docstring_marker) >= 2 and len(stripped) > 3:
+        # Language-specific handling
+        if language in ['c', 'cpp']:
+            # For C/C++, insert after existing #include statements
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith('#include'):
                     insert_line = i + 1
-                    continue
-                else:
-                    in_docstring = True
+                elif stripped and not stripped.startswith('#'):
+                    break
+        elif language == 'java':
+            # For Java, insert after package/import statements
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith('package ') or stripped.startswith('import '):
+                    insert_line = i + 1
+                elif stripped and not stripped.startswith('//'):
+                    break
+        else:
+            # For Python and other languages, use the original logic
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                
+                # Handle shebang
+                if stripped.startswith('#!'):
+                    insert_line = i + 1
                     continue
                     
-            # Handle docstring end
-            if in_docstring and docstring_marker and stripped.endswith(docstring_marker):
-                in_docstring = False
-                insert_line = i + 1
-                continue
-                
-            # Skip empty lines and comments at start
-            if not stripped or stripped.startswith('#'):
-                if insert_line <= i:
+                # Handle docstring start
+                if not in_docstring and (stripped.startswith('"""') or stripped.startswith("'''")):
+                    docstring_marker = stripped[:3]
+                    # Check if single-line docstring
+                    if stripped.count(docstring_marker) >= 2 and len(stripped) > 3:
+                        insert_line = i + 1
+                        continue
+                    else:
+                        in_docstring = True
+                        continue
+                        
+                # Handle docstring end
+                if in_docstring and docstring_marker and stripped.endswith(docstring_marker):
+                    in_docstring = False
                     insert_line = i + 1
-                continue
-                
-            # Found first code line
-            if not in_docstring:
-                break
+                    continue
+                    
+                # Skip empty lines and comments at start
+                if not stripped or stripped.startswith('#'):
+                    if insert_line <= i:
+                        insert_line = i + 1
+                    continue
+                    
+                # Found first code line
+                if not in_docstring:
+                    break
         
         # Convert line number to byte offset
         if insert_line >= len(lines):
@@ -1788,13 +1807,24 @@ class LanguageEngine:
             
             # Add instrumentation for each point
             successful_instrumentations = 0
-            for point in sorted_points:
+            for i, point in enumerate(sorted_points):
+                logger.debug(f"🔧 Processing instrumentation point {i+1}/{len(sorted_points)}: {point.type} '{point.name}'")
+                logger.debug(f"   Point details: line={point.line}, column={point.column}, mode={point.insertion_mode}")
+                logger.debug(f"   Byte offset: {getattr(point, 'byte_offset', 'None')}")
+                logger.debug(f"   Node info: {getattr(point, 'node', 'None')}")
+                
                 # Generate instrumentation code
                 instrumentation_code = self._generate_instrumentation_code(point, language)
                 if instrumentation_code:
+                    logger.debug(f"   Generated instrumentation: '{instrumentation_code}'")
                     success = rewriter.add_instrumentation(point, instrumentation_code)
                     if success:
                         successful_instrumentations += 1
+                        logger.debug(f"   ✅ Successfully added instrumentation")
+                    else:
+                        logger.warning(f"   ❌ Failed to add instrumentation")
+                else:
+                    logger.warning(f"   ❌ No instrumentation code generated")
             
             # Apply all edits using proper tree-sitter workflow
             if successful_instrumentations > 0:
