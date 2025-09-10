@@ -36,7 +36,8 @@ try:
                 # Output the instrumented code (engine.instrument_code returns string, not result object)
                 print(instrumented_code)
             else:
-                print(f"ERROR: Analysis failed: {analysis_result.error_message}", file=sys.stderr)
+                error_msg = analysis_result.error if analysis_result.error else "Unknown analysis error"
+                print(f"ERROR: Analysis failed: {error_msg}", file=sys.stderr)
                 print(source_code)  # Output original code as fallback
                 sys.exit(1)
                 

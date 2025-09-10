@@ -246,18 +246,22 @@ class LanguageConfigManager:
             },
             query_config={
                 "capture_mapping": {
-                    "function.definition": "function_enter",
-                    "function.name": "function_enter",
-                    "class.definition": "class_enter",
-                    "class.name": "class_enter",
-                    "return.statement": "function_exit",
+                    "local.definition.function": "function_enter",
+                    "function": "function_enter",
+                    "local.definition.type": "class_enter",
+                    "type.definition": "class_enter",
+                    "keyword.return": "function_exit",
+                    "return": "function_exit",
                     "loop.for": "loop_start",
                     "loop.while": "loop_start"
                 },
                 "priority_order": [
-                    "function.definition",
-                    "class.definition", 
-                    "return.statement",
+                    "local.definition.function",
+                    "function",
+                    "local.definition.type",
+                    "type.definition",
+                    "keyword.return",
+                    "return",
                     "loop.for",
                     "loop.while"
                 ]
@@ -507,7 +511,6 @@ class LanguageConfigManager:
             query_config={
                 "capture_mapping": {
                     "function.definition": "function_enter",
-                    "function.name": "function_enter",
                     "class.definition": "class_enter",
                     "class.name": "class_enter",
                     "return.statement": "function_exit",
@@ -639,9 +642,7 @@ class LanguageConfigManager:
             query_config={
                 "capture_mapping": {
                     "method.definition": "function_enter",
-                    "method.name": "function_enter",
                     "constructor.definition": "function_enter",
-                    "constructor.name": "function_enter",
                     "class.definition": "class_enter",
                     "class.name": "class_enter",
                     "return.statement": "function_exit",
@@ -776,7 +777,6 @@ class LanguageConfigManager:
             query_config={
                 "capture_mapping": {
                     "function.definition": "function_enter",
-                    "function.name": "function_enter",
                     "class.definition": "class_enter",
                     "class.name": "class_enter",
                     "return.statement": "function_exit",

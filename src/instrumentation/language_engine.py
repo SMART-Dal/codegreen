@@ -55,6 +55,7 @@ class InstrumentationPoint:
     node_end_byte: Optional[int] = None  # AST node end byte
     insertion_mode: str = 'before'  # 'before', 'after', 'inside_start', 'inside_end'
     node: Optional['Node'] = None  # Tree-sitter node for precise AST-based operations
+    priority: int = 999  # Priority for deduplication (lower = higher priority)
     
     @property
     def is_energy_intensive(self) -> bool:
@@ -709,9 +710,22 @@ class LanguageEngine:
                         new_total = sum(len(nodes) for nodes in captures.values())
                         logger.warning(f"   Truncation result: {original_count} -> {new_total} captures")
                     
-                    # Get capture mapping for this language (use ExternalQueryLoader's CAPTURE_MAP)
-                    logger.debug(f"   Using CAPTURE_MAP with {len(self._external_query_loader.CAPTURE_MAP)} mappings")
-                    capture_map = self._external_query_loader.CAPTURE_MAP
+                    # Get capture mapping for this language from configuration
+                    config = self._config_manager.get_config(language)
+                    if config and hasattr(config, 'query_config') and 'capture_mapping' in config.query_config:
+                        capture_map = {}
+                        for capture_name, point_type in config.query_config['capture_mapping'].items():
+                            capture_map[capture_name] = {
+                                'type': point_type,
+                                'subtype': point_type.split('_')[1] if '_' in point_type else point_type,
+                                'insertion_mode': 'inside_start' if 'enter' in point_type else 'before',
+                                'priority': 1
+                            }
+                        logger.debug(f"   Using language-specific capture mapping with {len(capture_map)} mappings")
+                    else:
+                        # Fallback to ExternalQueryLoader's CAPTURE_MAP
+                        logger.debug(f"   Using fallback CAPTURE_MAP with {len(self._external_query_loader.CAPTURE_MAP)} mappings")
+                        capture_map = self._external_query_loader.CAPTURE_MAP
                     
                     # Process each capture, handling duplicates
                     processed_nodes = set()  # Track processed nodes to avoid duplicates
@@ -757,6 +771,14 @@ class LanguageEngine:
                             logger.debug(f"   ⏭️  Skipping unmapped capture '{capture_name}' ({len(node_list)} nodes)")
                     
                     logger.info(f"📊 Query '{query_name}' processing summary: {points_created} points created, {points_skipped} duplicates skipped")
+                    
+                    # Apply immediate deduplication to prevent accumulation of duplicates
+                    if points_created > 0:
+                        points_before = len(points)
+                        points = self._deduplicate_checkpoints(points)
+                        points_after = len(points)
+                        if points_before != points_after:
+                            logger.debug(f"   🔄 Immediate deduplication: {points_before} -> {points_after} points")
                             
                 except Exception as e:
                     # Enhanced error logging for query failures
@@ -774,6 +796,15 @@ class LanguageEngine:
                     
                     logger.warning(f"⚠️  FALLBACK: Continuing with other queries despite '{query_name}' failure")
             
+            # Final comprehensive deduplication
+            points_before = len(points)
+            points = self._deduplicate_checkpoints(points)
+            points_after = len(points)
+            
+            if points_before != points_after:
+                logger.info(f"🔄 Final deduplication: {points_before} -> {points_after} points")
+            
+            logger.info(f"🎯 Tree-sitter analysis complete: {len(points)} instrumentation points found")
             return points
     
     def _analyze_with_regex(self, source_code: str, language: str) -> List[InstrumentationPoint]:
@@ -892,7 +923,7 @@ class LanguageEngine:
             global_config = self._config_manager.get_global_config()
             line_offset = global_config.get('line_offset', 1)
             
-            # Create the instrumentation point
+            # Create the instrumentation point with priority
             point = InstrumentationPoint(
                 id=f"{capture_config['type']}_{name}_{insertion_point[0] + line_offset}_{insertion_point[1] + line_offset}",
                 type=capture_config['type'],
@@ -906,7 +937,8 @@ class LanguageEngine:
                 node_start_byte=node.start_byte,
                 node_end_byte=node.end_byte,
                 insertion_mode=capture_config['insertion_mode'],
-                node=node  # Add the node for AST-based operations
+                node=node,  # Add the node for AST-based operations
+                priority=capture_config.get('priority', 999)  # Add priority for deduplication
             )
             
             return point
@@ -1731,14 +1763,15 @@ class LanguageEngine:
         in_docstring = False
         docstring_marker = None
         
+        # Get configurable line offset (needed for all languages)
+        global_config = self._config_manager.get_global_config()
+        line_offset = global_config.get('line_offset', 1)
+        
         # Language-specific handling
         if language in ['c', 'cpp']:
             # For C/C++, insert after existing #include statements
             for i, line in enumerate(lines):
                 stripped = line.strip()
-                # Get configurable line offset
-                global_config = self._config_manager.get_global_config()
-                line_offset = global_config.get('line_offset', 1)
                 
                 if stripped.startswith('#include'):
                     insert_line = i + line_offset
@@ -1877,11 +1910,16 @@ class LanguageEngine:
             # Apply all edits using proper tree-sitter workflow
             if successful_instrumentations > 0:
                 instrumented_code = rewriter.apply_edits()
-                logger.info(f"AST-based instrumentation added {successful_instrumentations} checkpoints to {language} code")
-                return instrumented_code
+                # Check if the instrumentation actually changed the code
+                if instrumented_code != source_code:
+                    logger.info(f"AST-based instrumentation added {successful_instrumentations} checkpoints to {language} code")
+                    return instrumented_code
+                else:
+                    logger.warning(f"AST-based instrumentation made no changes to {language} code, falling back to legacy instrumentation")
+                    return self._instrument_code_legacy(source_code, points, language)
             else:
-                logger.warning(f"No successful instrumentations for {language}, returning original code")
-                return source_code
+                logger.warning(f"No successful instrumentations for {language}, falling back to legacy instrumentation")
+                return self._instrument_code_legacy(source_code, points, language)
                 
         except Exception as e:
             logger.warning(f"⚠️  FALLBACK: AST-based instrumentation failed for {language}: {e}, using legacy instrumentation instead")
@@ -2159,6 +2197,29 @@ class LanguageEngine:
         config = self._config_manager.get_instrumentation_config(language)
         comment_prefix = config.get('comment_prefix', '//') if config else '//'
         
+        # Add import statement first if we have points to instrument
+        if points:
+            import_statement = self._language_agnostic_generator.get_import_statement(language)
+            if import_statement:
+                # Find the correct insertion point for import (after shebang/docstring)
+                import_offset = self._find_import_insertion_point(source_code, language)
+                if import_offset is not None:
+                    # Convert byte offset to line number
+                    import_line = source_code[:import_offset].count('\n')
+                    # Insert the import statement
+                    lines.insert(import_line, import_statement)
+                    
+                    # Adjust line numbers for all points after the import
+                    for point in points:
+                        if point.line > import_line:
+                            point.line += 1
+                else:
+                    # Fallback: insert at the beginning
+                    lines.insert(0, import_statement)
+                    # Adjust line numbers for all points
+                    for point in points:
+                        point.line += 1
+        
         sorted_points = sorted(points, key=lambda p: p.line, reverse=True)
         
         for point in sorted_points:
@@ -2167,6 +2228,15 @@ class LanguageEngine:
                 instrumentation_code = self._generate_instrumentation_code(point, language)
                 if instrumentation_code:
                     insert_index = point.line - 1
+                    
+                    # Add proper indentation for Python
+                    if language == 'python' and point.type in ['function_enter', 'function_exit']:
+                        # Find the indentation of the target line
+                        target_line = lines[insert_index] if insert_index < len(lines) else ""
+                        indent = len(target_line) - len(target_line.lstrip())
+                        indent_str = ' ' * indent
+                        instrumentation_code = indent_str + instrumentation_code.strip()
+                    
                     lines.insert(insert_index, instrumentation_code)
         
         return '\n'.join(lines)
@@ -2274,39 +2344,179 @@ class LanguageEngine:
     
     def _deduplicate_checkpoints(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
         """
-        Remove duplicate checkpoints using optimized O(n log n) algorithm.
+        Robust multi-level deduplication system that works for all languages and complex code.
         
-        Two checkpoints are considered duplicates if they:
-        1. Have the same type and line number
-        2. Or have the same type, name, and are within 1 line of each other
+        This implements a comprehensive deduplication strategy:
+        1. Node-level deduplication (same AST node)
+        2. Position-level deduplication (same line/column)
+        3. Semantic-level deduplication (same function/class context)
+        4. Priority-based selection (prefer higher priority captures)
         """
         if not points:
             return []
         
-        # Sort points by (type, line, name) for efficient deduplication
-        sorted_points = sorted(points, key=lambda p: (p.type, p.line, p.name))
+        logger.debug(f"🔍 Starting robust deduplication of {len(points)} points")
         
+        # Level 1: Group points by semantic context (function/class name)
+        semantic_groups = {}
+        for point in points:
+            # Create semantic key based on context
+            semantic_key = self._create_semantic_key(point)
+            if semantic_key not in semantic_groups:
+                semantic_groups[semantic_key] = []
+            semantic_groups[semantic_key].append(point)
+        
+        logger.debug(f"   📊 Grouped into {len(semantic_groups)} semantic groups")
+        
+        # Level 2: Deduplicate within each semantic group
         deduplicated = []
-        seen_keys = set()
+        for semantic_key, group_points in semantic_groups.items():
+            if len(group_points) == 1:
+                # Single point, no deduplication needed
+                deduplicated.append(group_points[0])
+                continue
+            
+            logger.debug(f"   🔧 Deduplicating group '{semantic_key}' with {len(group_points)} points")
+            
+            # Sort by priority (lower number = higher priority)
+            group_points.sort(key=lambda p: getattr(p, 'priority', 999))
+            
+            # Apply multi-level deduplication within the group
+            group_deduplicated = self._deduplicate_within_group(group_points)
+            deduplicated.extend(group_deduplicated)
+            
+            logger.debug(f"   ✅ Group '{semantic_key}': {len(group_points)} -> {len(group_deduplicated)} points")
         
-        for point in sorted_points:
-            # Primary deduplication key
-            primary_key = (point.type, point.line, point.name)
+        logger.debug(f"🎯 Final deduplication result: {len(points)} -> {len(deduplicated)} points")
+        return deduplicated
+    
+    def _create_semantic_key(self, point: InstrumentationPoint) -> str:
+        """Create a semantic key for grouping related instrumentation points"""
+        # For function-related points, group by function name
+        if point.type in ['function_enter', 'function_exit']:
+            return f"function:{point.name}"
+        
+        # For class-related points, group by class name
+        elif point.type in ['class_enter', 'class_exit']:
+            return f"class:{point.name}"
+        
+        # For loop points, group by loop context
+        elif point.type in ['loop_start', 'loop_exit']:
+            return f"loop:{point.name}:{point.line}"
+        
+        # For other points, use type and name
+        else:
+            return f"{point.type}:{point.name}"
+    
+    def _deduplicate_within_group(self, group_points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Deduplicate points within a semantic group using multiple strategies"""
+        if not group_points:
+            return []
+        
+        # Strategy 1: Node-level deduplication (exact same AST node)
+        node_deduplicated = self._deduplicate_by_node(group_points)
+        
+        # Strategy 2: Position-level deduplication (same line/column)
+        position_deduplicated = self._deduplicate_by_position(node_deduplicated)
+        
+        # Strategy 3: Type-specific deduplication
+        final_deduplicated = self._deduplicate_by_type(position_deduplicated)
+        
+        return final_deduplicated
+    
+    def _deduplicate_by_node(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Remove points that reference the same AST node"""
+        seen_nodes = set()
+        deduplicated = []
+        
+        for point in points:
+            # Create node identifier from available attributes
+            node_id = None
             
-            # Alternative keys for nearby duplicates
-            nearby_keys = [
-                (point.type, point.line - 1, point.name),
-                (point.type, point.line + 1, point.name)
-            ]
+            # Try to get node position information
+            if hasattr(point, 'byte_offset') and point.byte_offset is not None:
+                node_id = f"byte_{point.byte_offset}"
+            elif hasattr(point, 'line') and hasattr(point, 'column'):
+                node_id = f"pos_{point.line}_{point.column}"
+            else:
+                # Fallback: use type and name
+                node_id = f"fallback_{point.type}_{point.name}_{point.line}"
             
-            # Check if this point or nearby duplicates already exist
-            if (primary_key not in seen_keys and 
-                not any(key in seen_keys for key in nearby_keys)):
-                
+            if node_id not in seen_nodes:
+                seen_nodes.add(node_id)
                 deduplicated.append(point)
-                seen_keys.add(primary_key)
+            else:
+                logger.debug(f"   ⏭️  Skipping duplicate node: {point.type} {point.name} at {point.line}:{point.column}")
         
         return deduplicated
+    
+    def _deduplicate_by_position(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Remove points at the same position, keeping the highest priority one"""
+        position_map = {}
+        
+        for point in points:
+            pos_key = (point.line, point.column)
+            priority = getattr(point, 'priority', 999)
+            
+            if pos_key not in position_map or priority < position_map[pos_key].priority:
+                position_map[pos_key] = point
+        
+        return list(position_map.values())
+    
+    def _deduplicate_by_type(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Type-specific deduplication rules"""
+        # Group by type
+        type_groups = {}
+        for point in points:
+            if point.type not in type_groups:
+                type_groups[point.type] = []
+            type_groups[point.type].append(point)
+        
+        deduplicated = []
+        for point_type, type_points in type_groups.items():
+            if point_type == 'function_enter':
+                # For function_enter, keep only one per function
+                deduplicated.extend(self._deduplicate_function_entries(type_points))
+            elif point_type == 'function_exit':
+                # For function_exit, keep only one per function
+                deduplicated.extend(self._deduplicate_function_exits(type_points))
+            else:
+                # For other types, keep all (they might be legitimate)
+                deduplicated.extend(type_points)
+        
+        return deduplicated
+    
+    def _deduplicate_function_entries(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Deduplicate function entry points, keeping the best one per function"""
+        function_map = {}
+        
+        for point in points:
+            if point.name not in function_map:
+                function_map[point.name] = point
+            else:
+                # Keep the one with higher priority (lower number)
+                existing = function_map[point.name]
+                if getattr(point, 'priority', 999) < getattr(existing, 'priority', 999):
+                    function_map[point.name] = point
+                    logger.debug(f"   🔄 Replaced function_enter for '{point.name}' with higher priority")
+        
+        return list(function_map.values())
+    
+    def _deduplicate_function_exits(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Deduplicate function exit points, keeping the best one per function"""
+        function_map = {}
+        
+        for point in points:
+            if point.name not in function_map:
+                function_map[point.name] = point
+            else:
+                # Keep the one with higher priority (lower number)
+                existing = function_map[point.name]
+                if getattr(point, 'priority', 999) < getattr(existing, 'priority', 999):
+                    function_map[point.name] = point
+                    logger.debug(f"   🔄 Replaced function_exit for '{point.name}' with higher priority")
+        
+        return list(function_map.values())
     
     def _find_c_function_body_start(self, lines: List[str], func_line_index: int) -> int:
         """Find the first line inside a C function body (after opening brace)"""

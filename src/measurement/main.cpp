@@ -8,11 +8,31 @@
 #include <cmath>
 #include <iomanip>
 #include <fstream>
+#include <algorithm>
 #include "measurement_engine.hpp"
 #include "energy_monitor.hpp"
 #include "config.hpp"
 #include "nemb/codegreen_energy.hpp"
 // Legacy python.hpp removed - using Python AST-based system
+
+std::string detect_language_from_file(const std::string& file_path) {
+    std::filesystem::path path(file_path);
+    std::string extension = path.extension().string();
+    
+    if (extension == ".py" || extension == ".pyw" || extension == ".pyi") {
+        return "python";
+    } else if (extension == ".cpp" || extension == ".cxx" || extension == ".cc" || extension == ".hpp" || extension == ".h") {
+        return "cpp";
+    } else if (extension == ".c") {
+        return "c";
+    } else if (extension == ".java") {
+        return "java";
+    } else if (extension == ".js") {
+        return "javascript";
+    }
+    
+    return "";
+}
 
 void print_usage() {
     std::cout << "CodeGreen - Energy Monitoring and Code Optimization Tool" << std::endl;
@@ -21,11 +41,14 @@ void print_usage() {
     std::cout << "Usage:" << std::endl;
     std::cout << "  codegreen <language> <source_file> [args...]" << std::endl;
     std::cout << "  codegreen --init-sensors" << std::endl;
+    std::cout << "  codegreen --analyze <source_file> [options]" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  codegreen python3 main.py" << std::endl;
     std::cout << "  codegreen python3 script.py arg1 arg2" << std::endl;
     std::cout << "  codegreen --init-sensors" << std::endl;
+    std::cout << "  codegreen --analyze script.py --save-instrumented" << std::endl;
+    std::cout << "  codegreen --analyze script.py --output-dir ./analysis" << std::endl;
     std::cout << std::endl;
     std::cout << "Supported languages:" << std::endl;
     std::cout << "  python3, python - Python 3.x" << std::endl;
@@ -36,6 +59,13 @@ void print_usage() {
     std::cout << "  --init-sensors    Initialize and cache sensor configuration" << std::endl;
     std::cout << "  --measure-workload --duration=<sec> --workload=<type>" << std::endl;
     std::cout << "                    Measure energy consumption of specified workload" << std::endl;
+    std::cout << "  --analyze         Analyze and instrument code without execution" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Analysis Options:" << std::endl;
+    std::cout << "  --save-instrumented    Save instrumented code to current directory" << std::endl;
+    std::cout << "  --output-dir <dir>     Save instrumented code to specified directory" << std::endl;
+    std::cout << "  --no-cleanup          Keep temporary files (default: auto-cleanup)" << std::endl;
+    std::cout << "  --verbose             Show detailed instrumentation information" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -76,6 +106,120 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Failed to initialize sensors" << std::endl;
                 return 1;
             }
+        }
+        
+        // Check for analyze command
+        if (argc >= 3 && std::string(argv[1]) == "--analyze") {
+            std::string source_file = argv[2];
+            std::string output_dir = ".";
+            bool save_instrumented = false;
+            bool no_cleanup = false;
+            bool verbose = false;
+            
+            // Parse analysis options
+            for (int i = 3; i < argc; i++) {
+                std::string arg = argv[i];
+                if (arg == "--save-instrumented") {
+                    save_instrumented = true;
+                } else if (arg == "--no-cleanup") {
+                    no_cleanup = true;
+                } else if (arg == "--verbose") {
+                    verbose = true;
+                } else if (arg.find("--output-dir=") == 0) {
+                    output_dir = arg.substr(13);
+                } else if (i + 1 < argc && arg == "--output-dir") {
+                    output_dir = argv[++i];
+                }
+            }
+            
+            // Check if source file exists
+            if (!std::filesystem::exists(source_file)) {
+                std::cerr << "Error: Source file not found: " << source_file << std::endl;
+                return 1;
+            }
+            
+            std::cout << "CodeGreen - Code Analysis and Instrumentation" << std::endl;
+            std::cout << "Analyzing: " << source_file << std::endl;
+            
+            // Initialize measurement engine
+            auto measurement_engine = std::make_unique<codegreen::MeasurementEngine>();
+            
+            // Detect language from file extension
+            std::string language = detect_language_from_file(source_file);
+            if (language.empty()) {
+                std::cerr << "Error: Could not detect language for file: " << source_file << std::endl;
+                return 1;
+            }
+            
+            // Read source file
+            std::string source_code = measurement_engine->read_source_file(source_file);
+            if (source_code.empty()) {
+                std::cerr << "Error: Failed to read source file: " << source_file << std::endl;
+                return 1;
+            }
+            
+            // Get language adapter
+            auto* adapter = measurement_engine->get_adapter_by_language(language);
+            if (!adapter) {
+                std::cerr << "Error: No language adapter found for: " << language << std::endl;
+                return 1;
+            }
+            
+            // Generate checkpoints
+            std::cout << "Generating instrumentation checkpoints..." << std::endl;
+            auto checkpoints = adapter->generate_checkpoints(source_code);
+            if (checkpoints.empty()) {
+                std::cout << "No checkpoints generated for source code" << std::endl;
+                return 0;
+            }
+            
+            // Instrument code
+            std::cout << "Instrumenting code..." << std::endl;
+            std::string instrumented_code = adapter->instrument_code(source_code, checkpoints);
+            
+            // Create output directory if it doesn't exist
+            if (save_instrumented) {
+                std::filesystem::create_directories(output_dir);
+            }
+            
+            // Save instrumented code if requested
+            if (save_instrumented) {
+                std::filesystem::path source_path(source_file);
+                std::string instrumented_filename = source_path.stem().string() + "_instrumented" + source_path.extension().string();
+                std::string instrumented_path = output_dir + "/" + instrumented_filename;
+                
+                std::ofstream out_file(instrumented_path);
+                if (out_file.is_open()) {
+                    out_file << instrumented_code;
+                    out_file.close();
+                    std::cout << "✓ Instrumented code saved to: " << instrumented_path << std::endl;
+                } else {
+                    std::cerr << "Error: Failed to save instrumented code to: " << instrumented_path << std::endl;
+                    return 1;
+                }
+            }
+            
+            // Display results
+            std::cout << std::endl;
+            std::cout << "=== Analysis Results ===" << std::endl;
+            std::cout << "Language: " << language << std::endl;
+            std::cout << "Checkpoints generated: " << checkpoints.size() << std::endl;
+            std::cout << "Original lines: " << std::count(source_code.begin(), source_code.end(), '\n') + 1 << std::endl;
+            std::cout << "Instrumented lines: " << std::count(instrumented_code.begin(), instrumented_code.end(), '\n') + 1 << std::endl;
+            
+            if (verbose) {
+                std::cout << std::endl;
+                std::cout << "=== Generated Checkpoints ===" << std::endl;
+                for (const auto& checkpoint : checkpoints) {
+                    std::cout << "  " << checkpoint.type << ": " << checkpoint.name 
+                             << " (line " << checkpoint.line_number << ")" << std::endl;
+                }
+            }
+            
+            std::cout << std::endl;
+            std::cout << "✅ Analysis completed successfully" << std::endl;
+            
+            return 0;
         }
         
         // Check for workload measurement commands

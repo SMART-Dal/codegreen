@@ -40,7 +40,8 @@ try:
                     print(f"CHECKPOINT_{i}: {point.type}:{point.name}:{point.line}:{point.column}")
                     
             else:
-                print(f"ANALYSIS_ERROR: {analysis_result.error_message}", file=sys.stderr)
+                error_msg = analysis_result.error if analysis_result.error else "Unknown analysis error"
+                print(f"ANALYSIS_ERROR: {error_msg}", file=sys.stderr)
                 sys.exit(1)
                 
         except FileNotFoundError:

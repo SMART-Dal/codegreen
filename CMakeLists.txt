@@ -194,7 +194,13 @@ add_custom_target(dev-install ALL
     DEPENDS codegreen
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
-    COMMENT "Copying binary to development bin directory for CLI integration"
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/src/instrumentation
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
+    COMMENT "Copying binary and instrumentation files to development bin directory for CLI integration"
 )
 
 # Install runtime modules
@@ -202,6 +208,18 @@ install(FILES ${CMAKE_SOURCE_DIR}/src/instrumentation/codegreen_runtime.py
     DESTINATION bin/runtime
     COMPONENT runtime
 )
+
+# Install Python instrumentation system
+install(FILES 
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py
+    DESTINATION bin/src/instrumentation
+    COMPONENT runtime
+)
+
 
 # Install configuration file
 if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
