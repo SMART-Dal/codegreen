@@ -61,12 +61,23 @@ class ASTProcessor:
         
         # If this is an identifier (function name, class name, etc.), look for parent definition
         if node.type in ["identifier", "type_identifier", "field_identifier"]:
+            logger.debug(f"🔍 Finding body for identifier node: {node.type} at {node.start_point}-{node.end_point}")
             current = node.parent
-            while current:
-                if current.type in ["function_definition", "method_definition", "class_definition", "constructor_definition"]:
+            level = 0
+            # Get configurable parent search levels
+            limits = self.config_manager.get_processing_limits(self.language)
+            max_levels = limits.get('max_parent_search_levels', 10)
+            while current and level < max_levels:  # Prevent infinite loops
+                logger.debug(f"   Parent level {level}: {current.type} at {current.start_point}-{current.end_point}")
+                if current.type in ["function_definition", "method_definition", "class_definition", "class_specifier", "class_declaration", "constructor_definition"]:
+                    logger.debug(f"   Found parent definition: {current.type}")
                     # Found the parent function/method/class, now find its body
-                    return self._find_body_in_node(current, ast_config)
+                    body = self._find_body_in_node(current, ast_config)
+                    logger.debug(f"   Body found: {body.type if body else None}")
+                    return body
                 current = current.parent
+                level += 1
+            logger.debug(f"   No parent definition found after {level} levels")
         
         # For other node types, try to find body directly
         return self._find_body_in_node(node, ast_config)
@@ -155,7 +166,10 @@ class ASTProcessor:
                 # For inside_start, we want to insert at the beginning of the body content
                 # Skip the opening brace if it's on the same line
                 body_start = body_node.start_byte
-                body_text = self.source_code[body_start:body_start + 100]  # First 100 chars
+                # Get configurable text preview length
+                limits = self.config_manager.get_processing_limits(self.language)
+                text_preview_length = limits.get('debug_text_preview_length', 100)
+                body_text = self.source_code[body_start:body_start + text_preview_length]
                 
                 # Find the opening brace
                 brace_pos = body_text.find('{')
@@ -432,9 +446,15 @@ class ASTProcessor:
         if indent_char == '\t':
             indent_level = base_indent  # Each tab is one level
         else:
-            indent_level = base_indent // 4  # Assume 4-space indentation
+            # Get configurable indent size
+            limits = self.config_manager.get_processing_limits(self.language)
+            default_indent_size = limits.get('default_indent_size', 4)
+            indent_level = base_indent // default_indent_size
         
-        indent_string = indent_char * (indent_level * (1 if indent_char == '\t' else 4))
+        # Get configurable indent size
+        limits = self.config_manager.get_processing_limits(self.language)
+        default_indent_size = limits.get('default_indent_size', 4)
+        indent_string = indent_char * (indent_level * (1 if indent_char == '\t' else default_indent_size))
         
         return indent_level, indent_string
     
@@ -482,11 +502,18 @@ class TreeSitterIndentationEngine:
         self.indentation_queries: Dict[str, Query] = {}
         self.indent_cache: Dict[str, IndentationInfo] = {}
         
-        # Common indentation patterns
-        self.default_indent_size = 4
-        self.supported_languages = {'python', 'c', 'cpp', 'java', 'javascript'}
+        # Get global configuration for common values
+        global_config = self._get_global_config()
+        self.default_indent_size = global_config.get('default_indent_size', 4)
+        self.supported_languages = set(global_config.get('supported_languages', ['python', 'c', 'cpp', 'java', 'javascript']))
         
         logger.info(f"🔧 TreeSitterIndentationEngine initialized with nvim-treesitter at: {self.nvim_treesitter_path}")
+    
+    def _get_global_config(self) -> Dict[str, Any]:
+        """Get global configuration values."""
+        from language_configs import get_language_config_manager
+        config_manager = get_language_config_manager()
+        return config_manager.get_global_config()
     
     def _find_nvim_treesitter_path(self) -> Optional[str]:
         """Auto-detect nvim-treesitter path."""
@@ -534,8 +561,12 @@ class TreeSitterIndentationEngine:
             return None
         
         try:
+            # Get configurable encoding
+            global_config = self._get_global_config()
+            encoding = global_config.get('default_encoding', 'utf-8')
+            
             # Read the query file
-            query_content = query_file.read_text(encoding='utf-8')
+            query_content = query_file.read_text(encoding=encoding)
             
             # Handle inheritance (e.g., "javascript" inherits from "ecma")
             if query_content.strip().startswith("; inherits:"):
@@ -548,7 +579,7 @@ class TreeSitterIndentationEngine:
                     inherited_lang = inherited_lang.strip()
                     inherited_file = Path(self.nvim_treesitter_path) / "queries" / inherited_lang / "indents.scm"
                     if inherited_file.exists():
-                        inherited_content = inherited_file.read_text(encoding='utf-8')
+                        inherited_content = inherited_file.read_text(encoding=encoding)
                         combined_content.append(f";; Inherited from {inherited_lang}\n{inherited_content}")
                         logger.debug(f"📖 Loaded inherited indentation from {inherited_lang} for {language}")
                 
@@ -897,7 +928,10 @@ class ASTRewriter:
         for i, edit in enumerate(self.edits):
             logger.debug(f"   Edit {i+1}/{len(self.edits)}: {edit.edit_type} at offset {edit.byte_offset}")
             logger.debug(f"      Node info: {edit.node_info}")
-            logger.debug(f"      Insertion text preview: {edit.insertion_text[:100]}{'...' if len(edit.insertion_text) > 100 else ''}")
+            # Get configurable text preview length
+            limits = self.config_manager.get_processing_limits(self.language)
+            text_preview_length = limits.get('debug_text_preview_length', 100)
+            logger.debug(f"      Insertion text preview: {edit.insertion_text[:text_preview_length]}{'...' if len(edit.insertion_text) > text_preview_length else ''}")
         
         sorted_edits = sorted(self.edits, key=lambda e: e.byte_offset, reverse=True)
         result_code = self.current_code
@@ -910,8 +944,10 @@ class ASTRewriter:
             logger.debug(f"🔧 Processing edit {i+1}/{len(sorted_edits)}: {edit.edit_type} at offset {edit.byte_offset}")
             
             # Log context around the edit location
-            context_start = max(0, edit.byte_offset - 50)
-            context_end = min(len(result_code), edit.byte_offset + 50)
+            limits = self.config_manager.get_processing_limits(self.language)
+            context_window = limits.get('max_search_window', 50)
+            context_start = max(0, edit.byte_offset - context_window)
+            context_end = min(len(result_code), edit.byte_offset + context_window)
             context = result_code[context_start:context_end]
             logger.debug(f"   Context around edit: '{context}'")
             
@@ -924,7 +960,10 @@ class ASTRewriter:
                     logger.error(f"❌ Edit {i+1} caused syntax error: {edit.node_info}")
                     logger.error(f"   Edit type: {edit.edit_type}")
                     logger.error(f"   Byte offset: {edit.byte_offset}")
-                    logger.error(f"   Insertion text: {edit.insertion_text[:200]}{'...' if len(edit.insertion_text) > 200 else ''}")
+                    # Get configurable error text length
+                    limits = self.config_manager.get_processing_limits(self.language)
+                    error_text_length = limits.get('debug_error_text_length', 200)
+                    logger.error(f"   Insertion text: {edit.insertion_text[:error_text_length]}{'...' if len(edit.insertion_text) > error_text_length else ''}")
                     
                     # Log the specific error details
                     if hasattr(current_tree.root_node, 'has_error') and current_tree.root_node.has_error:
@@ -932,7 +971,10 @@ class ASTRewriter:
                     
                     # Revert to previous state
                     result_code = old_code
-                    current_tree = self.parser.parse(old_code.encode('utf-8'))
+                    # Get configurable encoding
+                    global_config = self.config_manager.get_global_config()
+                    encoding = global_config.get('default_encoding', 'utf-8')
+                    current_tree = self.parser.parse(old_code.encode(encoding))
                     failed_edits += 1
                     logger.warning(f"   ⚠️  Reverted edit {i+1} due to syntax error")
                 else:
@@ -947,7 +989,10 @@ class ASTRewriter:
                 
                 # Revert to previous state
                 result_code = old_code
-                current_tree = self.parser.parse(old_code.encode('utf-8'))
+                # Get configurable encoding
+                global_config = self.config_manager.get_global_config()
+                encoding = global_config.get('default_encoding', 'utf-8')
+                current_tree = self.parser.parse(old_code.encode(encoding))
                 failed_edits += 1
                 logger.warning(f"   ⚠️  Reverted edit {i+1} due to exception")
         
@@ -1011,8 +1056,12 @@ class ASTRewriter:
                 new_end_point=new_end_point
             )
             
+            # Get configurable encoding
+            global_config = self.config_manager.get_global_config()
+            encoding = global_config.get('default_encoding', 'utf-8')
+            
             # Incrementally reparse with the old tree
-            new_tree = self.parser.parse(new_code.encode('utf-8'), old_tree=tree)
+            new_tree = self.parser.parse(new_code.encode(encoding), old_tree=tree)
             
             if new_tree is None:
                 logger.warning("Tree parsing failed, using original tree")
@@ -1020,9 +1069,12 @@ class ASTRewriter:
             
             logger.debug(f"   New tree has errors: {new_tree.root_node.has_error}")
             if new_tree.root_node.has_error:
-                logger.debug(f"   Tree error details: {new_tree.root_node.text.decode()[:200]}...")
+                # Get configurable error text length
+                limits = self.config_manager.get_processing_limits(self.language)
+                error_text_length = limits.get('debug_error_text_length', 200)
+                logger.debug(f"   Tree error details: {new_tree.root_node.text.decode()[:error_text_length]}...")
                 # If tree has errors, try to parse from scratch
-                fresh_tree = self.parser.parse(new_code.encode('utf-8'))
+                fresh_tree = self.parser.parse(new_code.encode(encoding))
                 if fresh_tree and not fresh_tree.root_node.has_error:
                     logger.debug("   Fresh parse succeeded, using fresh tree")
                     return new_code, fresh_tree
@@ -1106,8 +1158,12 @@ class ASTRewriter:
         
         # Log the result for debugging
         logger.debug(f"   Edit result length: {len(result)} (was {len(code)})")
-        if len(result) > len(code) + 100:  # Only log if significant change
-            logger.debug(f"   Result preview: {result[offset:offset+100]}...")
+        # Get configurable significant change threshold
+        limits = self.config_manager.get_processing_limits(self.language)
+        significant_change_threshold = limits.get('debug_significant_change_threshold', 100)
+        if len(result) > len(code) + significant_change_threshold:  # Only log if significant change
+            text_preview_length = limits.get('debug_text_preview_length', 100)
+            logger.debug(f"   Result preview: {result[offset:offset+text_preview_length]}...")
         
         return result
     
@@ -1215,11 +1271,17 @@ class ASTRewriter:
                             
                             # Use the same indent character as detected
                             if indent_info.indent_char == '\t':
-                                indent_string = '\t' * (base_indent // 4)  # Convert spaces to tabs
+                                # Get configurable indent size
+                                limits = self.config_manager.get_processing_limits(self.language)
+                                default_indent_size = limits.get('default_indent_size', 4)
+                                indent_string = '\t' * (base_indent // default_indent_size)  # Convert spaces to tabs
                             else:
                                 indent_string = ' ' * base_indent
                             
-                            logger.debug(f"🔧 AST-based inside_start: found first statement '{self._get_node_text(first_statement)[:30]}...', indentation '{indent_string}' (len={len(indent_string)})")
+                            # Get configurable text preview length
+                            limits = self.config_manager.get_processing_limits(self.language)
+                            text_preview_length = limits.get('debug_text_preview_length', 100)
+                            logger.debug(f"🔧 AST-based inside_start: found first statement '{self._get_node_text(first_statement)[:text_preview_length]}...', indentation '{indent_string}' (len={len(indent_string)})")
                             return indent_string
             
             # Fallback: Use TreeSitter indentation engine
@@ -1289,7 +1351,10 @@ class ASTRewriter:
         # Fallbacks
         if indent_info.indent_char == '\t':
             return '\t'
-        return ' ' * max(4, indent_info.indent_size if hasattr(indent_info, 'indent_size') else 4)
+        # Get configurable indent size
+        limits = self.config_manager.get_processing_limits(self.language)
+        default_indent_size = limits.get('default_indent_size', 4)
+        return ' ' * max(default_indent_size, indent_info.indent_size if hasattr(indent_info, 'indent_size') else default_indent_size)
     
     def _find_function_or_class_node_at_offset(self, offset: int) -> Optional['Node']:
         """Find the function or class node containing the given byte offset."""

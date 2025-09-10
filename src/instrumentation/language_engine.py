@@ -93,22 +93,32 @@ class ExternalQueryLoader:
     instead of maintaining hardcoded queries that can become outdated.
     """
     
-    def __init__(self, nvim_treesitter_path: Optional[str] = None):
+    def __init__(self, nvim_treesitter_path: Optional[str] = None, config_manager=None):
         self.nvim_treesitter_path = nvim_treesitter_path or self._find_nvim_treesitter_path()
         self.query_cache = {}
+        self._config_manager = config_manager
         
         # Standard capture mapping for language-agnostic instrumentation
         # Based on actual nvim-treesitter capture names
         # Priority order: more specific captures first to avoid duplicates
+        # Get configurable priority values
+        if self._config_manager:
+            global_config = self._config_manager.get_global_config()
+            high_priority = global_config.get('capture_priority_high', 1)
+            medium_priority = global_config.get('capture_priority_medium', 2)
+        else:
+            high_priority = 1
+            medium_priority = 2
+        
         self.CAPTURE_MAP = {
-            'local.definition.function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start', 'priority': 1},
-            'local.definition.method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start', 'priority': 1},
-            'local.definition.type': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start', 'priority': 1},
-            'function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start', 'priority': 2},
-            'function.method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start', 'priority': 2},
-            'type.definition': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start', 'priority': 2},
-            'keyword.return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before', 'priority': 1},
-            'return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before', 'priority': 2},
+            'local.definition.function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start', 'priority': high_priority},
+            'local.definition.method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start', 'priority': high_priority},
+            'local.definition.type': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start', 'priority': high_priority},
+            'function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start', 'priority': medium_priority},
+            'function.method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start', 'priority': medium_priority},
+            'type.definition': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start', 'priority': medium_priority},
+            'keyword.return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before', 'priority': high_priority},
+            'return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before', 'priority': medium_priority},
         }
         
     def _find_nvim_treesitter_path(self) -> Optional[str]:
@@ -171,7 +181,13 @@ class ExternalQueryLoader:
             
             for scm_file in scm_files:
                 try:
-                    content = scm_file.read_text(encoding='utf-8')
+                    # Get configurable encoding
+                    if self._config_manager:
+                        global_config = self._config_manager.get_global_config()
+                        encoding = global_config.get('default_encoding', 'utf-8')
+                    else:
+                        encoding = 'utf-8'
+                    content = scm_file.read_text(encoding=encoding)
                     # Skip empty files
                     if content.strip():
                         combined_content.append(f";; From {scm_file.name}\n{content}")
@@ -341,7 +357,7 @@ class LanguageEngine:
         self._max_file_size_bytes = max_file_size_mb * 1024 * 1024
         self._parser_timeout_ms = parser_timeout_ms
         self._compiled_regexes = {}
-        self._external_query_loader = ExternalQueryLoader()  # Load external queries
+        self._external_query_loader = ExternalQueryLoader(config_manager=self._config_manager)  # Load external queries
         self._language_agnostic_generator = LanguageAgnosticInstrumentationGenerator()  # Language-agnostic instrumentation
         self._initialize_parsers()
     
@@ -532,8 +548,12 @@ class LanguageEngine:
                 error=f"Unsupported language: {language or 'unknown'}"
             )
         
+        # Get configurable encoding
+        global_config = self._config_manager.get_global_config()
+        encoding = global_config.get('default_encoding', 'utf-8')
+        
         # Check file size limits
-        if len(source_code.encode('utf-8')) > self._max_file_size_bytes:
+        if len(source_code.encode(encoding)) > self._max_file_size_bytes:
             return AnalysisResult(
                 language=language,
                 success=False,
@@ -779,8 +799,12 @@ class LanguageEngine:
             logger.warning(f"File has {len(lines)} lines, processing first {max_lines} only")
             lines = lines[:max_lines]
         
+        # Get configurable line offset
+        global_config = self._config_manager.get_global_config()
+        line_offset = global_config.get('line_offset', 1)
+        
         for i, line in enumerate(lines):
-            line_num = i + 1
+            line_num = i + line_offset
             
             for pattern_name, compiled_pattern in compiled_patterns.items():
                 match = compiled_pattern.search(line)
@@ -864,14 +888,18 @@ class LanguageEngine:
                 insertion_point = start_point
                 insertion_byte = node.start_byte
             
+            # Get configurable line offset
+            global_config = self._config_manager.get_global_config()
+            line_offset = global_config.get('line_offset', 1)
+            
             # Create the instrumentation point
             point = InstrumentationPoint(
-                id=f"{capture_config['type']}_{name}_{insertion_point[0] + 1}_{insertion_point[1] + 1}",
+                id=f"{capture_config['type']}_{name}_{insertion_point[0] + line_offset}_{insertion_point[1] + line_offset}",
                 type=capture_config['type'],
                 subtype=capture_config['subtype'],
                 name=name,
-                line=insertion_point[0] + 1,
-                column=insertion_point[1] + 1,
+                line=insertion_point[0] + line_offset,
+                column=insertion_point[1] + line_offset,
                 context=f"{capture_config['subtype'].title()} {capture_config['type']}: {name}",
                 metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
                 byte_offset=None,  # Let ASTRewriter calculate the correct offset
@@ -958,8 +986,12 @@ class LanguageEngine:
             capture_dict, language, query_name
         )
         
-        start_column = main_node.start_point.column + 1 if main_node.start_point else 0
-        end_column = main_node.end_point.column + 1 if main_node.end_point else 0
+        # Get configurable line offset
+        global_config = self._config_manager.get_global_config()
+        line_offset = global_config.get('line_offset', 1)
+        
+        start_column = main_node.start_point.column + line_offset if main_node.start_point else 0
+        end_column = main_node.end_point.column + line_offset if main_node.end_point else 0
         
         # Find the body node for proper byte offset calculation
         body_node = None
@@ -1121,13 +1153,17 @@ class LanguageEngine:
                     body_node = capture_dict[key][0]  # Take first node from list
                     break
             
+            # Get configurable line offset
+            global_config = self._config_manager.get_global_config()
+            line_offset = global_config.get('line_offset', 1)
+            
             if body_node:
-                entry_line = body_node.start_point.row + 1
-                exit_line = body_node.end_point.row + 1
+                entry_line = body_node.start_point.row + line_offset
+                exit_line = body_node.end_point.row + line_offset
             else:
                 # Fallback to main node
-                entry_line = main_node.start_point.row + 1
-                exit_line = main_node.end_point.row + 1
+                entry_line = main_node.start_point.row + line_offset
+                exit_line = main_node.end_point.row + line_offset
         elif 'class' in query_name:
             # For classes, find the body start (inside the class, not at class definition)
             body_node = None
@@ -1138,16 +1174,16 @@ class LanguageEngine:
             
             if body_node:
                 # Place checkpoint at the start of the class body (after the colon)
-                entry_line = body_node.start_point.row + 1
-                exit_line = body_node.end_point.row + 1
+                entry_line = body_node.start_point.row + line_offset
+                exit_line = body_node.end_point.row + line_offset
             else:
                 # Fallback: place after the class definition line
-                entry_line = main_node.end_point.row + 1
-                exit_line = main_node.end_point.row + 1
+                entry_line = main_node.end_point.row + line_offset
+                exit_line = main_node.end_point.row + line_offset
         else:
             # For other constructs, use main node boundaries
-            entry_line = main_node.start_point.row + 1
-            exit_line = main_node.end_point.row + 1
+            entry_line = main_node.start_point.row + line_offset
+            exit_line = main_node.end_point.row + line_offset
         
         return entry_line, exit_line
     
@@ -1184,8 +1220,12 @@ class LanguageEngine:
                         if cap_name == 'return' and return_node_list:
                             # return_node_list is a list, take the first node
                             return_node = return_node_list[0]
-                            exit_line = return_node.start_point.row + 1
-                            exit_column = return_node.start_point.column + 1
+                            # Get configurable line offset
+                            global_config = self._config_manager.get_global_config()
+                            line_offset = global_config.get('line_offset', 1)
+                            
+                            exit_line = return_node.start_point.row + line_offset
+                            exit_column = return_node.start_point.column + line_offset
                             exit_point = InstrumentationPoint(
                                 id=f"function_exit_{function_name}_{exit_line}_{exit_column}",
                                 type='function_exit',
@@ -1199,8 +1239,8 @@ class LanguageEngine:
                             points.append(exit_point)
             else:
                 # No explicit returns, create implicit exit at end of body
-                exit_line = body_node.end_point.row + 1
-                exit_column = body_node.start_point.column + 1
+                exit_line = body_node.end_point.row + line_offset
+                exit_column = body_node.start_point.column + line_offset
                 exit_point = InstrumentationPoint(
                     id=f"function_exit_{function_name}_implicit_{exit_line}",
                     type='function_exit',
@@ -1588,11 +1628,15 @@ class LanguageEngine:
             logger.warning(f"Loop construct missing position data in {language}")
             return 1, 1  # Safe fallback
         
+        # Get configurable line offset
+        global_config = self._config_manager.get_global_config()
+        line_offset = global_config.get('line_offset', 1)
+        
         # Entry point: just before the loop starts
-        entry_line = loop_construct.start_point.row + 1 if loop_construct.start_point else 1
+        entry_line = loop_construct.start_point.row + line_offset if loop_construct.start_point else line_offset
         
         # Exit point: just after the loop ends  
-        exit_line = loop_construct.end_point.row + 1 if loop_construct.end_point else 1
+        exit_line = loop_construct.end_point.row + line_offset if loop_construct.end_point else line_offset
         
         return entry_line, exit_line
     
@@ -1692,8 +1736,12 @@ class LanguageEngine:
             # For C/C++, insert after existing #include statements
             for i, line in enumerate(lines):
                 stripped = line.strip()
+                # Get configurable line offset
+                global_config = self._config_manager.get_global_config()
+                line_offset = global_config.get('line_offset', 1)
+                
                 if stripped.startswith('#include'):
-                    insert_line = i + 1
+                    insert_line = i + line_offset
                 elif stripped and not stripped.startswith('#'):
                     break
         elif language == 'java':
@@ -1701,7 +1749,7 @@ class LanguageEngine:
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 if stripped.startswith('package ') or stripped.startswith('import '):
-                    insert_line = i + 1
+                    insert_line = i + line_offset
                 elif stripped and not stripped.startswith('//'):
                     break
         else:
@@ -1711,7 +1759,7 @@ class LanguageEngine:
                 
                 # Handle shebang
                 if stripped.startswith('#!'):
-                    insert_line = i + 1
+                    insert_line = i + line_offset
                     continue
                     
                 # Handle docstring start
@@ -1719,7 +1767,7 @@ class LanguageEngine:
                     docstring_marker = stripped[:3]
                     # Check if single-line docstring
                     if stripped.count(docstring_marker) >= 2 and len(stripped) > 3:
-                        insert_line = i + 1
+                        insert_line = i + line_offset
                         continue
                     else:
                         in_docstring = True
@@ -1728,13 +1776,13 @@ class LanguageEngine:
                 # Handle docstring end
                 if in_docstring and docstring_marker and stripped.endswith(docstring_marker):
                     in_docstring = False
-                    insert_line = i + 1
+                    insert_line = i + line_offset
                     continue
                     
                 # Skip empty lines and comments at start
                 if not stripped or stripped.startswith('#'):
                     if insert_line <= i:
-                        insert_line = i + 1
+                        insert_line = i + line_offset
                     continue
                     
                 # Found first code line

@@ -57,6 +57,35 @@ class LanguageConfigManager:
         self._configs: Dict[str, LanguageConfig] = {}
         self._load_configs()
     
+    def get_global_config(self) -> Dict[str, Any]:
+        """Get global configuration values that apply across all languages."""
+        return {
+            "supported_languages": ["python", "c", "cpp", "java", "javascript"],
+            "default_encoding": "utf-8",
+            "default_timeout_ms": 30000,
+            "default_file_size_mb": 100,
+            "default_indent_size": 4,
+            "default_indent_char": " ",
+            "debug_text_preview_length": 100,
+            "debug_error_text_length": 200,
+            "debug_significant_change_threshold": 100,
+            "max_parent_search_levels": 10,
+            "max_inheritance_depth": 5,
+            "capture_priority_high": 1,
+            "capture_priority_medium": 2,
+            "capture_priority_low": 3,
+            "line_offset": 1,
+            "common_node_types": {
+                "function_types": ["function_definition", "method_definition", "constructor_definition"],
+                "class_types": ["class_definition", "class_specifier", "class_declaration", "struct_specifier"],
+                "body_types": ["body", "block", "compound_statement", "constructor_body"],
+                "loop_types": ["for_statement", "while_statement", "do_statement"],
+                "return_types": ["return_statement"],
+                "comment_types": ["comment"],
+                "docstring_types": ["expression_statement"]
+            }
+        }
+    
     def _load_configs(self):
         """Load all language configurations from files."""
         if not self.config_dir.exists():
@@ -283,7 +312,15 @@ class LanguageConfigManager:
                 "max_safety_counter": 10,
                 "max_search_window": 50,
                 "max_body_text_check": 200,
-                "max_function_body_search_lines": 10
+                "max_function_body_search_lines": 10,
+                "max_file_size_mb": 100,
+                "parser_timeout_ms": 30000,
+                "max_parent_search_levels": 10,
+                "debug_text_preview_length": 100,
+                "debug_error_text_length": 200,
+                "debug_significant_change_threshold": 100,
+                "default_indent_size": 4,
+                "max_inheritance_depth": 5
             },
             node_types={
                 "function_types": ["function_definition", "method_definition", "constructor_definition"],
@@ -403,7 +440,15 @@ class LanguageConfigManager:
                 "max_safety_counter": 10,
                 "max_search_window": 50,
                 "max_body_text_check": 200,
-                "max_function_body_search_lines": 10
+                "max_function_body_search_lines": 10,
+                "max_file_size_mb": 100,
+                "parser_timeout_ms": 30000,
+                "max_parent_search_levels": 10,
+                "debug_text_preview_length": 100,
+                "debug_error_text_length": 200,
+                "debug_significant_change_threshold": 100,
+                "default_indent_size": 4,
+                "max_inheritance_depth": 5
             },
             node_types={
                 "function_types": ["function_definition"],
@@ -527,7 +572,15 @@ class LanguageConfigManager:
                 "max_safety_counter": 10,
                 "max_search_window": 50,
                 "max_body_text_check": 200,
-                "max_function_body_search_lines": 10
+                "max_function_body_search_lines": 10,
+                "max_file_size_mb": 100,
+                "parser_timeout_ms": 30000,
+                "max_parent_search_levels": 10,
+                "debug_text_preview_length": 100,
+                "debug_error_text_length": 200,
+                "debug_significant_change_threshold": 100,
+                "default_indent_size": 4,
+                "max_inheritance_depth": 5
             },
             node_types={
                 "function_types": ["function_definition"],
@@ -656,7 +709,15 @@ class LanguageConfigManager:
                 "max_safety_counter": 10,
                 "max_search_window": 50,
                 "max_body_text_check": 200,
-                "max_function_body_search_lines": 10
+                "max_function_body_search_lines": 10,
+                "max_file_size_mb": 100,
+                "parser_timeout_ms": 30000,
+                "max_parent_search_levels": 10,
+                "debug_text_preview_length": 100,
+                "debug_error_text_length": 200,
+                "debug_significant_change_threshold": 100,
+                "default_indent_size": 4,
+                "max_inheritance_depth": 5
             },
             node_types={
                 "function_types": ["method_declaration", "constructor_declaration"],
@@ -784,7 +845,15 @@ class LanguageConfigManager:
                 "max_safety_counter": 10,
                 "max_search_window": 50,
                 "max_body_text_check": 200,
-                "max_function_body_search_lines": 10
+                "max_function_body_search_lines": 10,
+                "max_file_size_mb": 100,
+                "parser_timeout_ms": 30000,
+                "max_parent_search_levels": 10,
+                "debug_text_preview_length": 100,
+                "debug_error_text_length": 200,
+                "debug_significant_change_threshold": 100,
+                "default_indent_size": 4,
+                "max_inheritance_depth": 5
             },
             node_types={
                 "function_types": ["function_declaration", "arrow_function", "function_expression"],
