@@ -55,7 +55,8 @@ class LanguageConfigManager:
     def __init__(self, config_dir: Optional[Path] = None):
         self.config_dir = config_dir or Path(__file__).parent / "language_configs"
         self._configs: Dict[str, LanguageConfig] = {}
-        self._load_configs()
+        # Always use built-in default configurations
+        self._load_default_configs()
     
     def get_global_config(self) -> Dict[str, Any]:
         """Get global configuration values that apply across all languages."""
@@ -87,22 +88,10 @@ class LanguageConfigManager:
         }
     
     def _load_configs(self):
-        """Load all language configurations from files."""
-        if not self.config_dir.exists():
-            logger.warning(f"Config directory {self.config_dir} does not exist, using defaults")
-            self._load_default_configs()
-            return
-        
-        for config_file in self.config_dir.glob("*.json"):
-            try:
-                with open(config_file, 'r') as f:
-                    config_data = json.load(f)
-                    language_name = config_file.stem
-                    config = LanguageConfig(**config_data)
-                    self._configs[language_name] = config
-                    logger.info(f"Loaded configuration for {language_name}")
-            except Exception as e:
-                logger.error(f"Failed to load {config_file}: {e}")
+        """Load all language configurations from built-in defaults."""
+        # Always use the built-in configurations defined in this file
+        # This eliminates the need for external config files
+        self._load_default_configs()
     
     def _load_default_configs(self):
         """Load default configurations if no config files exist."""
@@ -382,16 +371,19 @@ class LanguageConfigManager:
             },
             query_config={
                 "capture_mapping": {
-                    "function.definition": "function_enter",
-                    "function.name": "function_enter",
-                    "return.statement": "function_exit",
+                    "function": "function_enter",
+                    "local.definition.function": "function_enter",
+                    "keyword.return": "function_exit",
+                    "return": "function_exit",
                     "loop.for": "loop_start",
                     "loop.while": "loop_start",
                     "loop.do": "loop_start"
                 },
                 "priority_order": [
-                    "function.definition",
-                    "return.statement",
+                    "function",
+                    "local.definition.function",
+                    "keyword.return",
+                    "return",
                     "loop.for",
                     "loop.while",
                     "loop.do"
@@ -510,18 +502,19 @@ class LanguageConfigManager:
             },
             query_config={
                 "capture_mapping": {
-                    "function.definition": "function_enter",
-                    "class.definition": "class_enter",
-                    "class.name": "class_enter",
-                    "return.statement": "function_exit",
+                    "function.method": "function_enter",
+                    "local.definition.type": "class_enter",
+                    "keyword.return": "function_exit",
+                    "return": "function_exit",
                     "loop.for": "loop_start",
                     "loop.while": "loop_start",
                     "loop.do": "loop_start"
                 },
                 "priority_order": [
-                    "function.definition",
-                    "class.definition",
-                    "return.statement",
+                    "function.method",
+                    "local.definition.type",
+                    "keyword.return",
+                    "return",
                     "loop.for",
                     "loop.while",
                     "loop.do"
@@ -641,21 +634,22 @@ class LanguageConfigManager:
             },
             query_config={
                 "capture_mapping": {
-                    "method.definition": "function_enter",
-                    "constructor.definition": "function_enter",
-                    "class.definition": "class_enter",
-                    "class.name": "class_enter",
-                    "return.statement": "function_exit",
+                    "function.method": "function_enter",
+                    "local.definition.method": "function_enter",
+                    "local.definition.type": "class_enter",
+                    "keyword.return": "function_exit",
+                    "return": "function_exit",
                     "loop.for": "loop_start",
                     "loop.while": "loop_start",
                     "loop.do": "loop_start",
                     "loop.enhanced_for": "loop_start"
                 },
                 "priority_order": [
-                    "method.definition",
-                    "constructor.definition",
-                    "class.definition",
-                    "return.statement",
+                    "function.method",
+                    "local.definition.method",
+                    "local.definition.type",
+                    "keyword.return",
+                    "return",
                     "loop.for",
                     "loop.while",
                     "loop.do",

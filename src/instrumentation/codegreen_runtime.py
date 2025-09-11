@@ -63,6 +63,10 @@ class MeasurementCollector:
 _measurement_collector: Optional[MeasurementCollector] = None
 _collector_lock = threading.Lock()
 
+# Global session management
+_measurement_session: Optional['MeasurementSession'] = None
+_session_lock = threading.Lock()
+
 
 @dataclass
 class CheckpointMeasurement:
@@ -96,7 +100,7 @@ class MeasurementSession:
             name=name,
             line_number=line_number,
             context=context,
-            timestamp=time.time(),
+            timestamp=time.perf_counter(),
             process_id=self.process_id,
             thread_id=threading.get_ident()
         )

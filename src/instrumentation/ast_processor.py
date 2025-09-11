@@ -150,6 +150,8 @@ class ASTProcessor:
         
         rule = insertion_rules[rule_key]
         logger.debug(f"   Using rule: {rule}")
+        logger.debug(f"   Language: {self.language}")
+        logger.debug(f"   Rule mode: {rule.get('mode')}")
         
         if rule.get("mode") == "inside_start":
             logger.debug(f"   Processing inside_start mode")
@@ -164,29 +166,42 @@ class ASTProcessor:
                 return insertion_byte
             else:
                 # For inside_start, we want to insert at the beginning of the body content
-                # Skip the opening brace if it's on the same line
                 body_start = body_node.start_byte
-                # Get configurable text preview length
-                limits = self.config_manager.get_processing_limits(self.language)
-                text_preview_length = limits.get('debug_text_preview_length', 100)
-                body_text = self.source_code[body_start:body_start + text_preview_length]
                 
-                # Find the opening brace
-                brace_pos = body_text.find('{')
-                if brace_pos != -1:
-                    # Insert after the opening brace and any whitespace
-                    insertion_pos = body_start + brace_pos + 1
-                    # Skip whitespace after the brace
-                    while insertion_pos < len(self.source_code) and self.source_code[insertion_pos] in ' \t':
-                        insertion_pos += 1
-                    # Skip newline if present
-                    if insertion_pos < len(self.source_code) and self.source_code[insertion_pos] == '\n':
-                        insertion_pos += 1
-                    logger.debug(f"   Using body start after brace: {insertion_pos}")
-                    return insertion_pos
+                # Language-specific logic for finding the insertion point
+                if self.language == 'python':
+                    # For Python, find the first non-docstring statement
+                    logger.debug(f"   Calling _find_python_function_start for Python")
+                    insertion_byte = self._find_python_function_start(body_node, rule)
+                    logger.debug(f"   _find_python_function_start returned: {insertion_byte}")
+                    if insertion_byte is not None:
+                        logger.debug(f"   Found Python function start: {insertion_byte}")
+                        return insertion_byte
+                    else:
+                        logger.debug(f"   _find_python_function_start returned None, using fallback")
                 else:
-                    logger.debug(f"   Using body start: {body_node.start_byte}")
-                    return body_node.start_byte
+                    # For C/C++/Java, look for opening brace
+                    # Get configurable text preview length
+                    limits = self.config_manager.get_processing_limits(self.language)
+                    text_preview_length = limits.get('debug_text_preview_length', 100)
+                    body_text = self.source_code[body_start:body_start + text_preview_length]
+                    
+                    # Find the opening brace
+                    brace_pos = body_text.find('{')
+                    if brace_pos != -1:
+                        # Insert after the opening brace and any whitespace
+                        insertion_pos = body_start + brace_pos + 1
+                        # Skip whitespace after the brace
+                        while insertion_pos < len(self.source_code) and self.source_code[insertion_pos] in ' \t':
+                            insertion_pos += 1
+                        # Skip newline if present
+                        if insertion_pos < len(self.source_code) and self.source_code[insertion_pos] == '\n':
+                            insertion_pos += 1
+                        logger.debug(f"   Using body start after brace: {insertion_pos}")
+                        return insertion_pos
+                
+                logger.debug(f"   Using body start: {body_node.start_byte}")
+                return body_node.start_byte
         
         elif rule.get("mode") == "inside_end":
             logger.debug(f"   Processing inside_end mode")
@@ -196,13 +211,15 @@ class ASTProcessor:
                 return node.end_byte
             
             if rule.get("find_last_statement", False):
+                logger.debug(f"   find_last_statement=True, calling _find_last_statement_line_end")
                 insertion_byte = self._find_last_statement_line_end(body_node, rule)
                 # Ensure we don't cross the block's closing dedent/brace
                 bounded = min(insertion_byte, body_node.end_byte)
-                logger.debug(f"   Found last statement position (bounded): {bounded}")
+                logger.debug(f"   _find_last_statement_line_end returned: {insertion_byte}")
+                logger.debug(f"   Bounded to body end: {bounded} (body_node.end_byte={body_node.end_byte})")
                 return bounded
             else:
-                logger.debug(f"   Using body end: {body_node.end_byte}")
+                logger.debug(f"   find_last_statement=False, using body end: {body_node.end_byte}")
                 return body_node.end_byte
                 
         elif rule.get("mode") == "before":
@@ -257,12 +274,54 @@ class ASTProcessor:
         # Fallback to body start
         return body_node.start_byte
     
+    def _find_python_function_start(self, body_node: Node, rule: Dict) -> Optional[int]:
+        """Find the insertion point before the first non-docstring statement in a Python function body."""
+        logger.debug(f"   Finding Python function start for body node {body_node.type}")
+        
+        # Use tree-sitter to find the first non-comment/docstring statement
+        for child in body_node.children:
+            # Skip comments
+            if child.type == 'comment':
+                logger.debug(f"   Skipping comment: {self.source_code[child.start_byte:child.end_byte]}")
+                continue
+            
+            # Skip docstrings (expression_statement with string)
+            if child.type == 'expression_statement':
+                # Check if this is a docstring by looking for string children
+                for grandchild in child.children:
+                    if grandchild.type == 'string':
+                        logger.debug(f"   Skipping docstring: {self.source_code[child.start_byte:child.end_byte]}")
+                        break
+                else:
+                    # This is a real statement, not a docstring
+                    # Return the beginning of the line containing this statement
+                    line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
+                    logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
+                    logger.debug(f"   Returning line start: {line_start} (statement starts at {child.start_byte})")
+                    return line_start
+                continue
+            
+            # Skip empty lines (whitespace)
+            if child.type in ['pass_statement', 'expression_statement'] and not child.children:
+                continue
+            
+            # Found the first real statement
+            # Return the beginning of the line containing this statement
+            line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
+            logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
+            logger.debug(f"   Returning line start: {line_start} (statement starts at {child.start_byte})")
+            return line_start
+        
+        # Fallback to body start if no statements found
+        logger.debug(f"   No statement found, using body start")
+        return body_node.start_byte
+    
     def _find_first_statement_line_start(self, body_node: Node, rule: Dict[str, Any]) -> int:
         """Find the start of the line containing the first statement in a body node."""
         skip_docstrings = rule.get("skip_docstrings", False)
         skip_comments = rule.get("skip_comments", False)
         
-        for child in body_node.children:
+        for i, child in enumerate(body_node.children):
             child_text = self._get_node_text(child)
             
             # Skip docstrings if configured
@@ -273,15 +332,17 @@ class ASTProcessor:
             if skip_comments and self._is_comment(child):
                 continue
             
-            # Found first real statement - return start of its line for 'inside_start' insertion
+            # Found first real statement - return the start of the line containing this statement
             line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
+            logger.debug(f"   Found first statement '{child.type}' at byte {child.start_byte}")
+            logger.debug(f"   Returning line start: {line_start}")
             return line_start
         
         # Fallback to body start
         return body_node.start_byte
     
     def _find_last_statement_line_end(self, body_node: Node, rule: Dict[str, Any]) -> int:
-        """Find the end of the line containing the last statement in a body node."""
+        """Find the position to insert BEFORE the last statement in a body node for implicit exits."""
         skip_docstrings = rule.get("skip_docstrings", False)
         skip_comments = rule.get("skip_comments", False)
         
@@ -297,15 +358,14 @@ class ASTProcessor:
             if skip_comments and self._is_comment(child):
                 continue
             
-            # Found last real statement - return end of its line
-            line_end = self.source_code.find('\n', child.end_byte)
-            if line_end == -1:
-                line_end = len(self.source_code)
-            # Bound insertion to within the body range
-            return min(line_end, body_node.end_byte)
+            # Found last real statement - for implicit exits, insert BEFORE it (at line start)
+            line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
+            logger.debug(f"   Found last statement at byte {child.start_byte}, inserting at line start {line_start}")
+            return line_start
         
-        # Fallback to body end
-        return body_node.end_byte
+        # Fallback: if no statements found, insert at body start
+        logger.debug(f"   No statements found in body, using body start {body_node.start_byte}")
+        return body_node.start_byte
     
     def _find_last_statement(self, body_node: Node, rule: Dict[str, Any]) -> int:
         """Find the last statement in a body node."""
@@ -866,16 +926,20 @@ class ASTRewriter:
         node: Node = point.node  # Assume added to dataclass
         
         if point.byte_offset is not None:
+            logger.debug(f"   Using provided byte offset: {point.byte_offset}")
             return point.byte_offset
             
         # Use the AST processor to find insertion point
         insertion_offset = self.ast_processor.find_insertion_point(node, point.insertion_mode)
         
         if insertion_offset is not None:
+            logger.debug(f"   AST processor found insertion offset: {insertion_offset}")
             return insertion_offset
         
         # Fallback to line/column conversion
-        return self._line_column_to_byte_offset(point.line, point.column)
+        fallback_offset = self._line_column_to_byte_offset(point.line, point.column)
+        logger.debug(f"   Using fallback line/column offset: {fallback_offset}")
+        return fallback_offset
     
     def _find_body_node(self, node: Node) -> Optional[Node]:
         """Use AST processor to find body/block node."""
@@ -1031,12 +1095,16 @@ class ASTRewriter:
             logger.debug(f"   New code length: {len(new_code)}")
             logger.debug(f"   Insertion text length: {len(edit.insertion_text)}")
             
+            # Calculate the actual inserted text length
+            inserted_length = len(new_code) - len(code)
+            logger.debug(f"   Actual inserted length: {inserted_length}")
+            
             # Calculate edit parameters for tree-sitter
             # For insertions: start_byte = old_end_byte = insertion point
-            # new_end_byte = insertion point + length of inserted text
+            # new_end_byte = insertion point + actual inserted length
             start_byte = offset
             old_end_byte = offset  # For insertions, old and start are the same
-            new_end_byte = offset + len(edit.insertion_text)  # For insertions, new_end is start + inserted length
+            new_end_byte = offset + inserted_length  # Use actual inserted length
             
             # Convert byte offsets to points (row/column)
             start_point = self._byte_to_point(code, start_byte)
@@ -1131,27 +1199,36 @@ class ASTRewriter:
                 prepend_nl = ''
                 append_nl = '\n' if pos < len(src) and src[pos] != '\n' else ''
             
-            logger.debug(f"   wrap_as_own_line: pos={pos}, prepend_nl='{repr(prepend_nl)}', append_nl='{repr(append_nl)}'")
             result = src[:pos] + prepend_nl + content + append_nl + src[pos:]
+            logger.debug(f"   wrap_as_own_line: pos={pos}, prepend_nl='{repr(prepend_nl)}', append_nl='{repr(append_nl)}'")
             logger.debug(f"   Final wrapped result length: {len(result)} (was {len(src)})")
             return result
 
         if edit.edit_type == 'insert_before':
-            # Insert the statement on its own line before the target line
-            logger.debug(f"   Using insert_before mode")
-            result = wrap_as_own_line(code, offset, indented_text)
+            # For insert_before, ensure we insert at the beginning of the line to preserve indentation
+            line_start = code.rfind('\n', 0, offset) + 1
+            if line_start != offset:
+                logger.debug(f"   Adjusting insert_before offset from {offset} to line start {line_start}")
+                offset = line_start
+            # Insert checkpoint on its own line before the target statement
+            logger.debug(f"   Using insert_before mode - inserting at line start {offset}")
+            result = code[:offset] + indented_text + '\n' + code[offset:]
+            logger.debug(f"   insert_before: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
         elif edit.edit_type == 'insert_after':
             # Insert after the node; keep it on its own line to avoid token merging
             logger.debug(f"   Using insert_after mode")
             result = wrap_as_own_line(code, offset, indented_text)
         elif edit.edit_type == 'insert_inside_start':
-            # First line of the body: keep statement on its own line
-            logger.debug(f"   Using insert_inside_start mode")
-            result = wrap_as_own_line(code, offset, indented_text)
+            # For insert_inside_start, insert checkpoint on its own line before the target statement
+            # This preserves the target statement's position and indentation
+            logger.debug(f"   Using insert_inside_start mode - inserting before target statement")
+            result = code[:offset] + indented_text + '\n' + code[offset:]
+            logger.debug(f"   insert_inside_start: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
         elif edit.edit_type == 'insert_inside_end':
-            # End of the body: ensure newline separation from dedent/next token
-            logger.debug(f"   Using insert_inside_end mode")
-            result = wrap_as_own_line(code, offset, indented_text)
+            # Insert before the last statement in the body (for implicit function exits)
+            logger.debug(f"   Using insert_inside_end mode - inserting on new line before target")
+            result = code[:offset] + indented_text + '\n' + code[offset:]
+            logger.debug(f"   insert_inside_end: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
         else:
             logger.warning(f"Unknown edit type: {edit.edit_type}")
             return code
@@ -1176,7 +1253,11 @@ class ASTRewriter:
         """
         logger.debug(f"🔧 Calculating indentation for edit_type='{edit_type}' at offset={offset}")
         
-        # Try to use TreeSitter indentation engine first
+        # For Python, we need to be very careful about indentation
+        if self.language == 'python':
+            return self._calculate_python_indentation(text, code, offset, edit_type)
+        
+        # Try to use TreeSitter indentation engine first for other languages
         if self.tree and self.indent_engine:
             try:
                 logger.debug(f"   Using TreeSitter indentation engine for {self.language}")
@@ -1185,47 +1266,12 @@ class ASTRewriter:
                 )
                 logger.debug(f"   TreeSitter indent_info: level={indent_info.indent_level}, char='{indent_info.indent_char}', size={indent_info.indent_size}")
                 
-                # Special handling for different edit types
-                if edit_type == 'insert_before':
-                    # For insert_before, prefer the target line's indentation, but if the
-                    # target token is part of an inline suite like "if x: return y",
-                    # split onto a new line and indent one level deeper than the header.
-                    line_start = code.rfind('\n', 0, offset) + 1
-                    line_end = code.find('\n', offset)
-                    if line_end == -1:
-                        line_end = len(code)
-                    current_line = code[line_start:line_end]
-                    base_indent = len(current_line) - len(current_line.lstrip())
-                    is_inline_suite = (':' in current_line and current_line.find(':') < (offset - line_start))
-                    extra = indent_info.indent_size if (indent_info.indent_char == ' ' and is_inline_suite) else (1 if (indent_info.indent_char == '\t' and is_inline_suite) else 0)
-                    effective_indent = base_indent + extra
-                    if indent_info.indent_char == '\t':
-                        indent_string = '\t' * effective_indent
-                    else:
-                        indent_string = ' ' * effective_indent
-                    logger.debug(f"   insert_before: current_line='{current_line}', base_indent={base_indent}, is_inline_suite={is_inline_suite}, effective_indent={effective_indent}")
-                    logger.debug(f"   Final indent_string: '{indent_string}' (len={len(indent_string)})")
-                
-                elif edit_type == 'insert_inside_start':
-                    # For insert_inside_start, use AST-based reasoning to find proper indentation
-                    # This replaces hardcoded string searching with proper AST analysis
-                    logger.debug(f"   Using AST-based inside_start indentation calculation")
-                    indent_string = self._calculate_inside_start_indentation(indent_info, code, offset)
-                elif edit_type == 'insert_inside_end':
-                    # Match the last real statement's indentation within the body
-                    logger.debug(f"   Using AST-based inside_end indentation calculation")
-                    indent_string = self._calculate_inside_end_indentation(indent_info, code, offset)
-                
-                else:
-                    indent_string = indent_info.indent_string
-                    logger.debug(f"   Using default TreeSitter indentation: '{indent_string}' (len={len(indent_string)})")
-                
                 # Apply indentation to each line
                 lines = text.split('\n')
                 indented_lines = []
                 for i, line in enumerate(lines):
                     if line.strip():  # Non-empty line
-                        indented_line = indent_string + line.strip()
+                        indented_line = indent_info.indent_string + line.strip()
                         indented_lines.append(indented_line)
                         logger.debug(f"   Line {i+1}: '{line.strip()}' -> '{indented_line}'")
                     else:  # Empty line
@@ -1244,6 +1290,228 @@ class ASTRewriter:
         # Fallback to simplified line-based indentation
         logger.debug("🔧 Using legacy line-based indentation fallback")
         return self._legacy_add_proper_indentation(text, code, offset, edit_type)
+    
+    def _calculate_python_indentation(self, text: str, code: str, offset: int, edit_type: str = None) -> str:
+        """
+        Calculate proper Python indentation based on the target location and edit type.
+        
+        Python has strict indentation rules:
+        - Function bodies are indented 1 level (4 spaces) from the function definition
+        - Statements inside functions are at the same level as the first statement in the function
+        - insert_before should match the target line's indentation
+        """
+        logger.debug(f"🔧 Calculating Python indentation for edit_type='{edit_type}' at offset={offset}")
+        
+        # Find the line containing the offset
+        line_start = code.rfind('\n', 0, offset) + 1
+        line_end = code.find('\n', offset)
+        if line_end == -1:
+            line_end = len(code)
+        
+        current_line = code[line_start:line_end]
+        logger.debug(f"   Current line: '{current_line}'")
+        
+        # Detect indentation style from the file
+        indent_char, indent_size = self._detect_python_indent_style(code)
+        logger.debug(f"   Detected indent: char='{indent_char}', size={indent_size}")
+        
+        if edit_type == 'insert_inside_start':
+            # For function enter checkpoints, find the first real statement and match its indentation
+            # This ensures we insert at the same indentation level as the function body statements
+            first_statement_indent = self._find_first_statement_indentation(offset, code)
+            if first_statement_indent is not None:
+                indent_string = indent_char * first_statement_indent
+                logger.debug(f"   insert_inside_start: matched first statement indentation={first_statement_indent}, indent_string='{indent_string}'")
+            else:
+                # Fallback: use function definition + 1 level
+                function_node = self._find_containing_function(offset)
+                if function_node:
+                    func_line_start = code.rfind('\n', 0, function_node.start_byte) + 1
+                    func_line_end = code.find('\n', function_node.start_byte)
+                    if func_line_end == -1:
+                        func_line_end = len(code)
+                    func_line = code[func_line_start:func_line_end]
+                    func_indent = len(func_line) - len(func_line.lstrip())
+                    body_indent = func_indent + indent_size
+                    indent_string = indent_char * body_indent
+                    logger.debug(f"   insert_inside_start fallback: func_indent={func_indent}, body_indent={body_indent}, indent_string='{indent_string}'")
+                else:
+                    # Final fallback
+                    current_indent = len(current_line) - len(current_line.lstrip())
+                    indent_string = indent_char * (current_indent + indent_size)
+                    logger.debug(f"   insert_inside_start final fallback: current_indent={current_indent}, final='{indent_string}'")
+                
+        elif edit_type == 'insert_before':
+            # For insert_before, match the target line's exact indentation
+            target_indent = len(current_line) - len(current_line.lstrip())
+            indent_string = indent_char * target_indent
+            logger.debug(f"   insert_before: target_indent={target_indent}, indent_string='{indent_string}'")
+            
+        elif edit_type == 'insert_after' or edit_type == 'insert_inside_end':
+            # For insert_after and insert_inside_end, match the current context indentation
+            current_indent = len(current_line) - len(current_line.lstrip())
+            indent_string = indent_char * current_indent
+            logger.debug(f"   {edit_type}: current_indent={current_indent}, indent_string='{indent_string}'")
+            
+        else:
+            # Default: match current line indentation
+            current_indent = len(current_line) - len(current_line.lstrip())
+            indent_string = indent_char * current_indent
+            logger.debug(f"   default: current_indent={current_indent}, indent_string='{indent_string}'")
+        
+        # Apply indentation to each line of the text
+        lines = text.split('\n')
+        indented_lines = []
+        for i, line in enumerate(lines):
+            if line.strip():  # Non-empty line
+                indented_line = indent_string + line.strip()
+                indented_lines.append(indented_line)
+                logger.debug(f"   Line {i+1}: '{line.strip()}' -> '{indented_line}'")
+            else:  # Empty line
+                indented_lines.append('')
+                logger.debug(f"   Line {i+1}: (empty line)")
+        
+        result = '\n'.join(indented_lines)
+        logger.debug(f"   Final Python indented text: '{result}'")
+        return result
+    
+    def _detect_python_indent_style(self, code: str) -> Tuple[str, int]:
+        """
+        Detect Python indentation style from the source code.
+        
+        Returns:
+            Tuple of (indent_char, indent_size)
+        """
+        lines = code.split('\n')
+        indent_sizes = []
+        uses_tabs = False
+        
+        for line in lines:
+            if not line.strip():  # Skip empty lines
+                continue
+            
+            # Count leading whitespace
+            indent = 0
+            for char in line:
+                if char == ' ':
+                    indent += 1
+                elif char == '\t':
+                    uses_tabs = True
+                    indent += 4  # Count tabs as 4 spaces for analysis
+                else:
+                    break
+            
+            if indent > 0:
+                indent_sizes.append(indent)
+        
+        if uses_tabs:
+            return '\t', 1
+        
+        # Find the most common indentation size
+        if indent_sizes:
+            # Find the GCD of all indentation sizes to get the base unit
+            import math
+            size = indent_sizes[0]
+            for s in indent_sizes[1:]:
+                size = math.gcd(size, s)
+            
+            # Common Python indentation is 4 spaces, but respect the code's style
+            if size in [2, 4, 8]:
+                return ' ', size
+            else:
+                return ' ', 4  # Default to 4 spaces
+        
+        return ' ', 4  # Default fallback
+    
+    def _find_containing_function(self, offset: int) -> Optional[Node]:
+        """
+        Find the function definition node that contains the given byte offset.
+        """
+        if not self.tree:
+            return None
+        
+        # Find the node at the offset
+        target_node = self.tree.root_node.descendant_for_byte_range(offset, offset + 1)
+        if not target_node:
+            return None
+        
+        # Walk up the AST to find the function definition
+        current = target_node
+        while current:
+            if current.type in ['function_definition', 'method_definition']:
+                return current
+            current = current.parent
+        
+        return None
+    
+    def _find_first_statement_indentation(self, offset: int, code: str) -> Optional[int]:
+        """
+        Find the indentation of the first real statement in the function containing the given offset.
+        
+        This is used for insert_inside_start to ensure checkpoints are indented at the same
+        level as the function body statements.
+        """
+        if not self.tree:
+            return None
+        
+        # Find the function containing this offset
+        function_node = self._find_containing_function(offset)
+        if not function_node:
+            logger.debug(f"   No function found containing offset {offset}")
+            return None
+        
+        logger.debug(f"   Found function '{function_node.type}' containing offset {offset}")
+        
+        # For Python, traverse all children of the function to find the first real statement
+        # We don't need to find a specific body node - just iterate through all children
+        for child in function_node.children:
+            # Skip comments
+            if child.type == 'comment':
+                logger.debug(f"   Skipping comment: {child.type}")
+                continue
+            
+            # Skip the function signature parts (def, name, parameters, colon)
+            if child.type in ['def', 'identifier', 'parameters', ':', 'type_annotation']:
+                logger.debug(f"   Skipping function signature part: {child.type}")
+                continue
+            
+            # Skip docstrings (expression_statement with string)
+            if child.type == 'expression_statement':
+                # Check if this is a docstring
+                for grandchild in child.children:
+                    if grandchild.type == 'string':
+                        logger.debug(f"   Skipping docstring: {child.type}")
+                        break  # This is a docstring, skip it
+                else:
+                    # This is a real statement, get its indentation
+                    line_start = code.rfind('\n', 0, child.start_byte) + 1
+                    line_text = code[line_start:child.start_byte]
+                    indentation = len(line_text) - len(line_text.lstrip())
+                    logger.debug(f"   Found first real statement (expression_statement) with {indentation} spaces indentation")
+                    return indentation
+                continue
+            
+            # Skip whitespace and empty nodes
+            if not child.type or child.type in ['pass_statement'] and not child.children:
+                logger.debug(f"   Skipping empty/pass statement: {child.type}")
+                continue
+            
+            # Check if this node has any text content (not just syntax)
+            child_text = code[child.start_byte:child.end_byte].strip()
+            if not child_text:
+                logger.debug(f"   Skipping empty node: {child.type}")
+                continue
+            
+            # Found the first real statement
+            line_start = code.rfind('\n', 0, child.start_byte) + 1
+            line_text = code[line_start:child.start_byte]
+            indentation = len(line_text) - len(line_text.lstrip())
+            logger.debug(f"   Found first real statement '{child.type}' with {indentation} spaces indentation")
+            logger.debug(f"   Statement text preview: '{child_text[:50]}...'")
+            return indentation
+        
+        logger.debug(f"   No real statements found in function")
+        return None
     
     def _calculate_inside_start_indentation(self, indent_info, code: str, offset: int) -> str:
         """

@@ -573,7 +573,8 @@ class LanguageEngine:
                 analysis_method = 'tree_sitter'
             else:
                 # Fallback to regex analysis
-                logger.warning(f"⚠️  FALLBACK: Tree-sitter not available for {language}, using regex analysis instead of AST-based analysis")
+                logger.warning(f"🚨 FALLBACK WARNING: Tree-sitter not available for {language}, using regex analysis instead of AST-based analysis")
+                print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
                 points = self._analyze_with_regex(source_code, language)
                 analysis_method = 'regex_fallback'
             
@@ -653,7 +654,8 @@ class LanguageEngine:
                 
             except (TimeoutError, MemoryError) as e:
                 logger.error(f"Tree-sitter parsing failed for {language}: {e}")
-                logger.warning(f"⚠️  FALLBACK: Tree-sitter parsing failed, using regex analysis instead of AST-based analysis for {language}")
+                logger.warning(f"🚨 FALLBACK WARNING: Tree-sitter parsing failed, using regex analysis instead of AST-based analysis for {language}")
+                print(f"🚨 WARNING: Tree-sitter parsing failed for {language}, using fallback regex analysis - some instrumentation may be less accurate")
                 # Fallback to regex analysis
                 return self._analyze_with_regex(source_code, language)
             
@@ -757,14 +759,20 @@ class LanguageEngine:
                                 logger.debug(f"   🔧 Creating point {i+1}/{len(node_list)} for '{capture_name}' (node: {node.type})")
                                 
                                 # Create instrumentation point from capture
-                                point = self._create_instrumentation_point_from_capture(
+                                point_or_points = self._create_instrumentation_point_from_capture(
                                     node, capture_name, capture_map[capture_name], 
-                                    source_code, language
+                                    source_code, language, tree
                                 )
-                                if point:
-                                    points.append(point)
-                                    points_created += 1
-                                    logger.debug(f"   ✅ Successfully created instrumentation point for '{capture_name}'")
+                                if point_or_points:
+                                    # Handle both single point and list of points
+                                    if isinstance(point_or_points, list):
+                                        points.extend(point_or_points)
+                                        points_created += len(point_or_points)
+                                        logger.debug(f"   ✅ Successfully created {len(point_or_points)} instrumentation points for '{capture_name}'")
+                                    else:
+                                        points.append(point_or_points)
+                                        points_created += 1
+                                        logger.debug(f"   ✅ Successfully created instrumentation point for '{capture_name}'")
                                 else:
                                     logger.debug(f"   ❌ Failed to create instrumentation point for '{capture_name}' (validation failed or error)")
                         else:
@@ -809,7 +817,8 @@ class LanguageEngine:
     
     def _analyze_with_regex(self, source_code: str, language: str) -> List[InstrumentationPoint]:
         """Analyze code using regex fallback patterns with optimization"""
-        logger.warning(f"⚠️  FALLBACK: Using regex analysis for {language} instead of AST-based analysis")
+        logger.warning(f"🚨 FALLBACK WARNING: Using regex analysis for {language} instead of AST-based analysis")
+        print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
         patterns = self._config_manager.get_analysis_patterns(language)
         points = []
         
@@ -854,7 +863,8 @@ class LanguageEngine:
         capture_name: str,
         capture_config: Dict[str, str],
         source_code: str,
-        language: str
+        language: str,
+        tree: Optional['Tree'] = None
     ) -> Optional[InstrumentationPoint]:
         """Create instrumentation point from a single tree-sitter capture"""
         logger.debug(f"🔧 Creating instrumentation point for capture '{capture_name}' in {language}")
@@ -897,11 +907,11 @@ class LanguageEngine:
                         insertion_byte = body_node.start_byte
                         
                         # Use AST processor to find the correct insertion point  
-                        # TODO: Pass tree parameter for TreeSitter indentation engine
-                        ast_processor = ASTProcessor(language, source_code, None)
-                        insertion_byte = ast_processor.find_insertion_point(function_node, 'inside_start')
-                        if insertion_byte is not None:
-                            # Convert byte offset to point
+                        ast_processor = ASTProcessor(language, source_code, tree)
+                        ast_insertion_byte = ast_processor.find_insertion_point(function_node, 'inside_start')
+                        if ast_insertion_byte is not None:
+                            # Use the AST processor result
+                            insertion_byte = ast_insertion_byte
                             insertion_point = self._byte_to_point(source_code, insertion_byte)
                         else:
                             insertion_point = body_node.start_point
@@ -923,6 +933,11 @@ class LanguageEngine:
             global_config = self._config_manager.get_global_config()
             line_offset = global_config.get('line_offset', 1)
             
+            # Only calculate byte offset if we don't have one from AST processor
+            if insertion_byte is None:
+                # Calculate byte offset for the insertion point
+                insertion_byte = self._line_column_to_byte_offset(source_code, insertion_point[0] + line_offset, insertion_point[1] + line_offset)
+            
             # Create the instrumentation point with priority
             point = InstrumentationPoint(
                 id=f"{capture_config['type']}_{name}_{insertion_point[0] + line_offset}_{insertion_point[1] + line_offset}",
@@ -933,13 +948,44 @@ class LanguageEngine:
                 column=insertion_point[1] + line_offset,
                 context=f"{capture_config['subtype'].title()} {capture_config['type']}: {name}",
                 metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
-                byte_offset=None,  # Let ASTRewriter calculate the correct offset
+                byte_offset=insertion_byte,  # Calculate the correct byte offset
                 node_start_byte=node.start_byte,
                 node_end_byte=node.end_byte,
                 insertion_mode=capture_config['insertion_mode'],
                 node=node,  # Add the node for AST-based operations
                 priority=capture_config.get('priority', 999)  # Add priority for deduplication
             )
+            
+            # For function_enter points, also create corresponding function_exit point
+            if capture_config['type'] == 'function_enter':
+                # Find the parent function definition node to get the function body
+                function_node = self._find_parent_function(node, language)
+                if function_node:
+                    # Find the function body for exit point creation
+                    body_node = self._find_function_body(function_node, language)
+                    if body_node:
+                        # Create function exit point - position INSIDE the function body, not after it
+                        exit_line = body_node.end_point.row + line_offset - 1  # One line before the end
+                        exit_column = body_node.start_point.column + line_offset
+                        exit_byte = body_node.end_byte  # Use inside_end mode to position correctly
+                        exit_point = InstrumentationPoint(
+                            id=f"function_exit_{name}_implicit_{exit_line}",
+                            type='function_exit',
+                            subtype='implicit',
+                            name=name,
+                            line=exit_line,
+                            column=exit_column,
+                            context=f"Function exit: {name}",
+                            metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
+                            byte_offset=None,  # Let AST processor calculate position using find_insertion_point
+                            node_start_byte=body_node.start_byte,
+                            node_end_byte=body_node.end_byte,
+                            insertion_mode='inside_end',
+                            node=body_node,
+                            priority=capture_config.get('priority', 999)
+                        )
+                        # Return both points as a list
+                        return [point, exit_point]
             
             return point
             
@@ -1270,8 +1316,8 @@ class LanguageEngine:
                             )
                             points.append(exit_point)
             else:
-                # No explicit returns, create implicit exit at end of body
-                exit_line = body_node.end_point.row + line_offset
+                # No explicit returns, create implicit exit INSIDE the function body
+                exit_line = body_node.end_point.row + line_offset - 1  # One line before the end
                 exit_column = body_node.start_point.column + line_offset
                 exit_point = InstrumentationPoint(
                     id=f"function_exit_{function_name}_implicit_{exit_line}",
@@ -1281,7 +1327,12 @@ class LanguageEngine:
                     line=exit_line,
                     column=exit_column,
                     context=f"Function implicit exit: {function_name}",
-                    metadata=metadata
+                    metadata=metadata,
+                    byte_offset=None,  # Let AST processor calculate position using find_insertion_point
+                    node_start_byte=body_node.start_byte,
+                    node_end_byte=body_node.end_byte,
+                    insertion_mode='inside_end',
+                    node=body_node
                 )
                 points.append(exit_point)
         
@@ -1293,7 +1344,8 @@ class LanguageEngine:
         capture_name: str, 
         node: 'Node', 
         source_code: str,
-        language: str
+        language: str,
+        tree: Optional['Tree'] = None
     ) -> List[InstrumentationPoint]:
         """Create instrumentation points from tree-sitter capture with proper insertion point calculation"""
         # Validate node before processing
@@ -1307,7 +1359,7 @@ class LanguageEngine:
             # Calculate insertion points based on the type of construct
             if capture_name in ['function_name', 'method_name', 'constructor_name']:
                 # For function entries, we need to find the function body start
-                entry_line, exit_line = self._calculate_function_insertion_points(node, language)
+                entry_line, exit_line = self._calculate_function_insertion_points(node, language, tree)
             elif capture_name.startswith('loop.') or 'loop' in capture_name:
                 # For loops, use the loop construct boundaries
                 entry_line, exit_line = self._calculate_loop_insertion_points(node, language)
@@ -1586,7 +1638,28 @@ class LanguageEngine:
         
         return (row, column)
     
-    def _calculate_function_insertion_points(self, function_name_node: 'Node', language: str):
+    def _line_column_to_byte_offset(self, source_code: str, line: int, column: int) -> int:
+        """Convert (line, column) to byte offset using source code"""
+        lines = source_code.split('\n')
+        
+        # Ensure line is within bounds
+        if line < 0:
+            line = 0
+        if line >= len(lines):
+            line = len(lines) - 1
+        
+        # Calculate byte offset
+        byte_offset = 0
+        for i in range(line):
+            byte_offset += len(lines[i]) + 1  # +1 for newline
+        
+        # Add column offset
+        if line < len(lines):
+            byte_offset += min(column, len(lines[line]))
+        
+        return byte_offset
+    
+    def _calculate_function_insertion_points(self, function_name_node: 'Node', language: str, tree: Optional['Tree'] = None):
         """Calculate where to insert function entry and exit checkpoints"""
         # Validate input node
         if not function_name_node or not hasattr(function_name_node, 'parent'):
@@ -1616,8 +1689,7 @@ class LanguageEngine:
         entry_line = parent.start_point.row + 1
         
         # Use AST processor to find the correct insertion point
-        # TODO: Pass tree parameter for TreeSitter indentation engine
-        ast_processor = ASTProcessor(language, source_code, None)
+        ast_processor = ASTProcessor(language, source_code, tree)
         insertion_byte = ast_processor.find_insertion_point(parent, 'inside_start')
         if insertion_byte is not None:
             # Convert byte offset to line number
@@ -1922,12 +1994,16 @@ class LanguageEngine:
                 return self._instrument_code_legacy(source_code, points, language)
                 
         except Exception as e:
-            logger.warning(f"⚠️  FALLBACK: AST-based instrumentation failed for {language}: {e}, using legacy instrumentation instead")
+            logger.warning(f"🚨 FALLBACK WARNING: AST-based instrumentation failed for {language}: {e}, using legacy instrumentation instead")
+            import sys
+            print(f"🚨 WARNING: AST-based instrumentation failed for {language}, using fallback legacy instrumentation - some features may be limited", file=sys.stderr)
             return self._instrument_code_legacy(source_code, points, language)
     
     def _instrument_code_legacy(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
         """Legacy line-based instrumentation (fallback)"""
-        logger.warning(f"⚠️  FALLBACK: Using legacy line-based instrumentation for {language} instead of AST-based instrumentation")
+        logger.warning(f"🚨 FALLBACK WARNING: Using legacy line-based instrumentation for {language} instead of AST-based instrumentation")
+        import sys
+        print(f"🚨 WARNING: Using fallback legacy instrumentation for {language} - some features may be limited", file=sys.stderr)
         # Use generic instrumentation for all languages
         return self._instrument_generic(source_code, points, language)
     
@@ -2220,6 +2296,7 @@ class LanguageEngine:
                     for point in points:
                         point.line += 1
         
+        # Process points in reverse order to avoid line number shifts
         sorted_points = sorted(points, key=lambda p: p.line, reverse=True)
         
         for point in sorted_points:
@@ -2230,41 +2307,180 @@ class LanguageEngine:
                     insert_index = point.line - 1
                     
                     # Add proper indentation for Python
-                    if language == 'python' and point.type in ['function_enter', 'function_exit']:
-                        # Find the indentation of the target line
-                        target_line = lines[insert_index] if insert_index < len(lines) else ""
-                        indent = len(target_line) - len(target_line.lstrip())
-                        indent_str = ' ' * indent
+                    if language == 'python':
+                        if point.type == 'function_enter':
+                            # For function entry, use the indentation of the function body (4 spaces more than function definition)
+                            # Find the function definition line (should be the line before the body)
+                            func_line_idx = max(0, insert_index - 1)
+                            func_line = lines[func_line_idx] if func_line_idx < len(lines) else ""
+                            func_indent = len(func_line) - len(func_line.lstrip())
+                            indent_str = ' ' * (func_indent + 4)  # 4 spaces for function body
+                        elif point.type == 'function_exit':
+                            # For function exit, use the same indentation as the function body
+                            # Find the function definition line
+                            func_line_idx = max(0, insert_index - 1)
+                            func_line = lines[func_line_idx] if func_line_idx < len(lines) else ""
+                            func_indent = len(func_line) - len(func_line.lstrip())
+                            indent_str = ' ' * (func_indent + 4)  # 4 spaces for function body
+                        else:
+                            # For other types, use the indentation of the target line
+                            target_line = lines[insert_index] if insert_index < len(lines) else ""
+                            indent = len(target_line) - len(target_line.lstrip())
+                            indent_str = ' ' * indent
+                        
                         instrumentation_code = indent_str + instrumentation_code.strip()
                     
+                    # Insert the instrumentation code
                     lines.insert(insert_index, instrumentation_code)
+                    
+                    # Adjust line numbers for all subsequent points
+                    for other_point in sorted_points:
+                        if other_point.line > point.line:
+                            other_point.line += 1
+        
+        # Post-process: Fix indentation for all function bodies
+        if language == 'python':
+            self._fix_python_function_indentation_comprehensive(lines)
         
         return '\n'.join(lines)
+    
+    def _fix_python_function_indentation(self, lines: List[str]) -> None:
+        """Fix indentation for all Python function bodies after instrumentation"""
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            
+            # Look for function definitions
+            if stripped.startswith('def '):
+                # Find the function definition line
+                func_indent = len(line) - len(line.lstrip())
+                expected_body_indent = func_indent + 4
+                
+                # Process the function body
+                j = i + 1
+                while j < len(lines):
+                    body_line = lines[j]
+                    body_stripped = body_line.strip()
+                    
+                    # Stop if we hit another function definition at the same or lesser indentation
+                    if body_stripped.startswith('def ') and len(body_line) - len(body_line.lstrip()) <= func_indent:
+                        break
+                    
+                    # Stop if we hit a class definition at the same or lesser indentation
+                    if body_stripped.startswith('class ') and len(body_line) - len(body_line.lstrip()) <= func_indent:
+                        break
+                    
+                    # Stop if we hit the main block at the same or lesser indentation
+                    if body_stripped.startswith('if __name__') and len(body_line) - len(body_line.lstrip()) <= func_indent:
+                        break
+                    
+                    # Skip empty lines
+                    if not body_stripped:
+                        j += 1
+                        continue
+                    
+                    # Fix indentation for function body lines
+                    current_indent = len(body_line) - len(body_line.lstrip())
+                    if current_indent < expected_body_indent:
+                        # This line should be indented as part of the function body
+                        lines[j] = ' ' * expected_body_indent + body_line.lstrip()
+                    
+                    j += 1
+                
+                # Move to the next function
+                i = j
+            else:
+                i += 1
+    
+    def _fix_python_function_indentation_comprehensive(self, lines: List[str]) -> None:
+        """Comprehensive fix for Python function indentation after instrumentation"""
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            
+            # Look for function definitions
+            if stripped.startswith('def '):
+                # Find the function definition line
+                func_indent = len(line) - len(line.lstrip())
+                expected_body_indent = func_indent + 4
+                
+                # Process the function body
+                j = i + 1
+                while j < len(lines):
+                    body_line = lines[j]
+                    body_stripped = body_line.strip()
+                    
+                    # Stop if we hit another function definition at the same or lesser indentation
+                    if body_stripped.startswith('def ') and len(body_line) - len(body_line.lstrip()) <= func_indent:
+                        break
+                    
+                    # Stop if we hit a class definition at the same or lesser indentation
+                    if body_stripped.startswith('class ') and len(body_line) - len(body_line.lstrip()) <= func_indent:
+                        break
+                    
+                    # Stop if we hit the main block at the same or lesser indentation
+                    if body_stripped.startswith('if __name__') and len(body_line) - len(body_line.lstrip()) <= func_indent:
+                        break
+                    
+                    # Skip empty lines
+                    if not body_stripped:
+                        j += 1
+                        continue
+                    
+                    # Fix indentation for function body lines
+                    current_indent = len(body_line) - len(body_line.lstrip())
+                    if current_indent < expected_body_indent:
+                        # This line should be indented as part of the function body
+                        lines[j] = ' ' * expected_body_indent + body_line.lstrip()
+                    
+                    j += 1
+                
+                # Move to the next function
+                i = j
+            else:
+                i += 1
+    
+    def _fix_corrupted_lines(self, lines: List[str]) -> None:
+        """Fix lines that got corrupted during instrumentation"""
+        for i in range(len(lines)):
+            line = lines[i]
+            # Check for corrupted lines (lines that start with a single character followed by a space)
+            if len(line) > 2 and line[0].isalpha() and line[1] == ' ' and not line.strip().startswith(('def ', 'class ', 'if ', 'for ', 'while ', 'try:', 'except', 'finally:', 'with ', 'import ', 'from ')):
+                # This might be a corrupted line, try to fix it
+                # Look for the next line that might be the continuation
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1]
+                    if next_line.strip() and not next_line.strip().startswith(('def ', 'class ', 'if ', 'for ', 'while ', 'try:', 'except', 'finally:', 'with ', 'import ', 'from ')):
+                        # Merge the lines
+                        lines[i] = line + next_line.strip()
+                        lines.pop(i + 1)
     
     def _generate_python_call(self, point: InstrumentationPoint) -> str:
         """Generate Python measurement call using codegreen_runtime"""
         return (
-            f"_codegreen_rt.checkpoint('{point.checkpoint_id}', '{point.name}', '{point.type.split('_')[1]}')"
+            f"_codegreen_rt.checkpoint('{point.id}', '{point.name}', '{point.type.split('_')[1]}')"
         )
     
     def _generate_c_call(self, point: InstrumentationPoint) -> str:
         """Generate C measurement call"""
         return (
-            f"codegreen_measure_checkpoint(\"{point.checkpoint_id}\", \"{point.type}\", "
+            f"codegreen_measure_checkpoint(\"{point.id}\", \"{point.type}\", "
             f"\"{point.name}\", {point.line}, \"{point.context}\");"
         )
     
     def _generate_cpp_call(self, point: InstrumentationPoint) -> str:
         """Generate C++ measurement call"""
         return (
-            f"codegreen_measure_checkpoint(\"{point.checkpoint_id}\", \"{point.type}\", "
+            f"codegreen_measure_checkpoint(\"{point.id}\", \"{point.type}\", "
             f"\"{point.name}\", {point.line}, \"{point.context}\");"
         )
     
     def _generate_java_call(self, point: InstrumentationPoint) -> str:
         """Generate Java measurement call"""
         return (
-            f"CodeGreenRuntime.measureCheckpoint(\"{point.checkpoint_id}\", \"{point.type}\", "
+            f"CodeGreenRuntime.measureCheckpoint(\"{point.id}\", \"{point.type}\", "
             f"\"{point.name}\", {point.line}, \"{point.context}\");"
         )
     
