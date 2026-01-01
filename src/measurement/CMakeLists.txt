@@ -53,7 +53,7 @@ set(NEMB_SOURCES
 add_library(codegreen-core STATIC ${CORE_SOURCES})
 
 # Create NEMB library
-add_library(codegreen-nemb STATIC ${NEMB_SOURCES})
+add_library(codegreen-nemb SHARED ${NEMB_SOURCES})
 
 # Set include directories for legacy core
 target_include_directories(codegreen-core PUBLIC

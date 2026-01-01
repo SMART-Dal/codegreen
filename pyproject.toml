@@ -77,14 +77,12 @@ Repository = "https://github.com/codegreen/codegreen"
 Changelog = "https://github.com/codegreen/codegreen/blob/main/CHANGELOG.md"
 
 [project.scripts]
-codegreen = "codegreen.cli:main_cli"
-codegreen-analyze = "codegreen.analyze:main"
-codegreen-report = "codegreen.report:main"
+codegreen = "src.cli.cli:main_cli"
 
 # Setuptools configuration
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["codegreen*"]
+include = ["src*"]
 
 [tool.setuptools.package-data]
 codegreen = [

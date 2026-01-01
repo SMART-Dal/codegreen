@@ -111,7 +111,11 @@
         "codegreen.uiStyle": {
           "type": "string",
           "default": "subtle",
-          "enum": ["subtle", "prominent", "minimal"],
+          "enum": [
+            "subtle",
+            "prominent",
+            "minimal"
+          ],
           "description": "UI style for energy indicators"
         },
         "codegreen.showStatusBar": {

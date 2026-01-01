@@ -749,3 +749,62 @@ double validate_measurement_accuracy(double duration_seconds) {
 } // namespace energy_utils
 
 } // namespace codegreen
+
+// C API for Foreign Function Interface (Python, etc.)
+extern "C" {
+    
+    // Global instance for C API users
+    static std::unique_ptr<codegreen::EnergyMeter> c_api_meter;
+    static std::mutex c_api_mutex;
+
+    int nemb_initialize() {
+        try {
+            std::lock_guard<std::mutex> lock(c_api_mutex);
+            if (!c_api_meter) {
+                c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+            }
+            return c_api_meter->is_available() ? 1 : 0;
+        } catch (...) {
+            return 0;
+        }
+    }
+
+    uint64_t nemb_start_session(const char* name) {
+        std::lock_guard<std::mutex> lock(c_api_mutex);
+        if (!c_api_meter) return 0;
+        try {
+            return c_api_meter->start_session(name ? name : "c_api_session");
+        } catch (...) {
+            return 0;
+        }
+    }
+
+    int nemb_stop_session(uint64_t session_id, double* energy_joules, double* avg_power_watts) {
+        std::lock_guard<std::mutex> lock(c_api_mutex);
+        if (!c_api_meter) return 0;
+        try {
+            auto result = c_api_meter->end_session(session_id);
+            if (result.is_valid) {
+                if (energy_joules) *energy_joules = result.energy_joules;
+                if (avg_power_watts) *avg_power_watts = result.average_power_watts;
+                return 1;
+            }
+        } catch (...) {}
+        return 0;
+    }
+    
+    // Get instantaneous reading
+    int nemb_read_current(double* energy_joules, double* power_watts) {
+         std::lock_guard<std::mutex> lock(c_api_mutex);
+         if (!c_api_meter) return 0;
+         try {
+             auto result = c_api_meter->read();
+             if (result.is_valid) {
+                 if (energy_joules) *energy_joules = result.energy_joules;
+                 if (power_watts) *power_watts = result.power_watts;
+                 return 1;
+             }
+         } catch (...) {}
+         return 0;
+    }
+}

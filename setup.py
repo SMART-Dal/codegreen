@@ -63,6 +63,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/codegreen/codegreen",
     packages=find_packages(),
+    py_modules=['codegreen_runtime'],
     python_requires=">=3.8",
     install_requires=[
         "typer>=0.17.0",
@@ -82,11 +83,10 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "codegreen=codegreen_cli:main",
+            "codegreen=src.cli.cli:main_cli",
         ],
     },
-    # Include the CLI script and binary
-    scripts=['codegreen_cli.py'],
+    # Include the CLI binary and runtime files
     data_files=[
         ('bin', ['bin/codegreen']),
         ('bin/runtime', ['src/instrumentation/codegreen_runtime.py']),

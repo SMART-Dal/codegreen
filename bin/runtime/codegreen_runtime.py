@@ -1,7 +1,7 @@
 """
 CodeGreen Runtime Module for Python
 Provides runtime energy measurement functionality for instrumented Python code.
-Designed for minimal overhead and high accuracy energy measurements.
+Designed for minimal overhead and high accuracy energy measurements using the NEMB C++ backend.
 """
 
 import time
@@ -9,8 +9,153 @@ import threading
 import json
 import os
 import sys
+import ctypes
+from ctypes import c_double, c_char_p, c_uint64, c_int, byref
 from typing import Dict, List, Optional, NamedTuple
 from dataclasses import dataclass, asdict
+from pathlib import Path
+
+# --- C++ Backend Interface ---
+
+def _find_nemb_library() -> Optional[str]:
+    """Find the path to the shared NEMB library."""
+    possible_names = ["libcodegreen-nemb.so", "libcodegreen-nemb.dylib", "codegreen-nemb.dll"]
+    
+    # Paths to search
+    search_paths = [
+        # 1. Relative to this file (if installed in site-packages/codegreen/instrumentation)
+        Path(__file__).parent.parent.parent / "lib",
+        Path(__file__).parent.parent.parent / "build" / "lib",
+        # 2. Standard library paths
+        Path("/usr/local/lib"),
+        Path("/usr/lib"),
+        # 3. Environment variable
+        Path(os.environ.get("CODEGREEN_LIB_PATH", ""))
+    ]
+    
+    for path in search_paths:
+        if not path.exists():
+            continue
+        for name in possible_names:
+            lib_path = path / name
+            if lib_path.exists():
+                return str(lib_path)
+    
+    return None
+
+class NEMBClient:
+    """Interface to the Native Energy Measurement Backend (C++)"""
+    
+    def __init__(self):
+        self.lib = None
+        self.available = False
+        
+        lib_path = _find_nemb_library()
+        if lib_path:
+            try:
+                self.lib = ctypes.CDLL(lib_path)
+                
+                # Setup function signatures
+                self.lib.nemb_initialize.argtypes = []
+                self.lib.nemb_initialize.restype = c_int
+                
+                self.lib.nemb_read_current.argtypes = [ctypes.POINTER(c_double), ctypes.POINTER(c_double)]
+                self.lib.nemb_read_current.restype = c_int
+                
+                # Initialize backend
+                if self.lib.nemb_initialize():
+                    self.available = True
+            except Exception as e:
+                print(f"CodeGreen Runtime Warning: Failed to load NEMB library: {e}", file=sys.stderr)
+        else:
+            # Fallback for development where library might not be built yet
+            pass
+
+    def read_energy(self) -> tuple:
+        """Returns (joules, watts)"""
+        if not self.available:
+            return (0.0, 0.0)
+            
+        energy = c_double()
+        power = c_double()
+        
+        if self.lib.nemb_read_current(byref(energy), byref(power)):
+            return (energy.value, power.value)
+            
+        return (0.0, 0.0)
+
+# --- Runtime Implementation ---
+
+class EnergyReader:
+    """Reads energy from hardware sensors via NEMB or fallback"""
+
+    def __init__(self):
+        self.client = NEMBClient()
+        self.available = self.client.available
+        
+        # Fallback for legacy RAPL if C++ backend unavailable
+        if not self.available:
+            self.rapl_path = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
+            self.fallback_available = self.rapl_path.exists()
+            self.last_energy = 0
+            self.last_timestamp = 0
+            if self.fallback_available:
+                try:
+                    self.last_energy = self._read_rapl_fallback()
+                    self.last_timestamp = time.perf_counter()
+                except:
+                    self.fallback_available = False
+        else:
+            self.fallback_available = False
+
+    def _read_rapl_fallback(self) -> int:
+        """Read RAPL energy counter in microjoules (Fallback)"""
+        try:
+            with open(self.rapl_path, 'r') as f:
+                return int(f.read().strip())
+        except:
+            return 0
+
+    def read_energy(self) -> tuple:
+        """Returns (joules, watts) since last read"""
+        if self.available:
+            return self.client.read_energy()
+            
+        if not self.fallback_available:
+            return (0.0, 0.0)
+
+        # Legacy fallback logic
+        try:
+            current_energy = self._read_rapl_fallback()
+            current_timestamp = time.perf_counter()
+
+            delta_uj = current_energy - self.last_energy
+            delta_time = current_timestamp - self.last_timestamp
+
+            if delta_uj < 0:
+                delta_uj += (1 << 32)
+
+            joules = delta_uj / 1_000_000.0
+            watts = joules / delta_time if delta_time > 0 else 0.0
+
+            self.last_energy = current_energy
+            self.last_timestamp = current_timestamp
+
+            return (joules, watts)
+        except:
+            return (0.0, 0.0)
+
+_energy_reader: Optional[EnergyReader] = None
+_energy_lock = threading.Lock()
+
+def _get_energy_reader() -> EnergyReader:
+    """Get or create global energy reader"""
+    global _energy_reader
+    if _energy_reader is None:
+        with _energy_lock:
+            if _energy_reader is None:
+                _energy_reader = EnergyReader()
+    return _energy_reader
 
 @dataclass
 class EnergyMeasurement:
@@ -19,7 +164,7 @@ class EnergyMeasurement:
     timestamp: float
     joules: float = 0.0
     watts: float = 0.0
-    source: str = "pmt"
+    source: str = "nemb"
 
 class MeasurementCollector:
     """High-performance measurement collector with minimal overhead"""
@@ -29,23 +174,22 @@ class MeasurementCollector:
         self.start_time = time.time()
         self.lock = threading.Lock()
         
-    def record_checkpoint(self, checkpoint_id: str, checkpoint_type: str, name: str, 
+    def record_checkpoint(self, checkpoint_id: str, checkpoint_type: str, name: str,
                          line_number: int, context: str) -> None:
         """Record a checkpoint with minimal overhead"""
-        # Use high-precision timer for accuracy
         timestamp = time.perf_counter()
-        
-        # Create measurement with placeholder values
-        # In production, these would be filled by the C++ PMT integration
+
+        energy_reader = _get_energy_reader()
+        joules, watts = energy_reader.read_energy()
+
         measurement = EnergyMeasurement(
             checkpoint_id=checkpoint_id,
             timestamp=timestamp,
-            joules=0.0,  # Will be filled by PMT
-            watts=0.0,   # Will be filled by PMT
-            source="pmt"
+            joules=joules,
+            watts=watts,
+            source="nemb" if energy_reader.available else "rapl_fallback"
         )
-        
-        # Thread-safe append with minimal locking
+
         with self.lock:
             self.measurements.append(measurement)
     
@@ -62,6 +206,10 @@ class MeasurementCollector:
 # Global measurement collector
 _measurement_collector: Optional[MeasurementCollector] = None
 _collector_lock = threading.Lock()
+
+# Global session management
+_measurement_session: Optional['MeasurementSession'] = None
+_session_lock = threading.Lock()
 
 
 @dataclass
@@ -96,7 +244,7 @@ class MeasurementSession:
             name=name,
             line_number=line_number,
             context=context,
-            timestamp=time.time(),
+            timestamp=time.perf_counter(),
             process_id=self.process_id,
             thread_id=threading.get_ident()
         )

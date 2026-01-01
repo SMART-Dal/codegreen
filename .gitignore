@@ -58,24 +58,43 @@ venv.bak/
 .coverage
 htmlcov/
 
-# Flit build artifacts
+# Python build artifacts
 dist/
 *.egg-info/
+.eggs/
 
 # Temporary files
 *.tmp
 *.temp
-test_*
 reports*/
 *.db
 *.sqlite
 *.sqlite3
 
+# Instrumented code outputs
+*_instrumented.*
+examples/*_instrumented.*
+
+# Packages directory (if build artifacts)
+packages/
+
 # Backup files
 *.bak
 *.backup
 
-# ./codegreen
+# Generated binaries and sync files
 bin/codegreen
-./codegreen/
+bin/src/
+bin/runtime/
+codegreen
 ./codegreen/lib/pkgconfig/tree-sitter.pc
+codegreen/bin/codegreen
+
+# Runtime generated files
+measurements.db
+energy_data.db
+.codegreen/
+
+# Archive directory (except .gitkeep)
+archive/*
+!archive/.gitkeep

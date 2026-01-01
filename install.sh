@@ -1,147 +1,158 @@
 #!/bin/bash
-# CodeGreen Installation Script with Comprehensive Testing
+# CodeGreen Installation Script
+# Builds C++ binary, installs Python CLI, and validates installation
 
 set -e
 
-echo "🚀 Installing CodeGreen..."
+PROJECT_ROOT="$(pwd)"
+BUILD_DIR="$PROJECT_ROOT/build"
+BINARY_PATH="$BUILD_DIR/bin/codegreen"
+
+echo "CodeGreen Installation"
+echo "====================="
+echo "Project root: $PROJECT_ROOT"
 
 # Check Python version
-echo "🔍 Checking Python version..."
+echo "Checking Python version..."
 PYTHON_VERSION=$(python3 --version | awk '{print $2}')
 PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
 PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 
 if [ "$PYTHON_MAJOR" -lt 3 ] || [ "$PYTHON_MAJOR" -eq 3 -a "$PYTHON_MINOR" -lt 8 ]; then
-    echo "❌ Python 3.8+ required, found $PYTHON_VERSION"
+    echo "Error: Python 3.8+ required, found $PYTHON_VERSION"
     exit 1
 fi
-echo "✅ Python $PYTHON_VERSION found"
+echo "Python $PYTHON_VERSION found"
 
 # Install Python dependencies
-echo "📦 Installing Python dependencies..."
+echo "Installing Python dependencies..."
 pip3 install -r requirements.txt
 
-# Build C++ components
-echo "🔨 Building C++ components..."
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+# Sync instrumentation files
+echo "Syncing instrumentation files..."
+mkdir -p bin/src/instrumentation bin/runtime
 
-# Verify build artifacts
-echo "🔍 Verifying build artifacts..."
-if [ ! -f "bin/codegreen" ]; then
-    echo "❌ Build failed: codegreen binary not found"
+# Copy instrumentation files to development directories
+cp -u src/instrumentation/codegreen_runtime.py bin/runtime/
+cp -u src/instrumentation/bridge_analyze.py bin/src/instrumentation/
+cp -u src/instrumentation/bridge_instrument.py bin/src/instrumentation/
+cp -u src/instrumentation/language_engine.py bin/src/instrumentation/
+cp -u src/instrumentation/ast_processor.py bin/src/instrumentation/
+cp -u src/instrumentation/language_configs.py bin/src/instrumentation/
+
+# Clean Python cache
+find bin/src/instrumentation -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+find src/instrumentation -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+echo "Instrumentation files synchronized"
+
+# Build C++ components
+echo "Building C++ components..."
+
+# Clean and rebuild
+echo "Cleaning previous build..."
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+echo "Configuring with CMake..."
+if ! cmake .. -DCMAKE_BUILD_TYPE=Release; then
+    echo "Error: CMake configuration failed"
     exit 1
 fi
-echo "✅ CodeGreen binary built successfully"
 
-# Test binary can execute
-echo "🧪 Testing binary execution..."
-if ! ./bin/codegreen --version 2>/dev/null; then
-    echo "⚠️  Binary version check failed (expected for current implementation)"
+echo "Building project..."
+if ! make -j$(nproc) > /dev/null 2>&1; then
+    echo "Error: Build failed. Showing detailed output:"
+    make -j$(nproc)
+    exit 1
 fi
 
-# Check that development binary was copied
+# Verify binary was created
+if [ ! -f "$BINARY_PATH" ]; then
+    echo "Error: Binary not found at $BINARY_PATH"
+    exit 1
+fi
+
+echo "C++ binary built successfully"
+
+# Copy binary to development location
 cd ..
-if [ -f "bin/codegreen" ]; then
-    echo "✅ Development binary deployed to bin/"
-else
-    echo "⚠️  Development binary not found in bin/"
-fi
+cp "$BINARY_PATH" bin/
+echo "Binary deployed to bin/"
 
-# Install Python package
-echo "📦 Installing Python package..."
+# Install Python CLI package
+echo "Installing Python CLI package..."
+pip3 uninstall -y codegreen 2>/dev/null || true
 pip3 install -e .
 
-# Test CLI installation
-echo "🧪 Testing CLI installation..."
-if command -v codegreen &> /dev/null; then
-    echo "✅ CodeGreen CLI installed and available in PATH"
-else
-    echo "⚠️  CodeGreen CLI not found in PATH, checking local installation..."
+# Verify CLI installation
+if ! python3 -c "from src.cli.cli import main_cli" 2>/dev/null; then
+    echo "Error: Python CLI installation failed"
+    exit 1
 fi
 
-# Test Python import
-echo "🧪 Testing Python module import..."
-python3 -c "
-try:
-    import sys
-    sys.path.insert(0, 'src/instrumentation')
-    from language_engine import LanguageEngine
-    engine = LanguageEngine()
-    print('✅ Language engine imports successfully')
-except ImportError as e:
-    print(f'⚠️  Import warning: {e}')
-    print('This may be expected if dependencies are not fully installed')
-"
+# Setup PATH for this session
+export PATH="$HOME/.local/bin:$PATH"
 
-# Test with a simple Python file
-echo "🧪 Testing end-to-end functionality..."
-cat > /tmp/test_codegreen.py << 'EOF'
-def fibonacci(n):
-    if n <= 1:
-        return n
-    return fibonacci(n-1) + fibonacci(n-2)
-
-for i in range(5):
-    print(f"fib({i}) = {fibonacci(i)}")
-EOF
-
-echo "📝 Created test file: /tmp/test_codegreen.py"
-
-# Test analysis functionality
-if ./bin/codegreen --analyze /tmp/test_codegreen.py 2>/dev/null; then
-    echo "✅ Analysis functionality working"
+# Verify CLI command is available
+if command -v codegreen >/dev/null 2>&1; then
+    CLI_PATH=$(which codegreen)
+    echo "CLI command found: $CLI_PATH"
 else
-    echo "⚠️  Analysis test failed (expected for current CLI interface)"
+    echo "Warning: CLI command not found in PATH"
+    echo "Add $HOME/.local/bin to your PATH for permanent access"
 fi
 
-# Test with direct binary usage
-if ./bin/codegreen python /tmp/test_codegreen.py 2>/dev/null; then
-    echo "✅ Direct binary execution working"
+# Basic functionality tests
+echo "Running basic tests..."
+
+# Test CLI help
+if timeout 10s codegreen --help >/dev/null 2>&1; then
+    echo "CLI help test passed"
 else
-    echo "⚠️  Direct binary test had issues (may be expected)"
+    echo "Warning: CLI help test failed"
 fi
 
-# Check database creation
-if [ -f "measurements.db" ]; then
-    echo "✅ SQLite database created"
-    sqlite3 measurements.db "SELECT name FROM sqlite_master WHERE type='table';" | head -5
+# Test binary execution
+if [ -x "$BINARY_PATH" ]; then
+    echo "Binary is executable"
 else
-    echo "⚠️  No measurements database found (normal for analysis-only run)"
+    echo "Error: Binary is not executable"
+    exit 1
 fi
 
-# Test tree-sitter languages
-echo "🧪 Testing tree-sitter language support..."
-python3 -c "
-try:
-    import tree_sitter_languages
-    langs = tree_sitter_languages.get_language('python')
-    print('✅ Tree-sitter Python support available')
-except Exception as e:
-    print(f'⚠️  Tree-sitter test: {e}')
-"
+# Test a quick benchmark
+echo "Testing CPU benchmark..."
+BENCHMARK_OUTPUT=$(timeout 15s "$BINARY_PATH" benchmark cpu_stress --duration=2 2>&1 || echo "TIMEOUT_OR_ERROR")
 
-# Cleanup test files
-rm -f /tmp/test_codegreen.py
+if echo "$BENCHMARK_OUTPUT" | grep -q "Energy consumed:.*J" && echo "$BENCHMARK_OUTPUT" | grep -q "Average power:.*W"; then
+    ENERGY=$(echo "$BENCHMARK_OUTPUT" | grep "Energy consumed:" | sed 's/.*Energy consumed: \([0-9.]*\).*/\1/')
+    POWER=$(echo "$BENCHMARK_OUTPUT" | grep "Average power:" | sed 's/.*Average power: \([0-9.]*\).*/\1/')
+    echo "Benchmark test passed: ${ENERGY}J consumed, ${POWER}W average power"
+else
+    echo "Warning: Benchmark test failed or timed out"
+fi
 
+# Check RAPL permissions
+if [ -r "/sys/class/powercap/intel-rapl:0/energy_uj" ]; then
+    echo "RAPL energy measurement available"
+else
+    echo "Warning: RAPL energy files not accessible (may need sudo for hardware access)"
+fi
+
+# Final summary
 echo ""
-echo "🎉 CodeGreen installation completed!"
+echo "INSTALLATION COMPLETE"
+echo "===================="
+echo "Binary: $BINARY_PATH"
+echo "CLI: $(which codegreen 2>/dev/null || echo $HOME/.local/bin/codegreen)"
 echo ""
-echo "📋 Installation Summary:"
-echo "  ✅ C++ binary built and deployed"
-echo "  ✅ Python package installed in development mode"
-echo "  ✅ Dependencies satisfied"
-echo "  ✅ Basic functionality tested"
+echo "Ready to use:"
+echo "  codegreen --help"
+echo "  codegreen info"
+echo "  codegreen measure python script.py"
+echo "  codegreen analyze python script.py"
 echo ""
-echo "🚀 Usage Examples:"
-echo "  Direct binary:  ./bin/codegreen python script.py"
-echo "  Via CLI:        codegreen python script.py"
-echo "  Analysis only:  ./bin/codegreen --analyze script.py"
-echo ""
-echo "📁 Key Files:"
-echo "  Binary:         ./bin/codegreen"
-echo "  Config:         ./config/codegreen.json"
-echo "  Runtime:        ./src/instrumentation/codegreen_runtime.py"
-echo "  Database:       ./measurements.db (created during execution)"
+echo "If 'codegreen' command is not found, add to your shell:"
+echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
