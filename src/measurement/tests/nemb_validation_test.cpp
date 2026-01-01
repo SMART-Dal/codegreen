@@ -113,9 +113,9 @@ private:
             }
             
             std::cout << "  ✅ Got valid reading\n";
-            std::cout << "    Total energy: " << (reading.total_energy_joules * 1000) << " mJ\n";
-            std::cout << "    Total power: " << reading.total_power_watts << " W\n";
-            std::cout << "    Components: " << reading.component_breakdown.size() << "\n";
+            std::cout << "    Total energy: " << (reading.energy_joules * 1000) << " mJ\n";
+            std::cout << "    Total power: " << reading.power_watts << " W\n";
+            std::cout << "    Components: " << reading.components.size() << "\n";
             
             // Run self-test
             if (!provider->self_test()) {

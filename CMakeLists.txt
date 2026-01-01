@@ -69,7 +69,10 @@ add_subdirectory(third_party/tree-sitter-python EXCLUDE_FROM_ALL)
 add_subdirectory(src/measurement)
 
 # Check if additional language parsers exist
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-c")
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-c/src/parser.c")
+    message(STATUS "✓ Found tree-sitter-c (supported via Python runtime)")
+    set(HAS_TREE_SITTER_C ON)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-c")
     message(STATUS "Found tree-sitter-c, but parser.c missing - C support disabled")
     set(HAS_TREE_SITTER_C OFF)
 else()
@@ -77,7 +80,10 @@ else()
     set(HAS_TREE_SITTER_C OFF)
 endif()
 
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-cpp")
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-cpp/src/parser.c")
+    message(STATUS "✓ Found tree-sitter-cpp (supported via Python runtime)")
+    set(HAS_TREE_SITTER_CPP ON)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-cpp")
     message(STATUS "Found tree-sitter-cpp, but parser.c missing - C++ support disabled")
     set(HAS_TREE_SITTER_CPP OFF)
 else()
@@ -85,7 +91,10 @@ else()
     set(HAS_TREE_SITTER_CPP OFF)
 endif()
 
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-java")
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-java/src/parser.c")
+    message(STATUS "✓ Found tree-sitter-java (supported via Python runtime)")
+    set(HAS_TREE_SITTER_JAVA ON)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-java")
     message(STATUS "Found tree-sitter-java, but parser.c missing - Java support disabled")
     set(HAS_TREE_SITTER_JAVA OFF)
 else()
@@ -144,7 +153,7 @@ file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation)
 
 # Define instrumentation source files for dependency tracking
 set(INSTRUMENTATION_SOURCES
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/codegreen_runtime.py
+    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py
     ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py
     ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py
     ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py
@@ -163,8 +172,8 @@ set(LANGUAGE_CONFIGS_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/
 # Custom commands to copy files when source changes
 add_custom_command(
     OUTPUT ${RUNTIME_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/codegreen_runtime.py ${RUNTIME_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/codegreen_runtime.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py ${RUNTIME_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py
     COMMENT "Copying codegreen_runtime.py to build directory"
 )
 
@@ -246,7 +255,7 @@ add_custom_target(dev-install ALL
 )
 
 # Install runtime modules
-install(FILES ${CMAKE_SOURCE_DIR}/src/instrumentation/codegreen_runtime.py
+install(FILES ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py
     DESTINATION bin/runtime
     COMPONENT runtime
 )

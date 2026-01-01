@@ -15,11 +15,12 @@ try:
     from language_engine import LanguageEngine
     
     def main():
-        if len(sys.argv) != 2:
-            print("ERROR: Usage: bridge_analyze.py <source_file>", file=sys.stderr)
+        if len(sys.argv) < 2 or len(sys.argv) > 3:
+            print("ERROR: Usage: bridge_analyze.py <source_file> [language]", file=sys.stderr)
             sys.exit(1)
         
         source_file = sys.argv[1]
+        language = sys.argv[2] if len(sys.argv) == 3 else 'python'
         
         try:
             # Read source code
@@ -30,7 +31,7 @@ try:
             engine = LanguageEngine()
             
             # Analyze the code
-            analysis_result = engine.analyze_code(source_code, 'python')
+            analysis_result = engine.analyze_code(source_code, language)
             
             if analysis_result.success:
                 print(f"ANALYSIS_SUCCESS: Found {len(analysis_result.instrumentation_points)} instrumentation points")

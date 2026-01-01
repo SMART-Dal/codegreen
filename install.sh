@@ -33,7 +33,7 @@ echo "Syncing instrumentation files..."
 mkdir -p bin/src/instrumentation bin/runtime
 
 # Copy instrumentation files to development directories
-cp -u src/instrumentation/codegreen_runtime.py bin/runtime/
+cp -u src/instrumentation/language_runtimes/python/codegreen_runtime.py bin/runtime/
 cp -u src/instrumentation/bridge_analyze.py bin/src/instrumentation/
 cp -u src/instrumentation/bridge_instrument.py bin/src/instrumentation/
 cp -u src/instrumentation/language_engine.py bin/src/instrumentation/

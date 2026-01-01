@@ -1,0 +1,180 @@
+{
+    "name": "javascript",
+    "extensions": [
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".ts",
+        ".tsx"
+    ],
+    "tree_sitter_name": "javascript",
+    "ast_config": {
+        "body_field": "body",
+        "block_type": "statement_block",
+        "function_types": [
+            "function_declaration",
+            "arrow_function",
+            "function_expression"
+        ],
+        "class_types": [
+            "class_declaration"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement",
+            "for_in_statement",
+            "for_of_statement"
+        ],
+        "return_types": [
+            "return_statement"
+        ],
+        "comment_types": [
+            "comment"
+        ],
+        "docstring_types": [],
+        "insertion_rules": {
+            "function_enter": {
+                "mode": "inside_start",
+                "find_first_statement": true,
+                "skip_docstrings": false,
+                "skip_comments": true
+            },
+            "function_exit": {
+                "mode": "inside_end",
+                "find_last_statement": true
+            },
+            "class_enter": {
+                "mode": "inside_start",
+                "find_first_statement": true,
+                "skip_docstrings": false,
+                "skip_comments": true
+            },
+            "class_exit": {
+                "mode": "inside_end",
+                "find_last_statement": true
+            },
+            "before": {
+                "mode": "before"
+            },
+            "after": {
+                "mode": "after"
+            }
+        }
+    },
+    "query_config": {
+        "capture_mapping": {
+            "function.definition": "function_enter",
+            "class.definition": "class_enter",
+            "class.name": "class_enter",
+            "return.statement": "function_exit",
+            "loop.for": "loop_start",
+            "loop.while": "loop_start",
+            "loop.for_in": "loop_start",
+            "loop.for_of": "loop_start"
+        },
+        "priority_order": [
+            "function.definition",
+            "class.definition",
+            "return.statement",
+            "loop.for",
+            "loop.while",
+            "loop.for_in",
+            "loop.for_of"
+        ]
+    },
+    "instrumentation_config": {
+        "import_statement": "import { CodeGreen } from 'codegreen-runtime';",
+        "templates": {
+            "function_enter": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'enter');",
+            "function_exit": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'exit');",
+            "class_enter": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'class_enter');",
+            "loop_start": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'loop_start');",
+            "loop_exit": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'loop_exit');"
+        },
+        "statement_terminator": ";",
+        "comment_prefix": "//"
+    },
+    "formatting_config": {
+        "indent_size": 2,
+        "indent_char": " ",
+        "line_ending": "\n",
+        "extra_indent_for_inside": 2
+    },
+    "rules": {
+        "skip_docstrings": false,
+        "skip_comments": true,
+        "handle_async": true,
+        "handle_decorators": false,
+        "handle_generators": true
+    },
+    "analysis_patterns": {
+        "function_def": "^\\s*(?:async\\s+)?(?:function\\s+(\\w+)|(\\w+)\\s*[:=]\\s*(?:async\\s+)?(?:function|=>))",
+        "class_def": "^\\s*class\\s+(\\w+)",
+        "arrow_function": "^\\s*(\\w+)\\s*=>",
+        "for_loop": "^\\s*for\\s*\\(",
+        "while_loop": "^\\s*while\\s*\\(",
+        "for_in_loop": "^\\s*for\\s*\\(\\s*\\w+\\s+in\\s+",
+        "for_of_loop": "^\\s*for\\s*\\(\\s*\\w+\\s+of\\s+",
+        "async_function": "^\\s*async\\s+function",
+        "promise_chain": "\\.then\\s*\\(",
+        "async_await": "await\\s+"
+    },
+    "detection_patterns": {
+        "import_keywords": [
+            "import ",
+            "export ",
+            "require("
+        ],
+        "syntax_keywords": [
+            "function ",
+            "const ",
+            "let ",
+            "var ",
+            "class "
+        ],
+        "regex": "^\\s*(import\\s+|export\\s+|function\\s+\\w+|const\\s+\\w+|let\\s+\\w+|var\\s+\\w+)"
+    },
+    "processing_limits": {
+        "max_captures_per_query": 10000,
+        "max_lines_for_processing": 50000,
+        "max_function_name_length": 100,
+        "max_identifier_length": 50,
+        "max_safety_counter": 10,
+        "max_search_window": 50,
+        "max_body_text_check": 200,
+        "max_function_body_search_lines": 10,
+        "max_file_size_mb": 100,
+        "parser_timeout_ms": 30000,
+        "max_parent_search_levels": 10,
+        "debug_text_preview_length": 100,
+        "debug_error_text_length": 200,
+        "debug_significant_change_threshold": 100,
+        "default_indent_size": 4,
+        "max_inheritance_depth": 5
+    },
+    "node_types": {
+        "function_types": [
+            "function_declaration",
+            "arrow_function",
+            "function_expression"
+        ],
+        "body_types": [
+            "statement_block"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement",
+            "for_in_statement",
+            "for_of_statement"
+        ],
+        "class_types": [
+            "class_declaration"
+        ],
+        "comment_types": [
+            "comment"
+        ],
+        "return_types": [
+            "return_statement"
+        ]
+    }
+}

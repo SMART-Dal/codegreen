@@ -20,7 +20,10 @@ from dataclasses import dataclass
 from tree_sitter import Language, Parser, Tree, Node, Query, QueryCursor
 from tree_sitter_language_pack import get_language, get_parser
 
-from language_configs import get_language_config_manager, LanguageConfig
+try:
+    from .language_configs import get_language_config_manager, LanguageConfig
+except ImportError:
+    from language_configs import get_language_config_manager, LanguageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,63 @@ class ASTProcessor:
             logger.warning(f"⚠️  FALLBACK: No configuration found for language: {language}, using default behavior")
             raise ValueError(f"No configuration found for language: {language}")
     
+    def _find_target_with_query(self, node: Node, rule: Dict[str, Any]) -> Optional[int]:
+        """Find insertion point by executing a configured query on the node."""
+        query_name = rule.get("query")
+        queries = self.config.ast_config.get("insertion_queries", {})
+        query_str = queries.get(query_name)
+
+        if not query_str:
+            logger.warning(f"Insertion query '{query_name}' not found in config")
+            return None
+
+        try:
+            from tree_sitter import Query, QueryCursor
+            from tree_sitter_language_pack import get_language
+            ts_lang = get_language(self.config.tree_sitter_name)
+            query = Query(ts_lang, query_str)
+            cursor = QueryCursor(query)
+
+            # Execute query on the specific node
+            captures_dict = cursor.captures(node)
+
+            # captures_dict is a dict: {capture_name: [nodes]}
+            target_nodes = captures_dict.get("target", [])
+            if target_nodes:
+                # Filter out docstrings if we have multiple matches
+                non_docstring_nodes = []
+                for captured_node in target_nodes:
+                    # Check if this is a docstring (expression_statement containing only a string)
+                    if captured_node.type == 'expression_statement' and len(captured_node.children) > 0:
+                        is_docstring = any(child.type == 'string' for child in captured_node.children)
+                        if is_docstring:
+                            logger.debug(f"   Skipping docstring node at {captured_node.start_byte}")
+                            continue
+                    non_docstring_nodes.append(captured_node)
+
+                # Use first non-docstring node, or fallback to first node if all are docstrings
+                captured_node = non_docstring_nodes[0] if non_docstring_nodes else target_nodes[0]
+                placement = rule.get("placement", "before")
+
+                logger.debug(f"   Query matched target: {captured_node.type} at {captured_node.start_byte}")
+
+                if placement == "before":
+                    # For "before" placement, return the start of the LINE, not the node
+                    line_start = self.source_code.rfind('\n', 0, captured_node.start_byte) + 1
+                    logger.debug(f"   Placement 'before': node at {captured_node.start_byte}, returning line start {line_start}")
+                    return line_start
+                elif placement == "after":
+                    return captured_node.end_byte
+
+            logger.debug(f"   Query '{query_name}' executed but @target not found")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error executing insertion query '{query_name}': {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return None
+
     def find_body_node(self, node: Node) -> Optional[Node]:
         """Find the body/block node for a given node using language configuration."""
         ast_config = self.config.ast_config
@@ -69,7 +129,7 @@ class ASTProcessor:
             max_levels = limits.get('max_parent_search_levels', 10)
             while current and level < max_levels:  # Prevent infinite loops
                 logger.debug(f"   Parent level {level}: {current.type} at {current.start_point}-{current.end_point}")
-                if current.type in ["function_definition", "method_definition", "class_definition", "class_specifier", "class_declaration", "constructor_definition"]:
+                if current.type in ["function_definition", "method_definition", "async_function_definition", "class_definition", "class_specifier", "class_declaration", "constructor_definition"]:
                     logger.debug(f"   Found parent definition: {current.type}")
                     # Found the parent function/method/class, now find its body
                     body = self._find_body_in_node(current, ast_config)
@@ -153,13 +213,43 @@ class ASTProcessor:
         logger.debug(f"   Language: {self.language}")
         logger.debug(f"   Rule mode: {rule.get('mode')}")
         
-        if rule.get("mode") == "inside_start":
+        if rule.get("mode") == "query_target":
+            logger.debug(f"   Processing query_target mode with query '{rule.get('query')}'")
+            insertion_byte = self._find_target_with_query(node, rule)
+            if insertion_byte is not None:
+                logger.debug(f"   Query found target at: {insertion_byte}")
+                return insertion_byte
+            
+            # Fallback if query fails
+            fallback_mode = rule.get("fallback_mode", "inside_start")
+            logger.debug(f"   Query failed, falling back to mode '{fallback_mode}'")
+            # Create a temporary rule for fallback to avoid recursion
+            fallback_rule = rule.copy()
+            fallback_rule["mode"] = fallback_mode
+            # We need to manually dispatch to the correct logic block, or recursively call but with modified rule
+            # Recursion is risky if we don't change the mode.
+            # Let's just fall through to the manual logic blocks by temporarily modifying local variables
+            # or better, just copy the logic blocks here or refactor.
+            # Refactoring to avoid huge method:
+            return self._find_insertion_point_manual(node, fallback_mode, fallback_rule)
+
+        return self._find_insertion_point_manual(node, rule.get("mode"), rule)
+
+    def _find_insertion_point_manual(self, node: Node, mode: str, rule: Dict[str, Any]) -> Optional[int]:
+        """Manual AST walking logic (fallback)."""
+        if mode == "inside_start":
             logger.debug(f"   Processing inside_start mode")
-            body_node = self.find_body_node(node)
+            # If node is already a body/block node, use it directly
+            body_types = self.config.ast_config.get("body_types", ["block"])
+            if node.type in body_types:
+                body_node = node
+            else:
+                body_node = self.find_body_node(node)
+
             if not body_node:
                 logger.debug(f"   No body node found, using node start: {node.start_byte}")
                 return node.start_byte
-            
+
             if rule.get("find_first_statement", False):
                 insertion_byte = self._find_first_statement_line_start(body_node, rule)
                 logger.debug(f"   Found first statement position: {insertion_byte}")
@@ -205,11 +295,17 @@ class ASTProcessor:
         
         elif rule.get("mode") == "inside_end":
             logger.debug(f"   Processing inside_end mode")
-            body_node = self.find_body_node(node)
+            # If node is already a body/block node, use it directly
+            body_types = self.config.ast_config.get("body_types", ["block"])
+            if node.type in body_types:
+                body_node = node
+            else:
+                body_node = self.find_body_node(node)
+
             if not body_node:
                 logger.debug(f"   No body node found, using node end: {node.end_byte}")
                 return node.end_byte
-            
+
             if rule.get("find_last_statement", False):
                 logger.debug(f"   find_last_statement=True, calling _find_last_statement_line_end")
                 insertion_byte = self._find_last_statement_line_end(body_node, rule)
@@ -297,7 +393,6 @@ class ASTProcessor:
                     # Return the beginning of the line containing this statement
                     line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
                     logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
-                    logger.debug(f"   Returning line start: {line_start} (statement starts at {child.start_byte})")
                     return line_start
                 continue
             
@@ -309,7 +404,6 @@ class ASTProcessor:
             # Return the beginning of the line containing this statement
             line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
             logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
-            logger.debug(f"   Returning line start: {line_start} (statement starts at {child.start_byte})")
             return line_start
         
         # Fallback to body start if no statements found
@@ -342,27 +436,35 @@ class ASTProcessor:
         return body_node.start_byte
     
     def _find_last_statement_line_end(self, body_node: Node, rule: Dict[str, Any]) -> int:
-        """Find the position to insert BEFORE the last statement in a body node for implicit exits."""
+        """Find the position to insert AFTER the last statement in a body node for implicit exits."""
         skip_docstrings = rule.get("skip_docstrings", False)
         skip_comments = rule.get("skip_comments", False)
-        
+
         # Search from the end
         for child in reversed(body_node.children):
             child_text = self._get_node_text(child)
-            
+
             # Skip docstrings if configured
             if skip_docstrings and self._is_docstring(child, child_text):
                 continue
-            
+
             # Skip comments if configured
             if skip_comments and self._is_comment(child):
                 continue
-            
-            # Found last real statement - for implicit exits, insert BEFORE it (at line start)
-            line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
-            logger.debug(f"   Found last statement at byte {child.start_byte}, inserting at line start {line_start}")
-            return line_start
-        
+
+            # Found last real statement - for implicit exits, insert AFTER it (after line ends)
+            # Find the end of the line containing this statement
+            line_end = self.source_code.find('\n', child.end_byte)
+            if line_end == -1:
+                # Last line in file, use end of file
+                line_end = len(self.source_code)
+            else:
+                # Position after the newline (start of next line)
+                line_end = line_end + 1
+
+            logger.debug(f"   Found last statement ending at byte {child.end_byte}, inserting after line at byte {line_end}")
+            return line_end
+
         # Fallback: if no statements found, insert at body start
         logger.debug(f"   No statements found in body, using body start {body_node.start_byte}")
         return body_node.start_byte
@@ -901,6 +1003,12 @@ class ASTRewriter:
                     return False
                 
             edit_type = f"insert_{point.insertion_mode}"
+            if point.insertion_mode == "query_target":
+                # query_target finds the specific node to insert relative to.
+                # Currently we only support placement="before" in the query logic which returns start_byte.
+                # So we treat this as insert_before.
+                edit_type = "insert_before"
+                
             logger.debug(f"   Edit type: {edit_type}")
             
             edit = ASTEdit(
@@ -1293,26 +1401,87 @@ class ASTRewriter:
     def _calculate_python_indentation(self, text: str, code: str, offset: int, edit_type: str = None) -> str:
         """
         Calculate proper Python indentation based on the target location and edit type.
-        
-        Python has strict indentation rules:
-        - Function bodies are indented 1 level (4 spaces) from the function definition
-        - Statements inside functions are at the same level as the first statement in the function
-        - insert_before should match the target line's indentation
+
+        Strategy:
+        - If offset is at line start (column 0): Query-based insertion → match that line's indent
+        - If offset is mid-line: Manual insertion → calculate indent from context
         """
         logger.debug(f"🔧 Calculating Python indentation for edit_type='{edit_type}' at offset={offset}")
-        
+
         # Find the line containing the offset
         line_start = code.rfind('\n', 0, offset) + 1
         line_end = code.find('\n', offset)
         if line_end == -1:
             line_end = len(code)
-        
+
         current_line = code[line_start:line_end]
+        column = offset - line_start
         logger.debug(f"   Current line: '{current_line}'")
-        
+        logger.debug(f"   Offset column: {column} (line_start={line_start})")
+
         # Detect indentation style from the file
         indent_char, indent_size = self._detect_python_indent_style(code)
         logger.debug(f"   Detected indent: char='{indent_char}', size={indent_size}")
+
+        # GENERAL RULE: If offset is at column 0 (line start), use that line's existing indentation
+        # This handles query-based insertion where we return line_start of the target statement
+        if column == 0:
+            # Special case for insert_inside_end: offset is at start of line AFTER function body
+            # We need to look at the PREVIOUS line to get function body indentation
+            if edit_type == 'insert_inside_end':
+                # offset is at start of line (after the \n), so offset-1 is the \n itself
+                # We need to find the line BEFORE that \n
+                if offset > 0:
+                    # Find the \n before the current position
+                    newline_pos = offset - 1
+                    # Find the \n before that (end of previous line)
+                    prev_newline_pos = code.rfind('\n', 0, newline_pos)
+                    # Extract the previous line content (between prev_newline and newline_pos)
+                    if prev_newline_pos >= 0:
+                        prev_line = code[prev_newline_pos + 1:newline_pos]
+                    else:
+                        # First line in file
+                        prev_line = code[:newline_pos]
+
+                    if prev_line.strip():  # Non-empty previous line
+                        target_indent = len(prev_line) - len(prev_line.lstrip())
+                        indent_string = indent_char * target_indent
+                        logger.debug(f"   insert_inside_end: using previous line indent={target_indent}")
+                        logger.debug(f"   Previous line: '{prev_line}'")
+
+                        # Apply indentation
+                        lines = text.split('\n')
+                        indented_lines = []
+                        for i, line in enumerate(lines):
+                            if line.strip():
+                                indented_line = indent_string + line.strip()
+                                indented_lines.append(indented_line)
+                            else:
+                                indented_lines.append('')
+
+                        result = '\n'.join(indented_lines)
+                        logger.debug(f"   Final indented text: '{result}'")
+                        return result
+
+            # For other cases, use current line's indentation
+            if current_line.strip():
+                target_indent = len(current_line) - len(current_line.lstrip())
+                indent_string = indent_char * target_indent
+                logger.debug(f"   Query-based insertion detected (column=0): using target line indent={target_indent}")
+
+                # Apply indentation to each line of the text
+                lines = text.split('\n')
+                indented_lines = []
+                for i, line in enumerate(lines):
+                    if line.strip():
+                        indented_line = indent_string + line.strip()
+                        indented_lines.append(indented_line)
+                    else:
+                        indented_lines.append('')
+
+                result = '\n'.join(indented_lines)
+                logger.debug(f"   Final indented text: '{result}'")
+                return result
         
         if edit_type == 'insert_inside_start':
             # For function enter checkpoints, find the first real statement and match its indentation
@@ -1437,7 +1606,7 @@ class ASTRewriter:
         # Walk up the AST to find the function definition
         current = target_node
         while current:
-            if current.type in ['function_definition', 'method_definition']:
+            if current.type in ['function_definition', 'method_definition', 'async_function_definition']:
                 return current
             current = current.parent
         

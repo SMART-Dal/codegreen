@@ -140,7 +140,7 @@ def _get_runtime_path() -> Optional[Path]:
 def ensure_runtime_available() -> bool:
     """Ensure the Python runtime module is available."""
     runtime_paths = [
-        Path(__file__).parents[2] / "src" / "instrumentation" / "codegreen_runtime.py",
+        Path(__file__).parents[2] / "src" / "instrumentation" / "language_runtimes" / "python" / "codegreen_runtime.py",
         Path(__file__).parents[2] / "bin" / "runtime" / "codegreen_runtime.py",
         Path(__file__).parents[2] / "build" / "bin" / "runtime" / "codegreen_runtime.py",
     ]
@@ -1045,13 +1045,32 @@ def analyze_code_structure(
                 raise typer.Exit(1)
             return
         
-        # Display results
+        # Display analysis results
         console.print(f"[green]✓ Analysis completed![/green]")
         console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
         console.print(f"Parser available: [cyan]{result.metadata.get('parser_available', False)}[/cyan]")
         console.print(f"Instrumentation points: [cyan]{result.checkpoint_count}[/cyan]")
         console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
         console.print(f"Source lines: [cyan]{result.metadata.get('source_lines', 0)}[/cyan]")
+        
+        # Save instrumented code if requested
+        if save_instrumented:
+            console.print(f"\n[green]Instrumenting code...[/green]")
+            instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
+            
+            # Create output directory if it doesn't exist
+            if output_dir:
+                output_path = Path(output_dir)
+                output_path.mkdir(parents=True, exist_ok=True)
+                instrumented_filename = script.stem + "_instrumented" + script.suffix
+                instrumented_file_path = output_path / instrumented_filename
+            else:
+                instrumented_file_path = script.with_name(f'{script.stem}_instrumented{script.suffix}')
+            
+            with open(instrumented_file_path, 'w', encoding='utf-8') as f:
+                f.write(instrumented_code)
+            
+            console.print(f"[green]✓ Instrumented code saved to: {instrumented_file_path}[/green]")
         
         if verbose and result.instrumentation_points:
             # Show detailed instrumentation points

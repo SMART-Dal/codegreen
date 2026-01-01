@@ -45,105 +45,56 @@ def _find_nemb_library() -> Optional[str]:
 
 class NEMBClient:
     """Interface to the Native Energy Measurement Backend (C++)"""
-    
+
     def __init__(self):
-        self.lib = None
-        self.available = False
-        
         lib_path = _find_nemb_library()
-        if lib_path:
-            try:
-                self.lib = ctypes.CDLL(lib_path)
-                
-                # Setup function signatures
-                self.lib.nemb_initialize.argtypes = []
-                self.lib.nemb_initialize.restype = c_int
-                
-                self.lib.nemb_read_current.argtypes = [ctypes.POINTER(c_double), ctypes.POINTER(c_double)]
-                self.lib.nemb_read_current.restype = c_int
-                
-                # Initialize backend
-                if self.lib.nemb_initialize():
-                    self.available = True
-            except Exception as e:
-                print(f"CodeGreen Runtime Warning: Failed to load NEMB library: {e}", file=sys.stderr)
-        else:
-            # Fallback for development where library might not be built yet
-            pass
+        if not lib_path:
+            raise RuntimeError(
+                "CodeGreen NEMB library not found.\n"
+                "Build with: cd build && cmake .. && make\n"
+                "Or set CODEGREEN_LIB_PATH environment variable."
+            )
+
+        try:
+            self.lib = ctypes.CDLL(lib_path)
+
+            self.lib.nemb_initialize.argtypes = []
+            self.lib.nemb_initialize.restype = c_int
+
+            self.lib.nemb_read_current.argtypes = [ctypes.POINTER(c_double), ctypes.POINTER(c_double)]
+            self.lib.nemb_read_current.restype = c_int
+
+            if not self.lib.nemb_initialize():
+                raise RuntimeError(
+                    "NEMB backend initialization failed.\n"
+                    "Check: sudo chmod +r /sys/class/powercap/intel-rapl:*/energy_uj\n"
+                    "Or run: sudo modprobe msr && sudo chmod +r /dev/cpu/*/msr"
+                )
+
+        except OSError as e:
+            raise RuntimeError(f"Failed to load NEMB library at {lib_path}: {e}")
 
     def read_energy(self) -> tuple:
         """Returns (joules, watts)"""
-        if not self.available:
-            return (0.0, 0.0)
-            
         energy = c_double()
         power = c_double()
-        
+
         if self.lib.nemb_read_current(byref(energy), byref(power)):
             return (energy.value, power.value)
-            
-        return (0.0, 0.0)
+
+        raise RuntimeError("NEMB energy read failed - sensor error or permission denied")
 
 # --- Runtime Implementation ---
 
 class EnergyReader:
-    """Reads energy from hardware sensors via NEMB or fallback"""
+    """Reads energy from hardware sensors via NEMB backend"""
 
     def __init__(self):
         self.client = NEMBClient()
-        self.available = self.client.available
-        
-        # Fallback for legacy RAPL if C++ backend unavailable
-        if not self.available:
-            self.rapl_path = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
-            self.fallback_available = self.rapl_path.exists()
-            self.last_energy = 0
-            self.last_timestamp = 0
-            if self.fallback_available:
-                try:
-                    self.last_energy = self._read_rapl_fallback()
-                    self.last_timestamp = time.perf_counter()
-                except:
-                    self.fallback_available = False
-        else:
-            self.fallback_available = False
-
-    def _read_rapl_fallback(self) -> int:
-        """Read RAPL energy counter in microjoules (Fallback)"""
-        try:
-            with open(self.rapl_path, 'r') as f:
-                return int(f.read().strip())
-        except:
-            return 0
 
     def read_energy(self) -> tuple:
         """Returns (joules, watts) since last read"""
-        if self.available:
-            return self.client.read_energy()
-            
-        if not self.fallback_available:
-            return (0.0, 0.0)
-
-        # Legacy fallback logic
-        try:
-            current_energy = self._read_rapl_fallback()
-            current_timestamp = time.perf_counter()
-
-            delta_uj = current_energy - self.last_energy
-            delta_time = current_timestamp - self.last_timestamp
-
-            if delta_uj < 0:
-                delta_uj += (1 << 32)
-
-            joules = delta_uj / 1_000_000.0
-            watts = joules / delta_time if delta_time > 0 else 0.0
-
-            self.last_energy = current_energy
-            self.last_timestamp = current_timestamp
-
-            return (joules, watts)
-        except:
-            return (0.0, 0.0)
+        return self.client.read_energy()
 
 _energy_reader: Optional[EnergyReader] = None
 _energy_lock = threading.Lock()
@@ -187,7 +138,7 @@ class MeasurementCollector:
             timestamp=timestamp,
             joules=joules,
             watts=watts,
-            source="nemb" if energy_reader.available else "rapl_fallback"
+            source="nemb"
         )
 
         with self.lock:

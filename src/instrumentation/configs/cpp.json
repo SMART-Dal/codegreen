@@ -1,0 +1,174 @@
+{
+    "name": "cpp",
+    "extensions": [
+        ".cpp",
+        ".cxx",
+        ".cc",
+        ".hpp",
+        ".h",
+        ".hxx",
+        ".h++"
+    ],
+    "tree_sitter_name": "cpp",
+    "ast_config": {
+        "body_field": "body",
+        "block_type": "compound_statement",
+        "function_types": [
+            "function_definition"
+        ],
+        "class_types": [
+            "class_specifier",
+            "struct_specifier"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement",
+            "do_statement"
+        ],
+        "return_types": [
+            "return_statement"
+        ],
+        "comment_types": [
+            "comment"
+        ],
+        "docstring_types": [],
+        "insertion_rules": {
+            "function_enter": {
+                "mode": "inside_start",
+                "find_first_statement": true,
+                "skip_docstrings": false,
+                "skip_comments": true
+            },
+            "function_exit": {
+                "mode": "inside_end",
+                "find_last_statement": true
+            },
+            "class_enter": {
+                "mode": "inside_start",
+                "find_first_statement": true,
+                "skip_docstrings": false,
+                "skip_comments": true
+            },
+            "class_exit": {
+                "mode": "inside_end",
+                "find_last_statement": true
+            },
+            "before": {
+                "mode": "before"
+            },
+            "after": {
+                "mode": "after"
+            }
+        }
+    },
+    "query_config": {
+        "capture_mapping": {
+            "function.method": "function_enter",
+            "local.definition.type": "class_enter",
+            "keyword.return": "function_exit",
+            "return": "function_exit",
+            "loop.for": "loop_start",
+            "loop.while": "loop_start",
+            "loop.do": "loop_start"
+        },
+        "priority_order": [
+            "function.method",
+            "local.definition.type",
+            "keyword.return",
+            "return",
+            "loop.for",
+            "loop.while",
+            "loop.do"
+        ]
+    },
+    "instrumentation_config": {
+        "import_statement": "#include <codegreen/runtime.hpp>",
+        "templates": {
+            "function_enter": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"enter\");",
+            "function_exit": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
+            "class_enter": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"class_enter\");",
+            "loop_start": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
+            "loop_exit": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
+        },
+        "statement_terminator": ";",
+        "comment_prefix": "//"
+    },
+    "formatting_config": {
+        "indent_size": 2,
+        "indent_char": " ",
+        "line_ending": "\n",
+        "extra_indent_for_inside": 2
+    },
+    "rules": {
+        "skip_docstrings": false,
+        "skip_comments": true,
+        "handle_async": false,
+        "handle_decorators": false,
+        "handle_generators": false,
+        "special_exit_functions": []
+    },
+    "analysis_patterns": {
+        "function_def": "^\\s*(?:(?:virtual|static|inline|explicit)\\s+)*(?:\\w+\\s+)*(\\w+)\\s*\\([^)]*\\)\\s*(?:const\\s*)?(?:override\\s*)?(?:final\\s*)?\\{?\\s*$",
+        "class_def": "^\\s*class\\s+(\\w+)",
+        "struct_def": "^\\s*struct\\s+(\\w+)",
+        "for_loop": "^\\s*for\\s*\\(",
+        "while_loop": "^\\s*while\\s*\\(",
+        "new_op": "\\bnew\\s+",
+        "delete_op": "\\bdelete\\s+"
+    },
+    "detection_patterns": {
+        "include_directives": [
+            "#include",
+            "#define",
+            "using namespace"
+        ],
+        "syntax_keywords": [
+            "int main",
+            "void ",
+            "class ",
+            "namespace "
+        ],
+        "regex": "^\\s*(#include|class\\s+\\w+|namespace\\s+\\w+)"
+    },
+    "processing_limits": {
+        "max_captures_per_query": 10000,
+        "max_lines_for_processing": 50000,
+        "max_function_name_length": 100,
+        "max_identifier_length": 50,
+        "max_safety_counter": 10,
+        "max_search_window": 50,
+        "max_body_text_check": 200,
+        "max_function_body_search_lines": 10,
+        "max_file_size_mb": 100,
+        "parser_timeout_ms": 30000,
+        "max_parent_search_levels": 10,
+        "debug_text_preview_length": 100,
+        "debug_error_text_length": 200,
+        "debug_significant_change_threshold": 100,
+        "default_indent_size": 4,
+        "max_inheritance_depth": 5
+    },
+    "node_types": {
+        "function_types": [
+            "function_definition"
+        ],
+        "body_types": [
+            "compound_statement"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement",
+            "do_statement"
+        ],
+        "class_types": [
+            "class_specifier",
+            "struct_specifier"
+        ],
+        "comment_types": [
+            "comment"
+        ],
+        "return_types": [
+            "return_statement"
+        ]
+    }
+}

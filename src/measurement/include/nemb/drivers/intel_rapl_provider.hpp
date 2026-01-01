@@ -1,7 +1,6 @@
-#pragma once
-
 #include "../core/energy_provider.hpp"
 #include "../utils/non_blocking_file_reader.hpp"
+#include "../hal/counter_manager.hpp"
 #include <map>
 #include <mutex>
 #include <fstream>
@@ -39,54 +38,6 @@ struct IntelCPUInfo {
     bool supports_psys_rapl;            ///< Platform domain available (Skylake+)
     uint32_t package_count;             ///< Number of physical packages
     std::vector<uint32_t> active_packages; ///< List of active package IDs
-};
-
-/**
- * @brief High-precision counter manager with wraparound handling
- */
-class RAPLCounterManager {
-public:
-    /**
-     * @brief Update counter with wraparound detection
-     * @param domain_name Domain identifier
-     * @param raw_value Current raw counter value
-     * @param counter_bits Counter width in bits
-     * @return Accumulated energy value
-     */
-    uint64_t update_counter(const std::string& domain_name, 
-                           uint64_t raw_value, 
-                           uint32_t counter_bits = 32);
-    
-    /**
-     * @brief Reset counter accumulation
-     * @param domain_name Domain to reset
-     */
-    void reset_counter(const std::string& domain_name);
-    
-    /**
-     * @brief Get all accumulated counter values
-     * @return Map of domain names to accumulated energy values
-     */
-    std::map<std::string, uint64_t> get_all_counters() const;
-    
-    /**
-     * @brief Get wraparound statistics
-     * @param domain_name Domain name
-     * @return Number of wraparounds detected
-     */
-    uint32_t get_wraparound_count(const std::string& domain_name) const;
-
-private:
-    struct CounterState {
-        uint64_t last_raw_value{0};
-        uint64_t accumulated_value{0};
-        uint32_t wraparound_count{0};
-        uint64_t counter_mask{0};
-        std::chrono::steady_clock::time_point last_update;
-    };
-    
-    std::map<std::string, CounterState> counter_states_;
-    mutable std::mutex counter_mutex_;
 };
 
 /**
@@ -176,7 +127,7 @@ private:
     // Member variables
     IntelCPUInfo cpu_info_;
     std::map<std::string, RAPLDomain> rapl_domains_;
-    std::unique_ptr<RAPLCounterManager> counter_manager_;
+    std::unique_ptr<hal::CounterManager> counter_manager_;
     bool initialized_{false};
     
     // Hardware capability detection results

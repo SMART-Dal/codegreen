@@ -23,8 +23,13 @@ from threading import Lock
 from collections import defaultdict
 
 # Import our new configuration-driven modules
-from language_configs import get_language_config_manager
-from ast_processor import ASTProcessor, ASTRewriter, ASTEdit, get_indentation_engine
+try:
+    from .language_configs import get_language_config_manager
+    from .ast_processor import ASTProcessor, ASTRewriter, ASTEdit, get_indentation_engine
+except ImportError:
+    # Fallback for direct execution or testing
+    from language_configs import get_language_config_manager
+    from ast_processor import ASTProcessor, ASTRewriter, ASTEdit, get_indentation_engine
 
 # Import tree-sitter with graceful fallback
 try:
@@ -441,8 +446,17 @@ class LanguageEngine:
     
     def _initialize_parsers(self):
         """Initialize tree-sitter parsers for all configured languages"""
+        # Check strict mode
+        global_config = self._config_manager.get_global_config()
+        # Default to strict mode (no silent fallback)
+        strict_mode = global_config.get('strict_mode', True)
+        
         if not TREE_SITTER_AVAILABLE:
-            logger.warning("⚠️  FALLBACK: Tree-sitter not available, using regex analysis instead of AST-based analysis")
+            msg = "Tree-sitter library not available."
+            if strict_mode:
+                logger.error(f"❌ CRITICAL: {msg} Aborting initialization.")
+                raise ImportError(msg + " Install tree-sitter or disable strict mode.")
+            logger.warning(f"⚠️  FALLBACK: {msg}, using regex analysis instead of AST-based analysis")
             return
         
         # Get supported languages from config manager
@@ -464,7 +478,7 @@ class LanguageEngine:
                 self._queries[lang_id] = {}
                 external_queries = self._external_query_loader.get_instrumentation_queries(lang_id)
                 
-                # Use external full query if available, otherwise use built-in config queries
+                # Use external full query if available
                 if external_queries and 'full_query' in external_queries:
                     try:
                         # Compile the full .scm query
@@ -473,23 +487,28 @@ class LanguageEngine:
                         logger.info(f"✅ Compiled comprehensive nvim-treesitter query for {lang_id}")
                     except (ValueError, TypeError) as e:
                         logger.error(f"Full query compilation failed for {lang_id}: {e}")
-                        # Fall back to built-in queries
-                        self._compile_builtin_queries(lang_id, language, config['queries'])
                     except Exception as e:
                         logger.error(f"Unexpected error compiling full query for {lang_id}: {e}")
-                        # Fall back to built-in queries
-                        self._compile_builtin_queries(lang_id, language, config['queries'])
-                else:
-                    # Use built-in queries
-                    self._compile_builtin_queries(lang_id, language, config['queries'])
+                
+                # Always compile built-in queries as fallback/auxiliary (e.g. for return statements)
+                self._compile_builtin_queries(lang_id, language, config['queries'])
                 
                 if not self._queries[lang_id]:
-                    logger.error(f"❌ No valid queries compiled for {lang_id}")
+                    msg = f"No valid queries compiled for {lang_id}"
+                    logger.error(f"❌ {msg}")
+                    if strict_mode:
+                        raise RuntimeError(msg)
                 
             except ImportError as e:
-                logger.error(f"Missing tree-sitter language support for {lang_id}: {e}")
+                msg = f"Missing tree-sitter language support for {lang_id}: {e}"
+                logger.error(msg)
+                if strict_mode:
+                    raise ImportError(msg)
             except Exception as e:
-                logger.error(f"⚠️ Could not initialize parser for {lang_id}: {e}")
+                msg = f"Could not initialize parser for {lang_id}: {e}"
+                logger.error(f"⚠️ {msg}")
+                if strict_mode:
+                    raise RuntimeError(msg)
     
     def _compile_builtin_queries(self, lang_id: str, language: Language, queries_config: Dict[str, str]):
         """Compile built-in queries as fallback"""
@@ -737,6 +756,7 @@ class LanguageEngine:
                     logger.debug(f"   🔄 Processing captures against CAPTURE_MAP...")
                     
                     for capture_name, node_list in captures.items():
+                        
                         if capture_name in capture_map:
                             logger.debug(f"   📍 Processing capture '{capture_name}' -> {capture_map[capture_name]} ({len(node_list)} nodes)")
                             
@@ -808,13 +828,67 @@ class LanguageEngine:
             points_before = len(points)
             points = self._deduplicate_checkpoints(points)
             points_after = len(points)
-            
+
             if points_before != points_after:
                 logger.info(f"🔄 Final deduplication: {points_before} -> {points_after} points")
-            
+
             logger.info(f"🎯 Tree-sitter analysis complete: {len(points)} instrumentation points found")
             return points
-    
+
+    def _node_terminates_control_flow(self, node: 'Node') -> bool:
+        """
+        Check if a node terminates the control flow (e.g. ends with return/raise).
+        This is used to determine if an implicit function exit checkpoint is reachable.
+        """
+        if not node:
+            return False
+            
+        # Basic terminating statements for various languages
+        terminating_types = [
+            'return_statement', 'raise_statement', 'throw_statement',
+            'break_statement', 'continue_statement'
+        ]
+        if node.type in terminating_types:
+            return True
+            
+        # If it's a block, check its last named child
+        if node.type in ['block', 'compound_statement']:
+            if not node.named_children:
+                return False
+            return self._node_terminates_control_flow(node.named_children[-1])
+            
+        # If it's an if statement, it only terminates if it has an else AND all branches terminate
+        if node.type == 'if_statement':
+            has_else = False
+            branches_terminate = True
+            
+            # Count blocks to handle if/elif/else
+            blocks_checked = 0
+            
+            for child in node.children:
+                if child.type == 'block':
+                    blocks_checked += 1
+                    if not self._node_terminates_control_flow(child):
+                        branches_terminate = False
+                elif child.type == 'elif_clause':
+                    # Recurse into elif
+                    for sub in child.children:
+                        if sub.type == 'block':
+                            blocks_checked += 1
+                            if not self._node_terminates_control_flow(sub):
+                                branches_terminate = False
+                elif child.type == 'else_clause':
+                    has_else = True
+                    for sub in child.children:
+                        if sub.type == 'block':
+                            blocks_checked += 1
+                            if not self._node_terminates_control_flow(sub):
+                                branches_terminate = False
+            
+            return has_else and branches_terminate and blocks_checked > 0
+            
+        return False
+
     def _analyze_with_regex(self, source_code: str, language: str) -> List[InstrumentationPoint]:
         """Analyze code using regex fallback patterns with optimization"""
         logger.warning(f"🚨 FALLBACK WARNING: Using regex analysis for {language} instead of AST-based analysis")
@@ -857,6 +931,19 @@ class LanguageEngine:
         
         return points
     
+    def _find_parent_definition(self, node: 'Node', language: str) -> Optional['Node']:
+        """Find the parent function or class definition node"""
+        node_types = self._config_manager.get_node_types(language)
+        # Combine function and class types
+        def_types = node_types.get('function_types', []) + node_types.get('class_types', [])
+        
+        current = node
+        while current:
+            if current.type in def_types:
+                return current
+            current = current.parent
+        return None
+
     def _create_instrumentation_point_from_capture(
         self,
         node: 'Node',
@@ -868,74 +955,126 @@ class LanguageEngine:
         """Create instrumentation point from a single tree-sitter capture"""
         logger.debug(f"🔧 Creating instrumentation point for capture '{capture_name}' in {language}")
         logger.debug(f"   Node type: {node.type}, Position: {node.start_point}-{node.end_point}")
-        logger.debug(f"   Capture config: {capture_config}")
         
         try:
-            # Extract node information
-            start_point = node.start_point
-            end_point = node.end_point
-            logger.debug(f"   Extracted node points: start={start_point}, end={end_point}")
+            # Smart node resolution: separate the "definition node" (for insertion context)
+            # from the "name node" (for naming the checkpoint)
+            target_def_node = node
+            name_node = node
             
-            # Extract text content
-            logger.debug(f"   Calling _extract_text_from_node with language='{language}'")
-            text = self._extract_text_from_node(node, source_code, language)
-            logger.debug(f"   Extracted text: '{text}' (length: {len(text)})")
+            node_types = self._config_manager.get_node_types(language)
+            func_types = node_types.get('function_types', [])
+            class_types = node_types.get('class_types', [])
+            def_types = func_types + class_types
+            
+            if node.type in def_types:
+                # Captured the definition itself (e.g. @function capturing function_definition)
+                target_def_node = node
+                # Try to find name child to get a good checkpoint name
+                child_name = node.child_by_field_name('name')
+                if child_name:
+                    name_node = child_name
+            elif node.type in ['identifier', 'type_identifier', 'field_identifier', 'name']:
+                # Captured the name/identifier (e.g. @function.name)
+                name_node = node
+                # Find parent definition for context
+                parent = self._find_parent_definition(node, language)
+                if parent:
+                    target_def_node = parent
+            
+            # Extract text from name_node for the checkpoint ID
+            text = self._extract_text_from_node(name_node, source_code, language)
             
             # Validate identifier if it's a function/method name
             if capture_config['type'] in ['function_enter', 'class_enter']:
-                logger.debug(f"   Validating identifier for {capture_config['type']}: '{text}'")
-                if not self._is_valid_identifier(text, language):
-                    logger.debug(f"   ❌ Invalid identifier '{text}' for {capture_config['type']}, skipping point creation")
+                # STRICT VALIDATION: Ensure we captured a valid definition or identifier
+                # Reject keywords, punctuation, blocks, etc.
+                valid_node_types = def_types + ['identifier', 'type_identifier', 'field_identifier', 'name', 'method_name', 'function_name', 'class_name']
+                if node.type not in valid_node_types:
+                    logger.debug(f"   ❌ Node type '{node.type}' is not a valid definition or identifier, skipping")
                     return None
-                logger.debug(f"   ✅ Valid identifier '{text}' for {capture_config['type']}")
+
+                # If we couldn't extract a valid name, and we are not using the raw capture name, fail
+                if not text or not self._is_valid_identifier(text, language):
+                     # If we captured a definition but couldn't find a name child, 
+                     # we might just use the capture name or type?
+                     # But better to skip if we can't name it properly to avoid "function_enter_def_..."
+                     if node.type in def_types and not text:
+                         logger.debug(f"   ❌ Could not extract name from definition node {node.type}, skipping")
+                         return None
+                     if text in ["def", "class", "async", "static", "void", "int", "public", "private"]:
+                         logger.debug(f"   ❌ Extracted text '{text}' is a keyword, skipping")
+                         return None
+            
+            # Use the resolved definition node for AST operations (finding body, etc.)
+            node = target_def_node
             
             # Determine the name for the instrumentation point
             name = text if text else capture_name
-            logger.debug(f"   Point name determined: '{name}'")
             
-            # For function entry points, we need to find the function body for proper insertion
-            if capture_config['type'] == 'function_enter':
-                # Find the parent function definition node
-                function_node = self._find_parent_function(node, language)
-                if function_node:
-                    # Find the function body for insertion
-                    body_node = self._find_function_body(function_node, language)
+            # For function exit points (returns), use the parent function name
+            if capture_config['type'] == 'function_exit':
+                parent_func = self._find_parent_function(node, language)
+                if parent_func:
+                    func_name_node = parent_func.child_by_field_name('name')
+                    if func_name_node:
+                        func_name = self._extract_text_from_node(func_name_node, source_code, language)
+                        if func_name:
+                            name = func_name
+            
+            logger.debug(f"   Point name determined: '{name}'")
+
+            # Extract node information
+            start_point = node.start_point
+            
+            # Initialize insertion variables
+            insertion_point = start_point
+            insertion_byte = None
+            
+            # For function/class entry points, we need to find the body for proper insertion
+            if capture_config['type'] in ['function_enter', 'class_enter']:
+                # target_def_node is the definition node
+                def_node = target_def_node
+                
+                if def_node:
+                    # Find the body for insertion
+                    body_node = None
+                    # Get body types from config
+                    body_types = self._config_manager.get_node_types(language).get('body_types', ['block'])
+                    
+                    for child in def_node.children:
+                        if child.type in body_types:
+                            body_node = child
+                            break
+                    
                     if body_node:
-                        # Use the body node for insertion - find the first line inside the body
+                        # Use the body node for insertion
                         insertion_point = body_node.start_point
-                        insertion_byte = body_node.start_byte
                         
-                        # Use AST processor to find the correct insertion point  
-                        # TODO: Pass tree parameter for TreeSitter indentation engine
+                        # Use AST processor for precise insertion (skipping docstrings etc)
                         ast_processor = ASTProcessor(language, source_code, None)
-                        ast_insertion_byte = ast_processor.find_insertion_point(function_node, 'inside_start')
+                        ast_insertion_byte = ast_processor.find_insertion_point(def_node, 'inside_start')
                         if ast_insertion_byte is not None:
-                            # Use the AST processor result
                             insertion_byte = ast_insertion_byte
                             insertion_point = self._byte_to_point(source_code, insertion_byte)
                         else:
                             insertion_point = body_node.start_point
                             insertion_byte = body_node.start_byte
                     else:
-                        # Fallback to function node
-                        insertion_point = function_node.start_point
-                        insertion_byte = function_node.start_byte
+                        insertion_point = def_node.start_point
+                        insertion_byte = def_node.start_byte
                 else:
-                    # Fallback to current node
-                    insertion_point = start_point
+                    insertion_point = node.start_point
                     insertion_byte = node.start_byte
             else:
-                # For other types, use the current node
-                insertion_point = start_point
+                insertion_point = node.start_point
                 insertion_byte = node.start_byte
             
             # Get configurable line offset
             global_config = self._config_manager.get_global_config()
             line_offset = global_config.get('line_offset', 1)
             
-            # Only calculate byte offset if we don't have one from AST processor
             if insertion_byte is None:
-                # Calculate byte offset for the insertion point
                 insertion_byte = self._line_column_to_byte_offset(source_code, insertion_point[0] + line_offset, insertion_point[1] + line_offset)
             
             # Create the instrumentation point with priority
@@ -948,64 +1087,54 @@ class LanguageEngine:
                 column=insertion_point[1] + line_offset,
                 context=f"{capture_config['subtype'].title()} {capture_config['type']}: {name}",
                 metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
-                byte_offset=insertion_byte,  # Calculate the correct byte offset
+                byte_offset=insertion_byte,
                 node_start_byte=node.start_byte,
                 node_end_byte=node.end_byte,
                 insertion_mode=capture_config['insertion_mode'],
-                node=node,  # Add the node for AST-based operations
-                priority=capture_config.get('priority', 999)  # Add priority for deduplication
+                node=node,
+                priority=capture_config.get('priority', 999)
             )
             
             # For function_enter points, also create corresponding function_exit point
             if capture_config['type'] == 'function_enter':
-                # Find the parent function definition node to get the function body
+                result_points = [point]
+                
                 function_node = self._find_parent_function(node, language)
                 if function_node:
-                    # Find the function body for exit point creation
                     body_node = self._find_function_body(function_node, language)
                     if body_node:
-                        # Create function exit point
-                        exit_line = body_node.end_point.row + line_offset
-                        exit_column = body_node.start_point.column + line_offset
-                        exit_byte = self._line_column_to_byte_offset(source_code, exit_line, exit_column)
-                        exit_point = InstrumentationPoint(
-                            id=f"function_exit_{name}_implicit_{exit_line}",
-                            type='function_exit',
-                            subtype='implicit',
-                            name=name,
-                            line=exit_line,
-                            column=exit_column,
-                            context=f"Function exit: {name}",
-                            metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
-                            byte_offset=exit_byte,
-                            node_start_byte=body_node.start_byte,
-                            node_end_byte=body_node.end_byte,
-                            insertion_mode='before',
-                            node=body_node,
-                            priority=capture_config.get('priority', 999)
-                        )
-                        # Return both points as a list
-                        return [point, exit_point]
+                        # Check if the function always terminates (unreachable end)
+                        terminates = self._node_terminates_control_flow(body_node)
+                        
+                        # Only create implicit exit if function doesn't end with return/raise
+                        if not terminates:
+                            exit_line = body_node.end_point.row + line_offset
+                            exit_column = body_node.start_point.column + line_offset
+                            exit_byte = self._line_column_to_byte_offset(source_code, exit_line, exit_column)
+                            exit_point = InstrumentationPoint(
+                                id=f"function_exit_{name}_implicit_{exit_line}",
+                                type='function_exit',
+                                subtype='implicit',
+                                name=name,
+                                line=exit_line,
+                                column=exit_column,
+                                context=f"Function implicit exit: {name}",
+                                metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
+                                byte_offset=exit_byte,
+                                node_start_byte=body_node.start_byte,
+                                node_end_byte=body_node.end_byte,
+                                insertion_mode='inside_end',
+                                node=body_node,
+                                priority=999  # Low priority so explicit returns win deduplication
+                            )
+                            result_points.append(exit_point)
+                
+                return result_points
             
             return point
             
         except Exception as e:
-            # Enhanced error logging with context and traceback
-            import traceback
-            logger.error(f"❌ CRITICAL: Failed to create instrumentation point from capture '{capture_name}' in language '{language}'")
-            logger.error(f"   Error type: {type(e).__name__}")
-            logger.error(f"   Error message: {str(e)}")
-            logger.error(f"   Node type: {node.type if hasattr(node, 'type') else 'Unknown'}")
-            logger.error(f"   Capture config: {capture_config}")
-            logger.error(f"   Language parameter: {repr(language)}")
-            logger.error(f"   Source code length: {len(source_code)}")
-            
-            # Log the full traceback for debugging
-            tb_lines = traceback.format_exception(type(e), e, e.__traceback__)
-            logger.error(f"   Full traceback:")
-            for line in tb_lines:
-                logger.error(f"     {line.rstrip()}")
-            
+            logger.error(f"Error creating instrumentation point: {e}")
             return None
     
     def _find_parent_function(self, node: 'Node', language: str) -> Optional['Node']:
@@ -1102,7 +1231,7 @@ class LanguageEngine:
         # Create exit points based on type
         if point_type == 'function_enter':
             # For functions, find all return statements or create implicit exit
-            exit_points = self._create_function_exit_points(capture_dict, name, metadata, language)
+            exit_points = self._create_function_exit_points(capture_dict, name, metadata, language, main_node)
             points.extend(exit_points)
         elif point_type == 'loop_start':
             # Create loop exit point
@@ -1270,7 +1399,8 @@ class LanguageEngine:
         capture_dict: Dict[str, List['Node']], 
         function_name: str, 
         metadata: Dict, 
-        language: str
+        language: str,
+        main_node: Optional['Node'] = None
     ) -> List[InstrumentationPoint]:
         """Create exit points for functions, handling multiple returns"""
         points = []
@@ -1281,6 +1411,10 @@ class LanguageEngine:
             if key in capture_dict and capture_dict[key]:
                 body_node = capture_dict[key][0]  # Take first node from list
                 break
+        
+        # Fallback: try to find body from main node if not captured
+        if not body_node and main_node:
+            body_node = self._find_function_body(main_node, language)
         
         if not body_node:
             return points
@@ -1327,7 +1461,12 @@ class LanguageEngine:
                     line=exit_line,
                     column=exit_column,
                     context=f"Function implicit exit: {function_name}",
-                    metadata=metadata
+                    metadata=metadata,
+                    insertion_mode='inside_end',
+                    node=body_node,
+                    node_start_byte=body_node.start_byte if body_node else None,
+                    node_end_byte=body_node.end_byte if body_node else None,
+                    priority=999  # Low priority so explicit returns win deduplication
                 )
                 points.append(exit_point)
         
@@ -1498,7 +1637,7 @@ class LanguageEngine:
         if 'function' in query_name or 'method' in query_name or 'constructor' in query_name:
             if capture_name in ['function_name', 'method_name', 'constructor_name', 'function.name', 'method.name']:
                 # Validate function name
-                if not text or not self._is_valid_identifier(text):
+                if not text or not self._is_valid_identifier(text, language):
                     return (None, None, None, None, {})
                 
                 # Determine if this is a special function type
@@ -1514,6 +1653,9 @@ class LanguageEngine:
         elif 'class' in query_name:
             if 'name' in capture_name:
                 class_type = capture_name.split('.')[0] if '.' in capture_name else 'class'
+                # Validate class name
+                if not text or not self._is_valid_identifier(text, language):
+                    return (None, None, None, None, {})
                 return ('class_enter', class_type, text, f"{class_type.title()} definition: {text}", {})
         
         elif 'loop' in query_name:
@@ -1545,6 +1687,12 @@ class LanguageEngine:
         elif 'memory' in query_name:
             return ('memory_operation', 'allocation', text, 
                    f"Memory operation: {text}", {'energy_intensive': True})
+        
+        elif 'return' in query_name or capture_name in ['return', 'keyword.return']:
+            # For returns, we don't strictly validate the identifier here 
+            # because the "text" will be the whole return statement.
+            # We will use the parent function name in _create_instrumentation_point_from_capture.
+            return ('function_exit', 'return', 'return', f"Function return", {})
         
         return (None, None, None, None, {})
     
@@ -1900,6 +2048,220 @@ class LanguageEngine:
         
         return byte_offset
     
+    def _deduplicate_checkpoints(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
+        """Deduplicate instrumentation points based on location and type"""
+        if not points:
+            return []
+            
+        # Group by location and type
+        # Key: (line, type) - we assume one start/exit per line per type is sufficient
+        unique_points = {}
+        
+        for point in points:
+            # Create a unique key for the logical instrumentation point
+            # Use (line, type) as key
+            key = (point.line, point.type)
+            
+            if key in unique_points:
+                existing = unique_points[key]
+                # Compare priority (lower value = higher priority)
+                if point.priority < existing.priority:
+                    unique_points[key] = point
+                elif point.priority == existing.priority:
+                    # Tie-breaker: prefer points with AST node info
+                    if point.node is not None and existing.node is None:
+                        unique_points[key] = point
+                    # Tie-breaker: prefer longer context descriptions
+                    elif len(point.context) > len(existing.context):
+                        unique_points[key] = point
+            else:
+                unique_points[key] = point
+        
+        return list(unique_points.values())
+
+    def _instrument_code_ast_based(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
+        """
+        AST-based instrumentation using tree-sitter incremental parsing.
+        
+        This is the preferred approach as it maintains syntax correctness.
+        """
+        try:
+            # Get parser and parse initial tree
+            parser = self._get_parser(language)
+            if not parser:
+                logger.warning(f"⚠️  FALLBACK: No parser available for {language}, using legacy instrumentation instead of AST-based instrumentation")
+                return self._instrument_code_legacy(source_code, points, language)
+            
+            tree = parser.parse(source_code.encode('utf-8'))
+            if not tree:
+                logger.warning(f"⚠️  FALLBACK: Failed to parse {language} code, using legacy instrumentation instead of AST-based instrumentation")
+                return self._instrument_code_legacy(source_code, points, language)
+            
+            # Create AST rewriter
+            rewriter = ASTRewriter(source_code, language, parser, tree)
+            
+            # Add import statement first if we have points to instrument
+            if points:
+                import_statement = self._language_agnostic_generator.get_import_statement(language)
+                if import_statement:
+                    # Find the correct insertion point for import (after shebang/docstring)
+                    import_offset = self._find_import_insertion_point(source_code, language)
+                    if import_offset is not None:
+                        import_point = InstrumentationPoint(
+                            id="import_runtime",
+                            type="import",
+                            subtype="runtime",
+                            name="codegreen_import",
+                            line=1,
+                            column=0,
+                            context="CodeGreen runtime import",
+                            byte_offset=import_offset,
+                            insertion_mode='before'
+                        )
+                        rewriter.add_instrumentation(import_point, import_statement + '\\n')
+            
+            # Deduplicate and sort points before instrumentation
+            deduplicated_points = self._deduplicate_checkpoints(points)
+            
+            # Sort points by byte offset (reverse order for correct insertion)
+            # Function entries should come before exits, so we also sort by type
+            sorted_points = sorted(deduplicated_points, key=lambda p: (
+                getattr(p, 'byte_offset', 0) if hasattr(p, 'byte_offset') and p.byte_offset is not None else p.line * 1000,
+                0 if p.type == 'function_enter' else 1  # Ensure function_enter comes before function_exit
+            ), reverse=True)
+            
+            logger.debug(f"📊 After deduplication and sorting: {len(sorted_points)} points (was {len(points)})")
+            
+            # Add instrumentation for each point
+            successful_instrumentations = 0
+            for i, point in enumerate(sorted_points):
+                logger.debug(f"🔧 Processing instrumentation point {i+1}/{len(sorted_points)}: {point.type} '{point.name}'")
+                # DEBUG: Print point info
+                indent_debug = "None"
+                if point.node:
+                    indent_debug = f"{point.node.start_point.column}"
+                print(f"DEBUG_POINT: {point.name}, Type: {point.type}, Col: {point.column}, NodeCol: {indent_debug}")
+                
+                # Generate instrumentation code
+                instrumentation_code = self._language_agnostic_generator.generate_instrumentation(point, language)
+                if instrumentation_code:
+                    logger.debug(f"   Generated instrumentation: '{instrumentation_code}'")
+                    
+                    # Ensure proper indentation for the original line which gets pushed down
+                    # We insert: CHECKPOINT + \n + INDENTATION
+                    final_code = instrumentation_code + "\n"
+                    
+                    # Determine indentation level based on point column
+                    # We need to subtract line_offset which was added to point.column
+                    global_config = self._config_manager.get_global_config()
+                    line_offset = global_config.get('line_offset', 1)
+                    
+                    indent_col = 0
+                    if hasattr(point, 'column') and point.column is not None:
+                        indent_col = max(0, point.column - line_offset)
+                    
+                    if indent_col > 0:
+                        final_code += " " * indent_col
+                        
+                    success = rewriter.add_instrumentation(point, final_code)
+                    if success:
+                        successful_instrumentations += 1
+                        logger.debug(f"   ✅ Successfully added instrumentation")
+                    else:
+                        logger.warning(f"   ❌ Failed to add instrumentation")
+                else:
+                    logger.warning(f"   ❌ No instrumentation code generated")
+            
+            # Apply all edits using proper tree-sitter workflow
+            if successful_instrumentations > 0:
+                instrumented_code = rewriter.apply_edits()
+                if instrumented_code != source_code:
+                    logger.info(f"AST-based instrumentation added {successful_instrumentations} checkpoints to {language} code")
+                    return instrumented_code
+                else:
+                    logger.warning(f"AST-based instrumentation made no changes to {language} code, falling back to legacy instrumentation")
+                    return self._instrument_code_legacy(source_code, points, language)
+            else:
+                logger.warning(f"No successful instrumentations for {language}, falling back to legacy instrumentation")
+                return self._instrument_code_legacy(source_code, points, language)
+                
+        except Exception as e:
+            logger.warning(f"🚨 FALLBACK WARNING: AST-based instrumentation failed for {language}: {e}, using legacy instrumentation instead")
+            import sys
+            import traceback
+            traceback.print_exc()
+            print(f"🚨 WARNING: AST-based instrumentation failed for {language}, using fallback legacy instrumentation", file=sys.stderr)
+            return self._instrument_code_legacy(source_code, points, language)
+    
+    def _instrument_code_legacy(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
+        """Legacy line-based instrumentation (fallback)"""
+        logger.warning(f"🚨 FALLBACK WARNING: Using legacy line-based instrumentation for {language} instead of AST-based instrumentation")
+        
+        lines = source_code.split('\\n')
+        # Sort points by line number in reverse order to avoid shifting line numbers
+        sorted_points = sorted(points, key=lambda p: p.line, reverse=True)
+        
+        # Insert import statement if needed
+        import_statement = self._language_agnostic_generator.get_import_statement(language)
+        if import_statement:
+            # Simple heuristic for import insertion
+            insert_line = 0
+            if len(lines) > 0 and lines[0].startswith('#!'):
+                insert_line = 1
+            lines.insert(insert_line, import_statement)
+            # Adjust point line numbers because we inserted a line at the top
+            for point in sorted_points:
+                point.line += 1
+        
+        for point in sorted_points:
+            instrumentation_code = self._language_agnostic_generator.generate_instrumentation(point, language)
+            if not instrumentation_code:
+                continue
+                
+            # Basic indentation matching
+            target_line_idx = max(0, min(point.line - 1, len(lines) - 1))
+            current_line = lines[target_line_idx]
+            indentation = ""
+            for char in current_line:
+                if char in [' ', '\\t']:
+                    indentation += char
+                else:
+                    break
+            
+            # Determine insertion position relative to line
+            if point.type.endswith('_enter') or point.type.endswith('_start'):
+                # Insert after the line (e.g. inside function)
+                lines.insert(target_line_idx + 1, indentation + "    " + instrumentation_code)
+            else:
+                # Insert before the line (e.g. before return)
+                lines.insert(target_line_idx, indentation + instrumentation_code)
+                
+        return '\\n'.join(lines)
+        # Key: (line, type) - we assume one start/exit per line per type is sufficient
+        unique_points = {}
+        
+        for point in points:
+            # Create a unique key for the logical instrumentation point
+            # Use (line, type) as key
+            key = (point.line, point.type)
+            
+            if key in unique_points:
+                existing = unique_points[key]
+                # Compare priority (lower value = higher priority)
+                if point.priority < existing.priority:
+                    unique_points[key] = point
+                elif point.priority == existing.priority:
+                    # Tie-breaker: prefer points with AST node info
+                    if point.node is not None and existing.node is None:
+                        unique_points[key] = point
+                    # Tie-breaker: prefer longer context descriptions
+                    elif len(point.context) > len(existing.context):
+                        unique_points[key] = point
+            else:
+                unique_points[key] = point
+        
+        return list(unique_points.values())
+
     def _instrument_code_ast_based(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
         """
         AST-based instrumentation using tree-sitter incremental parsing.
@@ -1957,12 +2319,21 @@ class LanguageEngine:
             successful_instrumentations = 0
             for i, point in enumerate(sorted_points):
                 logger.debug(f"🔧 Processing instrumentation point {i+1}/{len(sorted_points)}: {point.type} '{point.name}'")
-                logger.debug(f"   Point details: line={point.line}, column={point.column}, mode={point.insertion_mode}")
-                logger.debug(f"   Byte offset: {getattr(point, 'byte_offset', 'None')}")
-                logger.debug(f"   Node info: {getattr(point, 'node', 'None')}")
                 
+                # Adjust byte_offset to line start for proper indentation preservation
+                # This ensures that when ASTRewriter inserts the checkpoint + newline, 
+                # the original code (including its indentation) is pushed to the next line correctly.
+                if hasattr(point, 'byte_offset') and point.byte_offset is not None:
+                    if point.byte_offset > 0:
+                        line_start = source_code.rfind('\n', 0, point.byte_offset) + 1
+                        # Adjust for line-based insertion modes
+                        if point.insertion_mode in ['inside_start', 'before', 'insert_inside_start', 'insert_before']:
+                             if line_start != point.byte_offset:
+                                 logger.debug(f"   Adjusting offset {point.byte_offset} to line start {line_start} for indentation preservation")
+                                 point.byte_offset = line_start
+
                 # Generate instrumentation code
-                instrumentation_code = self._generate_instrumentation_code(point, language)
+                instrumentation_code = self._language_agnostic_generator.generate_instrumentation(point, language)
                 if instrumentation_code:
                     logger.debug(f"   Generated instrumentation: '{instrumentation_code}'")
                     success = rewriter.add_instrumentation(point, instrumentation_code)

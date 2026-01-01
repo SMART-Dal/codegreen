@@ -7,11 +7,11 @@
 #include <sstream>
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 namespace codegreen::nemb::drivers {
 
-IntelRAPLProvider::IntelRAPLProvider() 
-    : counter_manager_(std::make_unique<RAPLCounterManager>()) {
+IntelRAPLProvider::IntelRAPLProvider() {
 }
 
 IntelRAPLProvider::~IntelRAPLProvider() {
@@ -81,35 +81,42 @@ EnergyReading IntelRAPLProvider::get_reading() {
     
     double total_energy = 0.0;
     bool any_successful = false;
+    std::map<std::string, uint64_t> raw_values;
     
-    // Read energy from ALL available RAPL domains - preserve detailed breakdown
+    // Read energy from ALL available RAPL domains
     for (const std::string& domain : available_domains_) {
-        const std::string& path = domain_paths_[domain];
-        
         try {
-            std::ifstream energy_file(path);
-            if (energy_file.is_open()) {
-                uint64_t raw_energy_uj;
-                energy_file >> raw_energy_uj;
-                
-                // Update counter with wraparound handling
-                uint64_t accumulated_uj = counter_manager_->update_counter(domain, raw_energy_uj, 32);
-                double domain_energy = accumulated_uj * energy_unit_joules_;
-                
-                // Store per-domain energy - CRITICAL for detailed analysis
-                reading.domain_energy_joules[domain] = domain_energy;
-                reading.domain_power_watts[domain] = 0.0; // Will be calculated by coordinator
-                
-                // Accumulate total energy (avoid double counting for overlapping domains)
-                if (domain == "package" || (domain != "package" && available_domains_.size() == 1)) {
-                    total_energy += domain_energy;
-                }
-                
+            auto& reader = domain_file_readers_[domain];
+            uint64_t raw_energy_uj;
+            
+            // Use 10ms timeout for readings to prevent stalls
+            if (reader && reader->read_uint64_with_timeout(raw_energy_uj, std::chrono::milliseconds(10))) {
+                raw_values[domain] = raw_energy_uj;
                 any_successful = true;
+            } else {
+                 // Try to re-open if reading failed
+                 if (reader) reader->open_file();
+                 reading.domain_energy_joules[domain] = -1.0;
             }
         } catch (const std::exception& e) {
             // Log error but continue with other domains
             reading.domain_energy_joules[domain] = -1.0;
+        }
+    }
+    
+    if (any_successful) {
+        // Atomic update of all counters
+        auto accumulated_values = counter_manager_->update_counters(raw_values, reading.timestamp_ns);
+        
+        for (const auto& [domain, accumulated_uj] : accumulated_values) {
+            double domain_energy = accumulated_uj * energy_unit_joules_;
+            reading.domain_energy_joules[domain] = domain_energy;
+            reading.domain_power_watts[domain] = 0.0; // Calculated by coordinator
+            
+            // Accumulate total energy (avoid double counting for overlapping domains)
+            if (domain == "package" || (domain != "package" && available_domains_.size() == 1)) {
+                total_energy += domain_energy;
+            }
         }
     }
     
@@ -211,56 +218,6 @@ std::map<std::string, RAPLDomain> IntelRAPLProvider::get_available_domains() con
     return domains;
 }
 
-// RAPLCounterManager minimal implementation
-uint64_t RAPLCounterManager::update_counter(const std::string& domain_name, 
-                                           uint64_t raw_value, 
-                                           uint32_t counter_bits) {
-    std::lock_guard<std::mutex> lock(counter_mutex_);
-    
-    auto& state = counter_states_[domain_name];
-    
-    if (state.counter_mask == 0) {
-        // First time - initialize
-        state.counter_mask = (1ULL << counter_bits) - 1;
-        state.last_raw_value = raw_value;
-        state.accumulated_value = raw_value;
-        state.last_update = std::chrono::steady_clock::now();
-        return raw_value;
-    }
-    
-    // Check for wraparound
-    if (raw_value < state.last_raw_value) {
-        // Wraparound detected
-        uint64_t overflow_adjustment = (state.counter_mask + 1) - state.last_raw_value + raw_value;
-        state.accumulated_value += overflow_adjustment;
-        state.wraparound_count++;
-    } else {
-        // Normal increment
-        state.accumulated_value += (raw_value - state.last_raw_value);
-    }
-    
-    state.last_raw_value = raw_value;
-    state.last_update = std::chrono::steady_clock::now();
-    
-    return state.accumulated_value;
-}
-
-void RAPLCounterManager::reset_counter(const std::string& domain_name) {
-    std::lock_guard<std::mutex> lock(counter_mutex_);
-    counter_states_.erase(domain_name);
-}
-
-std::map<std::string, uint64_t> RAPLCounterManager::get_all_counters() const {
-    std::lock_guard<std::mutex> lock(counter_mutex_);
-    std::map<std::string, uint64_t> result;
-    
-    for (const auto& [domain, state] : counter_states_) {
-        result[domain] = state.accumulated_value;
-    }
-    
-    return result;
-}
-
 // Hardware detection methods implementation
 bool IntelRAPLProvider::detect_rapl_domains() {
     std::cout << "🔍 Detecting RAPL domains..." << std::endl;
@@ -332,15 +289,21 @@ bool IntelRAPLProvider::query_energy_units() {
 bool IntelRAPLProvider::initialize_counters() {
     std::cout << "🔍 Initializing RAPL counters..." << std::endl;
     
-    if (!counter_manager_) {
-        std::cout << "  ❌ Counter manager not available" << std::endl;
-        return false;
-    }
+    // Create the HAL counter manager
+    counter_manager_ = std::make_unique<hal::CounterManager>();
     
     // Initialize counters for each available domain
     for (const std::string& domain : available_domains_) {
-        // Reset counter state for this domain
-        counter_manager_->reset_counter(domain);
+        hal::CounterManager::CounterConfig config;
+        config.name = domain;
+        config.domain = domain;
+        config.bit_width = 32;
+        config.max_value = std::numeric_limits<uint32_t>::max();
+        config.conversion_factor = energy_unit_joules_;
+        config.unit = "J";
+        config.active = true;
+        
+        counter_manager_->register_counter(domain, config);
         std::cout << "  ✓ Initialized counter for domain: " << domain << std::endl;
     }
     
@@ -373,29 +336,33 @@ bool IntelRAPLProvider::initialize_file_readers() {
 bool IntelRAPLProvider::take_initial_readings() {
     std::cout << "🔍 Taking initial baseline readings..." << std::endl;
     
+    std::map<std::string, uint64_t> initial_values;
+    bool success = true;
+    
     for (const std::string& domain : available_domains_) {
         try {
             auto& reader = domain_file_readers_[domain];
             uint64_t energy_uj;
             
             if (reader && reader->read_uint64_with_timeout(energy_uj, std::chrono::milliseconds(100))) {
-                
-                // Update counter with initial reading
-                counter_manager_->update_counter(domain, energy_uj, 32);
-                
+                initial_values[domain] = energy_uj;
                 std::cout << "  ✓ Initial reading for " << domain << ": " 
                          << energy_uj << " μJ" << std::endl;
             } else {
                 std::cout << "  ❌ Cannot read " << domain << " energy file" << std::endl;
-                return false;
+                success = false;
             }
         } catch (const std::exception& e) {
             std::cout << "  ❌ Error reading " << domain << ": " << e.what() << std::endl;
-            return false;
+            success = false;
         }
     }
     
-    return true;
+    if (success) {
+        counter_manager_->initialize_counters(initial_values, std::chrono::steady_clock::now().time_since_epoch().count());
+    }
+    
+    return success;
 }
 
 bool IntelRAPLProvider::query_energy_unit_from_hardware() {

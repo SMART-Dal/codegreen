@@ -120,18 +120,18 @@ private:
                 
                 if (reading.is_valid) {
                     std::cout << std::fixed << std::setprecision(6);
-                    std::cout << "    Total energy: " << reading.total_energy_joules << " J\n";
-                    std::cout << "    Total power: " << reading.total_power_watts << " W\n";
-                    std::cout << "    Components: " << reading.component_breakdown.size() << "\n";
+                    std::cout << "    Total energy: " << reading.energy_joules << " J\n";
+                    std::cout << "    Total power: " << reading.average_power_watts << " W\n";
+                    std::cout << "    Components: " << reading.domain_energy_joules.size() << "\n";
                     std::cout << "    Temperature: " << reading.temperature_celsius << " °C\n";
-                    std::cout << "    Frequency: " << reading.frequency_mhz << " MHz\n";
-                    std::cout << "    Uncertainty: " << reading.measurement_uncertainty_percent << "%\n";
+                    std::cout << "    Frequency: " << reading.cpu_frequency_mhz << " MHz\n";
+                    std::cout << "    Uncertainty: " << reading.uncertainty_percent << "%\n";
                     
                     // Display component breakdown
-                    for (const auto& component : reading.component_breakdown) {
-                        if (component.is_valid) {
-                            std::cout << "      " << component.component_name 
-                                      << ": " << (component.energy_joules * 1000) << " mJ\n";
+                    for (const auto& [domain, energy] : reading.domain_energy_joules) {
+                        if (energy >= 0) {
+                            std::cout << "      " << domain 
+                                      << ": " << (energy * 1000) << " mJ\n";
                         }
                     }
                 } else {
@@ -158,7 +158,7 @@ private:
             bool monotonic = true;
             for (size_t i = 1; i < readings.size(); ++i) {
                 if (readings[i].is_valid && readings[i-1].is_valid) {
-                    if (readings[i].total_energy_joules < readings[i-1].total_energy_joules) {
+                    if (readings[i].energy_joules < readings[i-1].energy_joules) {
                         monotonic = false;
                         break;
                     }
@@ -196,7 +196,7 @@ private:
                 return false;
             }
             
-            double baseline_energy = baseline.total_energy_joules;
+            double baseline_energy = baseline.energy_joules;
             std::cout << "  📊 Baseline energy: " << (baseline_energy * 1000) << " mJ\n";
             
             // Wait and measure accumulation
@@ -209,7 +209,7 @@ private:
                 return false;
             }
             
-            double final_energy = final_reading.total_energy_joules;
+            double final_energy = final_reading.energy_joules;
             double energy_delta = final_energy - baseline_energy;
             double average_power = energy_delta / 2.0; // 2 seconds
             
@@ -259,7 +259,7 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 auto reading = provider->get_reading();
                 if (reading.is_valid) {
-                    idle_powers.push_back(reading.total_power_watts);
+                    idle_powers.push_back(reading.average_power_watts);
                 }
             }
             
@@ -292,7 +292,7 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 auto reading = provider->get_reading();
                 if (reading.is_valid) {
-                    load_powers.push_back(reading.total_power_watts);
+                    load_powers.push_back(reading.average_power_watts);
                 }
             }
             
@@ -346,13 +346,13 @@ private:
             for (int i = 0; i < 20; ++i) {
                 auto reading = provider->get_reading();
                 if (reading.is_valid) {
-                    energy_values.push_back(reading.total_energy_joules);
+                    energy_values.push_back(reading.energy_joules);
                     if (start_time == 0) {
                         start_time = reading.timestamp_ns;
                     }
                     
                     std::cout << "    Sample " << (i+1) << ": " 
-                              << (reading.total_energy_joules * 1000) << " mJ\n";
+                              << (reading.energy_joules * 1000) << " mJ\n";
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }

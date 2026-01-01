@@ -204,22 +204,42 @@ class LanguageConfigManager:
                 "return_types": ["return_statement"],
                 "comment_types": ["comment"],
                 "docstring_types": ["expression_statement"],
+                "body_types": ["block"],
+                "insertion_queries": {
+                    "function_body_start": """
+                        (function_definition
+                          body: (block
+                            (expression_statement (string))?
+                            .
+                            (_) @target
+                          )
+                        )
+                    """,
+                    "class_body_start": """
+                        (class_definition
+                          body: (block
+                            .
+                            (_) @target
+                          )
+                        )
+                    """
+                },
                 "insertion_rules": {
                     "function_enter": {
-                        "mode": "inside_start",
-                        "find_first_statement": True,
-                        "skip_docstrings": True,
-                        "skip_comments": True
+                        "mode": "query_target",
+                        "query": "function_body_start",
+                        "placement": "before",
+                        "fallback_mode": "inside_start"
                     },
                     "function_exit": {
                         "mode": "inside_end",
                         "find_last_statement": True
                     },
                     "class_enter": {
-                        "mode": "inside_start",
-                        "find_first_statement": True,
-                        "skip_docstrings": True,
-                        "skip_comments": True
+                        "mode": "query_target",
+                        "query": "class_body_start",
+                        "placement": "before",
+                        "fallback_mode": "inside_start"
                     },
                     "class_exit": {
                         "mode": "inside_end",
@@ -328,7 +348,7 @@ class LanguageConfigManager:
                 "max_inheritance_depth": 5
             },
             node_types={
-                "function_types": ["function_definition", "method_definition", "constructor_definition"],
+                "function_types": ["function_definition", "method_definition", "constructor_definition", "async_function_definition"],
                 "body_types": ["block", "compound_statement", "constructor_body"],
                 "loop_types": ["for_statement", "while_statement", "do_statement"],
                 "class_types": ["class_definition", "class_specifier", "struct_specifier"],
