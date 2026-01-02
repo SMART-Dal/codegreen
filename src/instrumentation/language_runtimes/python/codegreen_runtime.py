@@ -49,223 +49,104 @@ class NEMBClient:
     def __init__(self):
         lib_path = _find_nemb_library()
         if not lib_path:
-            raise RuntimeError(
-                "CodeGreen NEMB library not found.\n"
-                "Build with: cd build && cmake .. && make\n"
-                "Or set CODEGREEN_LIB_PATH environment variable."
-            )
+            self.lib = None
+            return
 
         try:
             self.lib = ctypes.CDLL(lib_path)
-
             self.lib.nemb_initialize.argtypes = []
             self.lib.nemb_initialize.restype = c_int
-
+            
+            # Instantaneous reading API
             self.lib.nemb_read_current.argtypes = [ctypes.POINTER(c_double), ctypes.POINTER(c_double)]
             self.lib.nemb_read_current.restype = c_int
+            
+            # High-accuracy "Signal Generator" API
+            self.lib.nemb_mark_checkpoint.argtypes = [c_char_p]
+            self.lib.nemb_mark_checkpoint.restype = None
+            
+            self.lib.nemb_get_checkpoints_json.argtypes = [c_char_p, c_int]
+            self.lib.nemb_get_checkpoints_json.restype = c_int
 
             if not self.lib.nemb_initialize():
-                raise RuntimeError(
-                    "NEMB backend initialization failed.\n"
-                    "Check: sudo chmod +r /sys/class/powercap/intel-rapl:*/energy_uj\n"
-                    "Or run: sudo modprobe msr && sudo chmod +r /dev/cpu/*/msr"
-                )
+                self.lib = None
+        except Exception:
+            self.lib = None
 
-        except OSError as e:
-            raise RuntimeError(f"Failed to load NEMB library at {lib_path}: {e}")
+    def mark_checkpoint(self, name: str):
+        """Send a lightweight signal to the C++ backend"""
+        if self.lib:
+            self.lib.nemb_mark_checkpoint(name.encode('utf-8'))
+
+    def get_final_measurements(self) -> List[Dict]:
+        """Retrieve correlated time-series measurements from C++ backend"""
+        if not self.lib:
+            return []
+            
+        # Use a large buffer for JSON data (1MB)
+        buf_size = 1024 * 1024
+        buf = ctypes.create_string_buffer(buf_size)
+        
+        ret = self.lib.nemb_get_checkpoints_json(buf, buf_size)
+        if ret > 0:
+            try:
+                data = json.loads(buf.value.decode('utf-8'))
+                return data.get("checkpoints", [])
+            except Exception:
+                return []
+        return []
 
     def read_energy(self) -> tuple:
-        """Returns (joules, watts)"""
+        """Returns (joules, watts) - kept for compatibility"""
+        if not self.lib:
+            return (0.0, 0.0)
+
         energy = c_double()
         power = c_double()
-
         if self.lib.nemb_read_current(byref(energy), byref(power)):
             return (energy.value, power.value)
-
-        raise RuntimeError("NEMB energy read failed - sensor error or permission denied")
+        return (0.0, 0.0)
 
 # --- Runtime Implementation ---
 
-class EnergyReader:
-    """Reads energy from hardware sensors via NEMB backend"""
+_nemb_client: Optional[NEMBClient] = None
+_client_lock = threading.Lock()
 
-    def __init__(self):
-        self.client = NEMBClient()
+def _get_nemb_client() -> NEMBClient:
+    """Get or create global NEMB client"""
+    global _nemb_client
+    if _nemb_client is None:
+        with _client_lock:
+            if _nemb_client is None:
+                _nemb_client = NEMBClient()
+    return _nemb_client
 
-    def read_energy(self) -> tuple:
-        """Returns (joules, watts) since last read"""
-        return self.client.read_energy()
-
-_energy_reader: Optional[EnergyReader] = None
-_energy_lock = threading.Lock()
-
-def _get_energy_reader() -> EnergyReader:
-    """Get or create global energy reader"""
-    global _energy_reader
-    if _energy_reader is None:
-        with _energy_lock:
-            if _energy_reader is None:
-                _energy_reader = EnergyReader()
-    return _energy_reader
-
-@dataclass
-class EnergyMeasurement:
-    """Lightweight energy measurement data structure"""
-    checkpoint_id: str
-    timestamp: float
-    joules: float = 0.0
-    watts: float = 0.0
-    source: str = "nemb"
-
-class MeasurementCollector:
-    """High-performance measurement collector with minimal overhead"""
+def _report_at_exit():
+    """Report measurements to stdout in a way that CLI can parse"""
+    client = _get_nemb_client()
+    measurements = client.get_final_measurements()
     
-    def __init__(self):
-        self.measurements: List[EnergyMeasurement] = []
-        self.start_time = time.time()
-        self.lock = threading.Lock()
-        
-    def record_checkpoint(self, checkpoint_id: str, checkpoint_type: str, name: str,
-                         line_number: int, context: str) -> None:
-        """Record a checkpoint with minimal overhead"""
-        timestamp = time.perf_counter()
-
-        energy_reader = _get_energy_reader()
-        joules, watts = energy_reader.read_energy()
-
-        measurement = EnergyMeasurement(
-            checkpoint_id=checkpoint_id,
-            timestamp=timestamp,
-            joules=joules,
-            watts=watts,
-            source="nemb"
-        )
-
-        with self.lock:
-            self.measurements.append(measurement)
+    if not measurements:
+        return
     
-    def get_measurements(self) -> List[EnergyMeasurement]:
-        """Get all measurements"""
-        with self.lock:
-            return self.measurements.copy()
-    
-    def clear(self) -> None:
-        """Clear all measurements"""
-        with self.lock:
-            self.measurements.clear()
+    # Wrap in clear markers for CLI tool parsing
+    print("\n--- CODEGREEN_RESULT_START ---")
+    results = {
+        "measurements": measurements
+    }
+    print(json.dumps(results))
+    print("--- CODEGREEN_RESULT_END ---")
 
-# Global measurement collector
-_measurement_collector: Optional[MeasurementCollector] = None
-_collector_lock = threading.Lock()
-
-# Global session management
-_measurement_session: Optional['MeasurementSession'] = None
-_session_lock = threading.Lock()
-
-
-@dataclass
-class CheckpointMeasurement:
-    """Represents a single checkpoint measurement."""
-    id: str
-    type: str
-    name: str
-    line_number: int
-    context: str
-    timestamp: float
-    process_id: int
-    thread_id: int
-
-
-class MeasurementSession:
-    """Manages energy measurement session for a single execution."""
-    
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.measurements: List[CheckpointMeasurement] = []
-        self.start_time = time.time()
-        self.process_id = os.getpid()
-        self._lock = threading.Lock()
-    
-    def add_measurement(self, checkpoint_id: str, checkpoint_type: str, 
-                       name: str, line_number: int, context: str):
-        """Add a checkpoint measurement to the session."""
-        measurement = CheckpointMeasurement(
-            id=checkpoint_id,
-            type=checkpoint_type,
-            name=name,
-            line_number=line_number,
-            context=context,
-            timestamp=time.perf_counter(),
-            process_id=self.process_id,
-            thread_id=threading.get_ident()
-        )
-        
-        with self._lock:
-            self.measurements.append(measurement)
-    
-    def save_to_file(self, filepath: str):
-        """Save measurement session to JSON file."""
-        session_data = {
-            'session_id': self.session_id,
-            'start_time': self.start_time,
-            'end_time': time.time(),
-            'process_id': self.process_id,
-            'measurements': [asdict(m) for m in self.measurements]
-        }
-        
-        with open(filepath, 'w') as f:
-            json.dump(session_data, f, indent=2)
-
-
-def initialize_session(session_id: Optional[str] = None) -> str:
-    """Initialize a new measurement session."""
-    global _measurement_session
-    
-    if session_id is None:
-        session_id = f"codegreen_{int(time.time())}_{os.getpid()}"
-    
-    with _session_lock:
-        _measurement_session = MeasurementSession(session_id)
-    
-    return session_id
-
-
-def finalize_session(output_file: Optional[str] = None) -> Dict:
-    """Finalize the measurement session and optionally save to file."""
-    global _measurement_session
-    
-    with _session_lock:
-        if _measurement_session is None:
-            return {}
-        
-        if output_file:
-            _measurement_session.save_to_file(output_file)
-        
-        # Create summary data
-        summary = {
-            'session_id': _measurement_session.session_id,
-            'total_checkpoints': len(_measurement_session.measurements),
-            'duration': time.time() - _measurement_session.start_time,
-            'measurements': [asdict(m) for m in _measurement_session.measurements]
-        }
-        
-        _measurement_session = None
-        return summary
-
+import atexit
+atexit.register(_report_at_exit)
 
 def measure_checkpoint(checkpoint_id: str, checkpoint_type: str, 
                       name: str, line_number: int, context: str):
-    """Record a checkpoint measurement with minimal overhead for energy accuracy."""
-    global _measurement_collector
-    
-    # Initialize collector on first use (lazy initialization)
-    if _measurement_collector is None:
-        with _collector_lock:
-            if _measurement_collector is None:
-                _measurement_collector = MeasurementCollector()
-    
-    # Record checkpoint with minimal overhead
-    _measurement_collector.record_checkpoint(checkpoint_id, checkpoint_type, name, line_number, context)
+    """Record a checkpoint marker with ultra-low overhead."""
+    client = _get_nemb_client()
+    # Signal name contains ID and metadata for later correlation
+    signal_name = f"{checkpoint_type}:{name}:{checkpoint_id}"
+    client.mark_checkpoint(signal_name)
 
 
 def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str):

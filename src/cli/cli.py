@@ -736,6 +736,7 @@ def measure_energy(
     output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file for results")] = None,
     sensors: Annotated[Optional[List[SensorType]], typer.Option("--sensors", "-s", help="Sensors to use for measurement")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", help="Verbose output")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output results in JSON format")] = False,
     precision: Annotated[Precision, typer.Option("--precision", "-p", help="Measurement precision")] = Precision.high,
     timeout: Annotated[Optional[int], typer.Option("--timeout", "-t", help="Timeout in seconds")] = None,
     args: Annotated[Optional[List[str]], typer.Argument(help="Arguments to pass to the script")] = None,
@@ -753,13 +754,17 @@ def measure_energy(
     • [cyan]codegreen measure python script.py --sensors rapl nvidia[/cyan] 
     • [cyan]codegreen measure python app.py --precision high --verbose[/cyan]
     • [cyan]codegreen measure python main.py --timeout 60 --output results.json[/cyan]
+    • [cyan]codegreen measure python main.py --json[/cyan]
     
     [bold]Sensor Types:[/bold] rapl, nvidia, amd_gpu, amd_cpu
     [bold]Precision Levels:[/bold] low, medium, high
     """
     
     if not script.exists():
-        console.print(f"[red]Error: Script file not found: {script}[/red]")
+        if not json_output:
+            console.print(f"[red]Error: Script file not found: {script}[/red]")
+        else:
+            print(json.dumps({"success": False, "error": f"Script file not found: {script}"}))
         raise typer.Exit(1)
     
     try:
@@ -767,13 +772,14 @@ def measure_energy(
         with open(script, 'r', encoding='utf-8') as f:
             source_code = f.read()
         
-        console.print(f"[green]Analyzing code structure...[/green]")
-        console.print(f"Language: [cyan]{language.value}[/cyan]")
-        console.print(f"Script: [cyan]{script}[/cyan]")
-        console.print(f"Precision: [cyan]{precision.value}[/cyan]")
-        
-        if sensors:
-            console.print(f"Sensors: [cyan]{', '.join([s.value for s in sensors])}[/cyan]")
+        if not json_output:
+            console.print(f"[green]Analyzing code structure...[/green]")
+            console.print(f"Language: [cyan]{language.value}[/cyan]")
+            console.print(f"Script: [cyan]{script}[/cyan]")
+            console.print(f"Precision: [cyan]{precision.value}[/cyan]")
+            
+            if sensors:
+                console.print(f"Sensors: [cyan]{', '.join([s.value for s in sensors])}[/cyan]")
 
         from ..instrumentation.language_engine import LanguageEngine
 
@@ -781,16 +787,20 @@ def measure_energy(
         result = engine.analyze_code(source_code, language.value)
 
         if not result.success:
-            console.print(f"[red]Analysis failed: {result.error}[/red]")
+            if not json_output:
+                console.print(f"[red]Analysis failed: {result.error}[/red]")
+            else:
+                print(json.dumps({"success": False, "error": result.error}))
             raise typer.Exit(1)
         
-        # Display analysis results
-        console.print(f"[green]✓ Analysis completed![/green]")
-        console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
-        console.print(f"Instrumentation points found: [cyan]{result.checkpoint_count}[/cyan]")
-        console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
+        if not json_output:
+            # Display analysis results
+            console.print(f"[green]✓ Analysis completed![/green]")
+            console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
+            console.print(f"Instrumentation points found: [cyan]{result.checkpoint_count}[/cyan]")
+            console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
         
-        if verbose:
+        if verbose and not json_output:
             # Show instrumentation points
             console.print("\n[bold]Instrumentation Points:[/bold]")
             table = Table()
@@ -813,13 +823,14 @@ def measure_energy(
             console.print(table)
         
         # Show optimization suggestions
-        if result.optimization_suggestions:
+        if result.optimization_suggestions and not json_output:
             console.print(f"\n[bold yellow]💡 Optimization Suggestions:[/bold yellow]")
             for i, suggestion in enumerate(result.optimization_suggestions, 1):
                 console.print(f"  {i}. {suggestion}")
         
         # Instrument code
-        console.print(f"\n[green]Instrumenting code for energy measurement...[/green]")
+        if not json_output:
+            console.print(f"\n[green]Instrumenting code for energy measurement...[/green]")
         instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
         
         # Create instrumented file
@@ -827,32 +838,57 @@ def measure_energy(
         with open(instrumented_path, 'w', encoding='utf-8') as f:
             f.write(instrumented_code)
         
-        console.print(f"[green]✓ Instrumented code saved to: {instrumented_path}[/green]")
+        if not json_output:
+            console.print(f"[green]✓ Instrumented code saved to: {instrumented_path}[/green]")
         
         # Now run the measurement
+        measurement_result = None
         if _should_run_actual_measurement(sensors):
-            console.print(f"\n[green]Running energy measurement...[/green]")
+            if not json_output:
+                console.print(f"\n[green]Running energy measurement...[/green]")
             measurement_result = _run_energy_measurement(
-                instrumented_path, language, sensors, verbose, timeout, args
+                instrumented_path, language, sensors, verbose and not json_output, timeout, args, json_output
             )
             
             if output:
                 _save_measurement_results(output, result, measurement_result)
-                console.print(f"[green]✓ Results saved to: {output}[/green]")
+                if not json_output:
+                    console.print(f"[green]✓ Results saved to: {output}[/green]")
         else:
-            console.print(f"\n[yellow]Note: No energy sensors available. Code analysis and instrumentation completed.[/yellow]")
-            console.print(f"To run with actual energy measurement, ensure RAPL or other sensors are available.")
+            if not json_output:
+                console.print(f"\n[yellow]Note: No energy sensors available. Code analysis and instrumentation completed.[/yellow]")
+                console.print(f"To run with actual energy measurement, ensure RAPL or other sensors are available.")
         
-        console.print(f"\n[green]✓ CodeGreen measurement completed successfully![/green]")
+        if json_output:
+            combined_results = {
+                'timestamp': datetime.now().isoformat(),
+                'analysis': {
+                    'language': result.language,
+                    'success': result.success,
+                    'instrumentation_points_count': result.checkpoint_count,
+                    'optimization_suggestions': result.optimization_suggestions,
+                    'metadata': result.metadata
+                },
+                'measurement': measurement_result
+            }
+            print(json.dumps(combined_results, indent=2))
+        else:
+            console.print(f"\n[green]✓ CodeGreen measurement completed successfully![/green]")
         
     except FileNotFoundError as e:
-        console.print(f"[red]Error: File not found: {e}[/red]")
+        if not json_output:
+            console.print(f"[red]Error: File not found: {e}[/red]")
+        else:
+            print(json.dumps({"success": False, "error": str(e)}))
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
-        if verbose:
-            import traceback
-            console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
+        if not json_output:
+            console.print(f"[red]Unexpected error: {e}[/red]")
+            if verbose:
+                import traceback
+                console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
+        else:
+            print(json.dumps({"success": False, "error": str(e)}))
         raise typer.Exit(1)
 
 
@@ -863,13 +899,37 @@ def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
     return binary_path is not None and binary_path.exists()
 
 
+def _parse_runtime_measurements(output: str) -> List[Dict[str, Any]]:
+    """Extract structured energy measurements from process output"""
+    measurements = []
+    
+    # Look for the JSON blob between markers
+    start_marker = "--- CODEGREEN_RESULT_START ---"
+    end_marker = "--- CODEGREEN_RESULT_END ---"
+    
+    if start_marker in output and end_marker in output:
+        try:
+            start_idx = output.find(start_marker) + len(start_marker)
+            end_idx = output.find(end_marker)
+            json_str = output[start_idx:end_idx].strip()
+            
+            data = json.loads(json_str)
+            measurements = data.get("measurements", [])
+        except Exception:
+            # Silently fail if parsing fails
+            pass
+            
+    return measurements
+
+
 def _run_energy_measurement(
     instrumented_path: Path,
     language: Language,
     sensors: Optional[List[SensorType]],
     verbose: bool,
     timeout: Optional[int],
-    args: Optional[List[str]]
+    args: Optional[List[str]],
+    json_output: bool = False
 ) -> Dict[str, Any]:
     """Run actual energy measurement on instrumented code"""
 
@@ -877,7 +937,7 @@ def _run_energy_measurement(
 
     if language == Language.python:
         runtime_path = _get_runtime_path()
-        if not runtime_path:
+        if not runtime_path and not json_output:
             console.print("[yellow]Warning: Runtime module path not found, execution may fail[/yellow]")
 
         cmd = ['python3', str(instrumented_path)]
@@ -892,7 +952,8 @@ def _run_energy_measurement(
     else:
         binary_path = get_binary_path()
         if not binary_path:
-            console.print("[yellow]No binary available for energy measurement[/yellow]")
+            if not json_output:
+                console.print("[yellow]No binary available for energy measurement[/yellow]")
             return {}
 
         cmd = [str(binary_path), language.value, str(instrumented_path)]
@@ -908,16 +969,42 @@ def _run_energy_measurement(
             cmd.extend(args)
     
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Running energy measurement...", total=None)
-            
-            if verbose:
-                console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
-            
+        if not json_output:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Running energy measurement...", total=None)
+                
+                if verbose:
+                    console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env
+                )
+                
+                progress.update(task, completed=True)
+                
+                if result.returncode == 0:
+                    console.print("[green]✓ Energy measurement completed![/green]")
+                    measurements = _parse_runtime_measurements(result.stdout)
+                    return {
+                        'success': True, 
+                        'output': result.stdout,
+                        'checkpoints': measurements
+                    }
+                else:
+                    console.print(f"[yellow]Warning: Measurement had issues (exit code {result.returncode})[/yellow]")
+                    if verbose and result.stderr:
+                        console.print(f"[dim]Stderr: {result.stderr}[/dim]")
+                    return {'success': False, 'error': result.stderr, 'output': result.stdout}
+        else:
+            # Silent execution for JSON output
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -925,23 +1012,22 @@ def _run_energy_measurement(
                 timeout=timeout,
                 env=env
             )
-            
-            progress.update(task, completed=True)
-            
-            if result.returncode == 0:
-                console.print("[green]✓ Energy measurement completed![/green]")
-                return {'success': True, 'output': result.stdout}
-            else:
-                console.print(f"[yellow]Warning: Measurement had issues (exit code {result.returncode})[/yellow]")
-                if verbose and result.stderr:
-                    console.print(f"[dim]Stderr: {result.stderr}[/dim]")
-                return {'success': False, 'error': result.stderr}
+            measurements = _parse_runtime_measurements(result.stdout)
+            return {
+                'success': result.returncode == 0,
+                'output': result.stdout,
+                'error': result.stderr if result.returncode != 0 else None,
+                'returncode': result.returncode,
+                'checkpoints': measurements
+            }
                 
     except subprocess.TimeoutExpired:
-        console.print("[red]Energy measurement timed out[/red]")
+        if not json_output:
+            console.print("[red]Energy measurement timed out[/red]")
         return {'success': False, 'error': 'timeout'}
     except Exception as e:
-        console.print(f"[red]Energy measurement failed: {e}[/red]")
+        if not json_output:
+            console.print(f"[red]Energy measurement failed: {e}[/red]")
         return {'success': False, 'error': str(e)}
 
 
@@ -975,6 +1061,7 @@ def analyze_code_structure(
     script: Annotated[Path, typer.Argument(help="Path to the script file to analyze")],
     output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file for analysis results")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", help="Verbose output with detailed instrumentation points")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output results in JSON format")] = False,
     show_suggestions: Annotated[bool, typer.Option("--suggestions", help="Show optimization suggestions")] = True,
     save_instrumented: Annotated[bool, typer.Option("--save-instrumented", help="Save instrumented code to current directory")] = False,
     output_dir: Annotated[Optional[Path], typer.Option("--output-dir", help="Directory to save instrumented code")] = None,
@@ -992,13 +1079,17 @@ def analyze_code_structure(
     • [cyan]codegreen analyze python module.py --verbose[/cyan]
     • [cyan]codegreen analyze python app.py --output analysis.json --suggestions[/cyan]
     • [cyan]codegreen analyze cpp main.cpp --verbose[/cyan]
+    • [cyan]codegreen analyze python main.py --json[/cyan]
     
     [bold]Output formats:[/bold] JSON report with instrumentation points and suggestions
     [bold]Languages supported:[/bold] python, cpp, c, java
     """
     
     if not script.exists():
-        console.print(f"[red]Error: Script file not found: {script}[/red]")
+        if not json_output:
+            console.print(f"[red]Error: Script file not found: {script}[/red]")
+        else:
+            print(json.dumps({"success": False, "error": f"Script file not found: {script}"}))
         raise typer.Exit(1)
     
     try:
@@ -1006,9 +1097,10 @@ def analyze_code_structure(
         with open(script, 'r', encoding='utf-8') as f:
             source_code = f.read()
         
-        console.print(f"[green]Analyzing code structure...[/green]")
-        console.print(f"Language: [cyan]{language.value}[/cyan]")
-        console.print(f"Script: [cyan]{script}[/cyan]")
+        if not json_output:
+            console.print(f"[green]Analyzing code structure...[/green]")
+            console.print(f"Language: [cyan]{language.value}[/cyan]")
+            console.print(f"Script: [cyan]{script}[/cyan]")
         
         # Try to use Python language engine, fall back to C++ binary
         try:
@@ -1017,15 +1109,22 @@ def analyze_code_structure(
             result = engine.analyze_code(source_code, language.value)
             
             if not result.success:
-                console.print(f"[red]Analysis failed: {result.error}[/red]")
+                if not json_output:
+                    console.print(f"[red]Analysis failed: {result.error}[/red]")
+                else:
+                    print(json.dumps({"success": False, "error": result.error}))
                 raise typer.Exit(1)
                 
         except ImportError:
-            console.print("[yellow]Language engine not available. Using C++ binary fallback.[/yellow]")
+            if not json_output:
+                console.print("[yellow]Language engine not available. Using C++ binary fallback.[/yellow]")
             # Fall back to C++ binary
             binary_path = get_binary_path()
             if not binary_path:
-                console.print("[red]Error: Neither Python language engine nor C++ binary found![/red]")
+                if not json_output:
+                    console.print("[red]Error: Neither Python language engine nor C++ binary found![/red]")
+                else:
+                    print(json.dumps({"success": False, "error": "Neither Python language engine nor C++ binary found!"}))
                 raise typer.Exit(1)
             
             cmd = [str(binary_path), "--analyze", str(script)]
@@ -1038,24 +1137,36 @@ def analyze_code_structure(
             if no_cleanup:
                 cmd.append("--no-cleanup")
             
+            # Subprocess handles its own output, but if JSON is requested we need to be careful
+            # The C++ binary might not support --json yet
             result = subprocess.run(cmd, capture_output=True, text=True)
-            console.print(result.stdout)
+            if not json_output:
+                console.print(result.stdout)
             if result.returncode != 0:
-                console.print(f"[red]Analysis failed: {result.stderr}[/red]")
+                if not json_output:
+                    console.print(f"[red]Analysis failed: {result.stderr}[/red]")
+                else:
+                    print(json.dumps({"success": False, "error": result.stderr}))
                 raise typer.Exit(1)
+            
+            if json_output:
+                # If JSON was requested but we used C++ fallback, we might have to parse its output or return error
+                print(json.dumps({"success": True, "method": "cpp_fallback", "output": result.stdout}))
             return
         
-        # Display analysis results
-        console.print(f"[green]✓ Analysis completed![/green]")
-        console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
-        console.print(f"Parser available: [cyan]{result.metadata.get('parser_available', False)}[/cyan]")
-        console.print(f"Instrumentation points: [cyan]{result.checkpoint_count}[/cyan]")
-        console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
-        console.print(f"Source lines: [cyan]{result.metadata.get('source_lines', 0)}[/cyan]")
+        if not json_output:
+            # Display analysis results
+            console.print(f"[green]✓ Analysis completed![/green]")
+            console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
+            console.print(f"Parser available: [cyan]{result.metadata.get('parser_available', False)}[/cyan]")
+            console.print(f"Instrumentation points: [cyan]{result.checkpoint_count}[/cyan]")
+            console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
+            console.print(f"Source lines: [cyan]{result.metadata.get('source_lines', 0)}[/cyan]")
         
         # Save instrumented code if requested
         if save_instrumented:
-            console.print(f"\n[green]Instrumenting code...[/green]")
+            if not json_output:
+                console.print(f"\n[green]Instrumenting code...[/green]")
             instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
             
             # Create output directory if it doesn't exist
@@ -1070,9 +1181,10 @@ def analyze_code_structure(
             with open(instrumented_file_path, 'w', encoding='utf-8') as f:
                 f.write(instrumented_code)
             
-            console.print(f"[green]✓ Instrumented code saved to: {instrumented_file_path}[/green]")
+            if not json_output:
+                console.print(f"[green]✓ Instrumented code saved to: {instrumented_file_path}[/green]")
         
-        if verbose and result.instrumentation_points:
+        if verbose and result.instrumentation_points and not json_output:
             # Show detailed instrumentation points
             console.print(f"\n[bold]Instrumentation Points:[/bold]")
             table = Table()
@@ -1093,49 +1205,60 @@ def analyze_code_structure(
             
             console.print(table)
         
-        if show_suggestions and result.optimization_suggestions:
+        if show_suggestions and result.optimization_suggestions and not json_output:
             console.print(f"\n[bold yellow]💡 Optimization Suggestions:[/bold yellow]")
             for i, suggestion in enumerate(result.optimization_suggestions, 1):
                 console.print(f"  {i}. {suggestion}")
         
-        # Save results if requested
-        if output:
-            analysis_data = {
-                'timestamp': datetime.now().isoformat(),
-                'script': str(script),
-                'language': result.language,
-                'analysis_method': result.metadata.get('analysis_method'),
+        # Output JSON results if requested or save to file
+        analysis_data = {
+            'timestamp': datetime.now().isoformat(),
+            'script': str(script),
+            'language': result.language,
+            'success': True,
+            'analysis_metadata': {
+                'method': result.metadata.get('analysis_method'),
                 'parser_available': result.metadata.get('parser_available'),
-                'instrumentation_points_count': result.checkpoint_count,
-                'analysis_time_ms': result.metadata.get('analysis_time_ms'),
-                'instrumentation_points': [
-                    {
-                        'id': point.id,
-                        'type': point.type,
-                        'subtype': point.subtype,
-                        'name': point.name,
-                        'line': point.line,
-                        'column': point.column,
-                        'context': point.context,
-                        'metadata': point.metadata
-                    }
-                    for point in result.instrumentation_points
-                ],
-                'optimization_suggestions': result.optimization_suggestions
-            }
-            
+                'time_ms': result.metadata.get('analysis_time_ms'),
+                'source_lines': result.metadata.get('source_lines')
+            },
+            'instrumentation_points_count': result.checkpoint_count,
+            'instrumentation_points': [
+                {
+                    'id': point.id,
+                    'type': point.type,
+                    'subtype': point.subtype,
+                    'name': point.name,
+                    'line': point.line,
+                    'column': point.column,
+                    'context': point.context,
+                    'metadata': point.metadata
+                }
+                for point in result.instrumentation_points
+            ],
+            'optimization_suggestions': result.optimization_suggestions
+        }
+
+        if json_output:
+            print(json.dumps(analysis_data, indent=2))
+        
+        if output:
             with open(output, 'w', encoding='utf-8') as f:
                 json.dump(analysis_data, f, indent=2)
-            
-            console.print(f"[green]✓ Analysis saved to: {output}[/green]")
+            if not json_output:
+                console.print(f"[green]✓ Analysis saved to: {output}[/green]")
         
-        console.print(f"\n[green]✓ Code analysis completed successfully![/green]")
+        if not json_output:
+            console.print(f"\n[green]✓ Code analysis completed successfully![/green]")
         
     except Exception as e:
-        console.print(f"[red]Analysis failed: {e}[/red]")
-        if verbose:
-            import traceback
-            console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
+        if not json_output:
+            console.print(f"[red]Analysis failed: {e}[/red]")
+            if verbose:
+                import traceback
+                console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
+        else:
+            print(json.dumps({"success": False, "error": str(e)}))
         raise typer.Exit(1)
 
 @app.command("init")

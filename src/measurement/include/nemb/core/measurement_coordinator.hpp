@@ -137,6 +137,18 @@ public:
      */
     bool restart_provider(const std::string& provider_name);
     
+    /**
+     * @brief Get all currently buffered readings
+     * @return Vector of synchronized readings in chronological order
+     */
+    std::vector<SynchronizedReading> get_buffered_readings() const;
+    
+    /**
+     * @brief Set the size of the circular buffer
+     * @param size New buffer size
+     */
+    void set_buffer_size(size_t size);
+
     // Statistics and diagnostics
     
     /**

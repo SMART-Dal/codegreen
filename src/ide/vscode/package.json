@@ -21,14 +21,11 @@
   ],
   "activationEvents": [
     "onCommand:codegreen.analyzeEnergy",
-    "onLanguage:python",
-    "onLanguage:javascript",
-    "onLanguage:typescript",
-    "onLanguage:java",
-    "onLanguage:cpp",
-    "onLanguage:c"
+    "onCommand:codegreen.clearHotspots",
+    "onCommand:codegreen.showReport",
+    "onCommand:codegreen.optimizeFunction"
   ],
-  "main": "./extension.js",
+  "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
@@ -56,16 +53,9 @@
         "icon": "$(sync)"
       },
       {
-        "command": "codegreen.showEnergyPanel",
-        "title": "Show Energy Panel",
-        "category": "CodeGreen",
-        "icon": "$(dashboard)"
-      },
-      {
-        "command": "codegreen.aiOptimize",
-        "title": "AI Optimize Energy",
-        "category": "CodeGreen",
-        "icon": "$(robot)"
+        "command": "codegreen.optimizeFunction",
+        "title": "Optimize This Function",
+        "category": "CodeGreen"
       },
       {
         "command": "codegreen.predictEnergy",
@@ -87,126 +77,42 @@
           "default": 0.1,
           "description": "Energy threshold (in Joules) for highlighting hotspots"
         },
-        "codegreen.hotspotIcon": {
-          "type": "string",
-          "default": "flame",
-          "enum": [
-            "flame",
-            "zap",
-            "alert",
-            "warning"
-          ],
-          "description": "Icon to use for energy hotspots"
-        },
-        "codegreen.showTooltips": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show energy consumption tooltips on hover"
-        },
         "codegreen.codegreenPath": {
           "type": "string",
           "default": "codegreen",
           "description": "Path to the CodeGreen executable"
-        },
-        "codegreen.uiStyle": {
-          "type": "string",
-          "default": "subtle",
-          "enum": [
-            "subtle",
-            "prominent",
-            "minimal"
-          ],
-          "description": "UI style for energy indicators"
-        },
-        "codegreen.showStatusBar": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show energy metrics in status bar"
-        },
-        "codegreen.enableAIOptimization": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable AI-powered optimization suggestions"
-        },
-        "codegreen.enablePredictiveModeling": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable predictive energy modeling"
         }
       }
     },
     "menus": {
-      "editor/context": [
+      "editor/gutter/context": [
         {
-          "command": "codegreen.analyzeEnergy",
-          "when": "editorHasSelection",
-          "group": "codegreen"
+          "command": "codegreen.optimizeFunction",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "codegreen.analyzeEnergy"
-        },
-        {
-          "command": "codegreen.clearHotspots"
-        },
-        {
-          "command": "codegreen.showReport"
-        },
-        {
-          "command": "codegreen.toggleAutoAnalysis"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "codegreen.analyzeEnergy",
-          "when": "resourceExtname == .py || resourceExtname == .js || resourceExtname == .ts || resourceExtname == .java || resourceExtname == .cpp || resourceExtname == .c",
-          "group": "navigation"
-        }
-      ]
-    },
-    "views": {
-      "codegreen": [
-        {
-          "id": "codegreenEnergyView",
-          "name": "Energy Analysis"
-        }
-      ],
-      "codegreen-panel": [
-        {
-          "id": "codegreenReportView",
-          "name": "Energy Report"
-        }
-      ]
-    },
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "codegreen",
-          "title": "CodeGreen",
-          "icon": "$(zap)"
-        }
-      ],
-      "panel": [
-        {
-          "id": "codegreen-panel",
-          "title": "CodeGreen Energy Report",
-          "icon": "$(graph)"
+          "command": "codegreen.predictEnergy"
         }
       ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "echo 'Extension ready'",
-    "test": "echo 'Tests not implemented yet'"
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.74.0",
-    "@types/node": "10.x",
-    "@types/mocha": "^5.2.7",
     "@types/glob": "^7.2.0",
+    "@types/mocha": "^5.2.7",
+    "@types/node": "10.x",
+    "@types/vscode": "^1.74.0",
     "glob": "^7.2.0",
     "mocha": "^5.2.0",
-    "typescript": "^3.9.10"
+    "typescript": "^5.9.3"
   }
 }

@@ -262,10 +262,29 @@ public:
     bool self_test();
     
     /**
+     * @brief Mark a named checkpoint in the measurement stream
+     * @param name Name of the checkpoint
+     * 
+     * Extremely lightweight call that just records a timestamp and name.
+     * Use this for high-accuracy profiling with minimal overhead.
+     */
+    void mark_checkpoint(const std::string& name);
+    
+    /**
+     * @brief Get all recorded checkpoint measurements correlated with high-res energy data
+     * @return Vector of correlated checkpoint measurements
+     */
+    struct CorrelatedCheckpoint {
+        std::string name;
+        uint64_t timestamp_ns;
+        double cumulative_energy_joules;
+        double instantaneous_power_watts;
+    };
+    std::vector<CorrelatedCheckpoint> get_checkpoint_measurements();
+
+    /**
      * @brief Get measurement statistics and diagnostics
      * @return Map of diagnostic information
-     * 
-     * Useful for debugging measurement issues or validating accuracy.
      */
     std::map<std::string, std::string> get_diagnostics() const;
 

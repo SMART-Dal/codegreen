@@ -228,6 +228,37 @@ bool MeasurementCoordinator::restart_provider(const std::string& provider_name) 
     return false;
 }
 
+std::vector<SynchronizedReading> MeasurementCoordinator::get_buffered_readings() const {
+    std::lock_guard<std::mutex> lock(readings_mutex_);
+    
+    std::vector<SynchronizedReading> result;
+    if (readings_buffer_.empty()) return result;
+    
+    result.reserve(readings_buffer_.size());
+    
+    if (!buffer_full_) {
+        // Simple case: just copy the readings
+        result.assign(readings_buffer_.begin(), readings_buffer_.end());
+    } else {
+        // Circular buffer: start from buffer_write_index_ and wrap around
+        for (size_t i = 0; i < readings_buffer_.size(); ++i) {
+            result.push_back(readings_buffer_[(buffer_write_index_ + i) % readings_buffer_.size()]);
+        }
+    }
+    
+    return result;
+}
+
+void MeasurementCoordinator::set_buffer_size(size_t size) {
+    std::lock_guard<std::mutex> lock(readings_mutex_);
+    
+    readings_buffer_.clear();
+    readings_buffer_.reserve(size);
+    buffer_write_index_ = 0;
+    buffer_full_ = false;
+    config_.measurement_buffer_size = static_cast<uint32_t>(size);
+}
+
 MeasurementCoordinator::CoordinatorStatistics MeasurementCoordinator::get_statistics() const {
     std::lock_guard<std::mutex> lock(stats_mutex_);
     return statistics_;

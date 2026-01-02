@@ -1,0 +1,76 @@
+{
+    "name": "template",
+    "extensions": [".ext"],
+    "tree_sitter_name": "example",
+    "_comment_ast": "ast_config defines the structural navigation rules.",
+    "ast_config": {
+        "body_field": "body",
+        "block_type": "block",
+        "insertion_rules": {
+            "function_enter": {
+                "mode": "inside_start",
+                "find_first_statement": true,
+                "skip_docstrings": true
+            },
+            "function_exit": {
+                "mode": "inside_end",
+                "find_last_statement": true
+            },
+            "class_enter": {
+                "mode": "inside_start"
+            }
+        }
+    },
+    "_comment_query": "query_config maps tree-sitter captures to internal actions.",
+    "query_config": {
+        "capture_mapping": {
+            "function.definition": "function_enter",
+            "method.definition": "function_enter",
+            "return.statement": "function_exit",
+            "class.definition": "class_enter"
+        },
+        "priority_order": [
+            "function.definition",
+            "method.definition"
+        ]
+    },
+    "_comment_inst": "instrumentation_config defines the code snippets to be injected.",
+    "instrumentation_config": {
+        "import_statement": "import codegreen_runtime as _cg_rt",
+        "templates": {
+            "function_enter": "_cg_rt.checkpoint('{checkpoint_id}', '{name}', 'enter')",
+            "function_exit": "_cg_rt.checkpoint('{checkpoint_id}', '{name}', 'exit')",
+            "class_enter": "_cg_rt.checkpoint('{checkpoint_id}', '{name}', 'class_enter')",
+            "loop_start": "_cg_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_start')",
+            "loop_exit": "_cg_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_exit')"
+        },
+        "statement_terminator": ";",
+        "comment_prefix": "//"
+    },
+    "formatting_config": {
+        "indent_size": 4,
+        "indent_char": " "
+    },
+    "rules": {
+        "skip_docstrings": true,
+        "skip_comments": true
+    },
+    "node_types": {
+        "function_types": ["function_definition", "method_definition"],
+        "body_types": ["block", "compound_statement"],
+        "class_types": ["class_definition"],
+        "return_types": ["return_statement"]
+    },
+    "processing_limits": {
+        "max_captures_per_query": 1000,
+        "parser_timeout_ms": 30000
+    },
+    "analysis_patterns": {
+        "_comment": "Fallback regex patterns if tree-sitter fails.",
+        "function_def": "^def\\s+\\w+"
+    },
+    "detection_patterns": {
+        "_comment": "Patterns used to auto-detect the language from file content.",
+        "keyword": "func "
+    }
+}

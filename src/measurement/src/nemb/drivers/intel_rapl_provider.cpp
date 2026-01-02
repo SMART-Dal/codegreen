@@ -69,8 +69,9 @@ bool IntelRAPLProvider::initialize() {
 EnergyReading IntelRAPLProvider::get_reading() {
     EnergyReading reading;
     reading.provider_id = "intel_rapl";
-    reading.timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-    reading.system_time = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    reading.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    reading.system_time = now;
     
     if (!initialized_) {
         // Return invalid reading
@@ -79,7 +80,10 @@ EnergyReading IntelRAPLProvider::get_reading() {
         return reading;
     }
     
+    std::lock_guard<std::mutex> lock(reading_mutex_);
+    
     double total_energy = 0.0;
+    double total_power = 0.0;
     bool any_successful = false;
     std::map<std::string, uint64_t> raw_values;
     
@@ -108,22 +112,37 @@ EnergyReading IntelRAPLProvider::get_reading() {
         // Atomic update of all counters
         auto accumulated_values = counter_manager_->update_counters(raw_values, reading.timestamp_ns);
         
+        // Calculate time delta for power calculation
+        double dt = std::chrono::duration<double>(now - last_reading_time_).count();
+        
         for (const auto& [domain, accumulated_uj] : accumulated_values) {
             double domain_energy = accumulated_uj * energy_unit_joules_;
             reading.domain_energy_joules[domain] = domain_energy;
-            reading.domain_power_watts[domain] = 0.0; // Calculated by coordinator
             
-            // Accumulate total energy (avoid double counting for overlapping domains)
+            // Calculate average power for this domain since last sample
+            double domain_power = 0.0;
+            if (dt > 0 && last_domain_energies_.count(domain)) {
+                double de = domain_energy - last_domain_energies_[domain];
+                if (de >= 0) {
+                    domain_power = de / dt;
+                }
+            }
+            reading.domain_power_watts[domain] = domain_power;
+            last_domain_energies_[domain] = domain_energy;
+            
+            // Accumulate total energy and power (avoid double counting for overlapping domains)
             if (domain == "package" || (domain != "package" && available_domains_.size() == 1)) {
                 total_energy += domain_energy;
+                total_power += domain_power;
             }
         }
+        last_reading_time_ = now;
     }
     
     // Set aggregated values
     reading.energy_joules = any_successful ? total_energy : -1.0;
-    reading.instantaneous_power_watts = 0.0;
-    reading.average_power_watts = 0.0;
+    reading.instantaneous_power_watts = total_power;
+    reading.average_power_watts = total_power;
     
     // Set quality metrics
     reading.measurement_uncertainty = 0.01; // 1% - Intel RAPL typical

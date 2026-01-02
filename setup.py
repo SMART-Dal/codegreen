@@ -86,10 +86,14 @@ setup(
             "codegreen=src.cli.cli:main_cli",
         ],
     },
+    # Include language configurations and runtime files
+    package_data={
+        "src.instrumentation": ["configs/*.json"],
+    },
     # Include the CLI binary and runtime files
     data_files=[
         ('bin', ['bin/codegreen']),
-        ('bin/runtime', ['src/instrumentation/codegreen_runtime.py']),
+        ('bin/runtime', ['src/instrumentation/language_runtimes/python/codegreen_runtime.py']),
         ('config', ['config/codegreen.json']),
     ],
     # C++ extensions for integrated builds

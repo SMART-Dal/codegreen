@@ -393,7 +393,6 @@ class ASTProcessor:
                     # Return the beginning of the line containing this statement
                     line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
                     logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
-                    logger.debug(f"   Returning line start: {line_start} (statement starts at {child.start_byte})")
                     return line_start
                 continue
             
@@ -405,7 +404,6 @@ class ASTProcessor:
             # Return the beginning of the line containing this statement
             line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
             logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
-            logger.debug(f"   Returning line start: {line_start} (statement starts at {child.start_byte})")
             return line_start
         
         # Fallback to body start if no statements found

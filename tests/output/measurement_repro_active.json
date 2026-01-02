@@ -1,0 +1,127 @@
+{
+  "timestamp": "2026-01-01T21:15:54.995172",
+  "analysis": {
+    "language": "python",
+    "success": true,
+    "instrumentation_points_count": 20,
+    "optimization_suggestions": [],
+    "metadata": {
+      "analysis_method": "tree_sitter",
+      "parser_available": true,
+      "queries_available": 5,
+      "analysis_time_ms": 3.15,
+      "source_lines": 58,
+      "tree_sitter_available": true
+    }
+  },
+  "measurement": {
+    "success": true,
+    "output": "\ud83d\udd0d Detecting available energy providers...\n    \ud83d\udd0d Checking RAPL availability at: /sys/class/powercap/intel-rapl:0/energy_uj\n    \u2705 RAPL interface is accessible\n\ud83d\udd0b Initializing Intel RAPL provider...\n\ud83d\udd0d Detecting RAPL domains...\n  \u2713 Found domain: package\n  \u2713 Found domain: pp0\n\ud83d\udd0d Querying RAPL energy units...\n  RAPL name: package-0\n  \u2713 Using sysfs energy unit: 1 \u03bcJ\n  Energy unit: 1 \u03bcJ\n\ud83d\udd0d Initializing RAPL counters...\n\ud83d\udd22 Counter REGISTER: package\n  \u2713 Initialized counter for domain: package\n\ud83d\udd22 Counter REGISTER: pp0\n  \u2713 Initialized counter for domain: pp0\n\ud83d\udd27 Initializing non-blocking file readers...\n\u2713 File reader initialized for domain: package\n\u2713 File reader initialized for domain: pp0\n\ud83d\udd0d Taking initial baseline readings...\n  \u2713 Initial reading for package: 13673843856 \u03bcJ\n  \u2713 Initial reading for pp0: 337493548 \u03bcJ\n\ud83d\udd22 Counter INITIALIZE: package\n\ud83d\udd22 Counter INITIALIZE: pp0\n\u2713 Intel RAPL provider initialized\n    Energy unit: 1e-06 J\n    Available domains: package, pp0\n  \u2705 AMD RAPL CPU provider (using Intel RAPL interface)\n  \ud83d\udd27 Initializing NVIDIA GPU provider...\n  \u274c NVIDIA GPU provider failed to initialize\n  \u2705 Successfully initialized 1 energy provider(s)\n\ud83d\udd0c Adding energy provider: Intel RAPL\n\ud83d\udd0b Initializing Intel RAPL provider...\n\ud83d\udd0d Detecting RAPL domains...\n  \u2713 Found domain: package\n  \u2713 Found domain: pp0\n\ud83d\udd0d Querying RAPL energy units...\n  RAPL name: package-0\n  \u2713 Using sysfs energy unit: 1 \u03bcJ\n  Energy unit: 1 \u03bcJ\n\ud83d\udd0d Initializing RAPL counters...\n\ud83d\udd22 Counter REGISTER: package\n  \u2713 Initialized counter for domain: package\n\ud83d\udd22 Counter REGISTER: pp0\n  \u2713 Initialized counter for domain: pp0\n\ud83d\udd27 Initializing non-blocking file readers...\n\u2713 File reader initialized for domain: package\n\u2713 File reader initialized for domain: pp0\n\ud83d\udd0d Taking initial baseline readings...\n  \u2713 Initial reading for package: 13673843856 \u03bcJ\n  \u2713 Initial reading for pp0: 337493548 \u03bcJ\n\ud83d\udd22 Counter INITIALIZE: package\n\ud83d\udd22 Counter INITIALIZE: pp0\n\u2713 Intel RAPL provider initialized\n    Energy unit: 1e-06 J\n    Available domains: package, pp0\n  \u2705 Provider added successfully: Intel RAPL\n\u25b6\ufe0f  Starting coordinated measurements...\n  \u2705 Measurements started\nSimple function body\nContinuing...\n\n--- CODEGREEN_RESULT_START ---\n{\"measurements\": [{\"checkpoint_id\": \"class_enter:MyClass:class_enter_MyClass_21_1\", \"timestamp\": 10441601761572998, \"joules\": 5.68412, \"watts\": 0}, {\"checkpoint_id\": \"enter:simple_function:function_enter_simple_function_7_1\", \"timestamp\": 10441601761671628, \"joules\": 5.69118, \"watts\": 0}, {\"checkpoint_id\": \"exit:simple_function:function_exit_simple_function_implicit_8\", \"timestamp\": 10441601861806295, \"joules\": 13.3838, \"watts\": 0}, {\"checkpoint_id\": \"enter:function_with_args:function_enter_function_with_args_12_1\", \"timestamp\": 10441601861815945, \"joules\": 13.3845, \"watts\": 0}, {\"checkpoint_id\": \"exit:function_with_args:function_exit_function_with_args_13_5\", \"timestamp\": 10441601861819905, \"joules\": 13.3848, \"watts\": 0}, {\"checkpoint_id\": \"enter:async_worker:function_enter_async_worker_17_1\", \"timestamp\": 10441601862283337, \"joules\": 13.4186, \"watts\": 0}, {\"checkpoint_id\": \"exit:async_worker:function_exit_async_worker_18_5\", \"timestamp\": 10441601962597165, \"joules\": 21.1987, \"watts\": 0}, {\"checkpoint_id\": \"enter:__init__:function_enter___init___22_1\", \"timestamp\": 10441601962971967, \"joules\": 21.226, \"watts\": 0}, {\"checkpoint_id\": \"exit:__init__:function_exit___init___implicit_22\", \"timestamp\": 10441601962976287, \"joules\": 21.2263, \"watts\": 0}, {\"checkpoint_id\": \"enter:method_one:function_enter_method_one_25_1\", \"timestamp\": 10441601962982147, \"joules\": 21.2267, \"watts\": 0}, {\"checkpoint_id\": \"exit:method_one:function_exit_method_one_29_9\", \"timestamp\": 10441601962989707, \"joules\": 21.2273, \"watts\": 0}, {\"checkpoint_id\": \"enter:complex_control_flow:function_enter_complex_control_flow_32_1\", \"timestamp\": 10441601962993187, \"joules\": 21.2276, \"watts\": 0}, {\"checkpoint_id\": \"exit:complex_control_flow:function_exit_complex_control_flow_35_17\", \"timestamp\": 10441601962996937, \"joules\": 21.2278, \"watts\": 0}, {\"checkpoint_id\": \"enter:complex_control_flow:function_enter_complex_control_flow_32_1\", \"timestamp\": 10441601962998967, \"joules\": 21.228, \"watts\": 0}, {\"checkpoint_id\": \"exit:complex_control_flow:function_exit_complex_control_flow_37_9\", \"timestamp\": 10441601963001497, \"joules\": 21.2282, \"watts\": 0}, {\"checkpoint_id\": \"enter:empty_function:function_enter_empty_function_43_1\", \"timestamp\": 10441601963003937, \"joules\": 21.2283, \"watts\": 0}, {\"checkpoint_id\": \"exit:empty_function:function_exit_empty_function_implicit_43\", \"timestamp\": 10441601963005517, \"joules\": 21.2284, \"watts\": 0}]}\n--- CODEGREEN_RESULT_END ---\n\u23f9\ufe0f  Stopping coordinated measurements...\n  \u2705 Measurements stopped\n\ud83d\udd0c Shutting down Intel RAPL provider...\n",
+    "error": null,
+    "returncode": 0,
+    "checkpoints": [
+      {
+        "checkpoint_id": "class_enter:MyClass:class_enter_MyClass_21_1",
+        "timestamp": 10441601761572998,
+        "joules": 5.68412,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:simple_function:function_enter_simple_function_7_1",
+        "timestamp": 10441601761671628,
+        "joules": 5.69118,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:simple_function:function_exit_simple_function_implicit_8",
+        "timestamp": 10441601861806295,
+        "joules": 13.3838,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:function_with_args:function_enter_function_with_args_12_1",
+        "timestamp": 10441601861815945,
+        "joules": 13.3845,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:function_with_args:function_exit_function_with_args_13_5",
+        "timestamp": 10441601861819905,
+        "joules": 13.3848,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:async_worker:function_enter_async_worker_17_1",
+        "timestamp": 10441601862283337,
+        "joules": 13.4186,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:async_worker:function_exit_async_worker_18_5",
+        "timestamp": 10441601962597165,
+        "joules": 21.1987,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:__init__:function_enter___init___22_1",
+        "timestamp": 10441601962971967,
+        "joules": 21.226,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:__init__:function_exit___init___implicit_22",
+        "timestamp": 10441601962976287,
+        "joules": 21.2263,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:method_one:function_enter_method_one_25_1",
+        "timestamp": 10441601962982147,
+        "joules": 21.2267,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:method_one:function_exit_method_one_29_9",
+        "timestamp": 10441601962989707,
+        "joules": 21.2273,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:complex_control_flow:function_enter_complex_control_flow_32_1",
+        "timestamp": 10441601962993187,
+        "joules": 21.2276,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:complex_control_flow:function_exit_complex_control_flow_35_17",
+        "timestamp": 10441601962996937,
+        "joules": 21.2278,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:complex_control_flow:function_enter_complex_control_flow_32_1",
+        "timestamp": 10441601962998967,
+        "joules": 21.228,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:complex_control_flow:function_exit_complex_control_flow_37_9",
+        "timestamp": 10441601963001497,
+        "joules": 21.2282,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "enter:empty_function:function_enter_empty_function_43_1",
+        "timestamp": 10441601963003937,
+        "joules": 21.2283,
+        "watts": 0
+      },
+      {
+        "checkpoint_id": "exit:empty_function:function_exit_empty_function_implicit_43",
+        "timestamp": 10441601963005517,
+        "joules": 21.2284,
+        "watts": 0
+      }
+    ]
+  }
+}

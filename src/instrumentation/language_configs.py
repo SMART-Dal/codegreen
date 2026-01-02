@@ -51,8 +51,10 @@ class LanguageConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'LanguageConfig':
-        """Create a LanguageConfig from a dictionary."""
-        return cls(**data)
+        """Create a LanguageConfig from a dictionary, filtering out comment keys."""
+        # Filter out keys starting with underscore (used for comments)
+        filtered_data = {k: v for k, v in data.items() if not k.startswith('_')}
+        return cls(**filtered_data)
 
 class LanguageConfigManager:
     """Manages language configurations in a centralized way."""
@@ -99,6 +101,8 @@ class LanguageConfigManager:
             return
 
         for config_file in self.config_dir.glob("*.json"):
+            if config_file.name == "TEMPLATE.json":
+                continue
             try:
                 lang_id = config_file.stem
                 with open(config_file, "r") as f:
