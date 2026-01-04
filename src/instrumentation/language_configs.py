@@ -6,7 +6,7 @@ behavior by loading configurations from external JSON files.
 """
 
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import logging
@@ -48,6 +48,9 @@ class LanguageConfig:
     
     # AST node type mappings
     node_types: Dict[str, Any]
+    
+    # Custom queries
+    custom_queries: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'LanguageConfig':

@@ -1,5 +1,4 @@
 #include "measurement_engine.hpp"
-#include "plugin/plugin_registry.hpp"
 #include "energy_storage.hpp"
 #include "config.hpp"
 #include "nemb/core/measurement_coordinator.hpp"
@@ -14,11 +13,11 @@
 #include <unistd.h>
 #include <thread>
 #include <chrono>
+#include <cstring>
 
 namespace codegreen {
 
-MeasurementEngine::MeasurementEngine()
-    : plugin_registry_(std::make_unique<PluginRegistry>()) {
+MeasurementEngine::MeasurementEngine() {
     
     // Load configuration
     auto& config = Config::instance();
@@ -40,8 +39,12 @@ MeasurementEngine::MeasurementEngine()
     std::string db_path = config.get_database_path().string();
     energy_storage_ = CreateEnergyStorage("sqlite", db_path);
     
-    // Register Python bridge adapter for Python language support
-    register_language_adapter(std::make_unique<PythonBridgeAdapter>());
+    // Register Python bridge adapter for supported languages
+    register_language_adapter(std::make_unique<PythonBridgeAdapter>("python"));
+    register_language_adapter(std::make_unique<PythonBridgeAdapter>("c"));
+    register_language_adapter(std::make_unique<PythonBridgeAdapter>("cpp"));
+    register_language_adapter(std::make_unique<PythonBridgeAdapter>("java"));
+    register_language_adapter(std::make_unique<PythonBridgeAdapter>("javascript"));
 }
 
 void MeasurementEngine::register_language_adapter(std::unique_ptr<LanguageAdapter> adapter) {
@@ -64,6 +67,34 @@ bool MeasurementEngine::analyze_code(const std::string& source_code, const std::
     }
     
     return false;
+}
+
+// Helper to compile code
+bool compile_code(const std::string& source_file, std::string& out_binary, const std::string& language) {
+    auto& config = Config::instance();
+    std::filesystem::path exe_dir = config.get_executable_directory();
+    std::filesystem::path lib_dir = exe_dir / "../lib";
+    
+    std::string cmd;
+    if (language == "c") {
+        std::filesystem::path include_dir = exe_dir / "../src/instrumentation/language_runtimes/c";
+        out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".bin";
+        cmd = "gcc -O2 -o " + out_binary + " " + source_file + " -I" + include_dir.string() + " -L" + lib_dir.string() + " -lcodegreen-nemb -Wl,-rpath," + lib_dir.string() + " -lm";
+    } else if (language == "cpp") {
+        std::filesystem::path include_dir = exe_dir / "../src/instrumentation/language_runtimes/cpp";
+        out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".bin";
+        cmd = "g++ -O2 -std=c++17 -o " + out_binary + " " + source_file + " -I" + include_dir.string() + " -L" + lib_dir.string() + " -lcodegreen-nemb -Wl,-rpath," + lib_dir.string() + " -lm";
+    } else if (language == "java") {
+        std::filesystem::path src_dir = exe_dir / "../src/instrumentation/language_runtimes/java";
+        out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".class";
+        // Compile both runtime and source (simplification)
+        cmd = "javac -cp " + src_dir.string() + " " + source_file;
+    } else {
+        return false;
+    }
+    
+    // std::cout << "Compiling: " << cmd << std::endl;
+    return system(cmd.c_str()) == 0;
 }
 
 InstrumentationResult MeasurementEngine::instrument_and_execute(const MeasurementConfig& config) {
@@ -106,10 +137,13 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
         
         // 6. Create temporary directory
         std::string temp_dir = create_temp_directory();
-        
-        // 7. Write instrumented code to temporary file
         std::filesystem::path source_path(config.source_file);
-        std::string temp_filename = source_path.stem().string() + "_instrumented" + source_path.extension().string();
+        std::string temp_filename;
+        if (language == "java") {
+            temp_filename = source_path.filename().string();
+        } else {
+            temp_filename = source_path.stem().string() + "_instrumented" + source_path.extension().string();
+        }
         result.temp_file_path = temp_dir + "/" + temp_filename;
         
         if (!write_instrumented_file(result.instrumented_code, result.temp_file_path)) {
@@ -137,6 +171,17 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
                 result.error_message = "Failed to copy runtime module: " + std::string(e.what());
                 return result;
             }
+        }
+        
+        // Compilation for compiled languages
+        if (language == "c" || language == "cpp" || language == "java") {
+            std::cout << "Compiling instrumented code..." << std::endl;
+            std::string binary_path;
+            if (!compile_code(result.temp_file_path, binary_path, language)) {
+                result.error_message = "Compilation failed";
+                return result;
+            }
+            result.temp_file_path = binary_path; // Execute the binary/class
         }
         
         // PHASE 2: Clean execution with energy measurement ONLY
@@ -171,6 +216,8 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
             energy_measurement->timestamp = start_time;
             energy_measurements.push_back(*energy_measurement);
         }
+        
+        result.measurements = energy_measurements; // Export measurements
         
         // Store energy measurements if we have any
         if (!energy_measurements.empty() && energy_storage_) {
@@ -284,42 +331,76 @@ bool MeasurementEngine::execute_instrumented_code(const std::string& temp_file, 
     std::filesystem::path path(temp_file);
     std::string extension = path.extension().string();
     
-    const char* interpreter = nullptr;
+    std::string cmd;
+    std::vector<const char*> exec_args;
+    
     if (extension == ".py") {
-        interpreter = "python3";
+        cmd = "python3";
+        exec_args.push_back(cmd.c_str());
+        exec_args.push_back(temp_file.c_str());
     } else if (extension == ".js") {
-        interpreter = "node";
+        cmd = "node";
+        exec_args.push_back(cmd.c_str());
+        exec_args.push_back(temp_file.c_str());
+    } else if (extension == ".class") {
+        cmd = "java";
+        exec_args.push_back(cmd.c_str());
+        
+        // Setup classpath and library path
+        auto& config = Config::instance();
+        std::filesystem::path exe_dir = config.get_executable_directory();
+        std::filesystem::path lib_dir = exe_dir / "../lib";
+        std::string lib_path = "-Djava.library.path=" + lib_dir.string();
+        
+        // Classpath: current temp dir + runtime dir
+        std::string classpath = "-cp " + path.parent_path().string() + ":" + (exe_dir / "../src/instrumentation/language_runtimes/java").string();
+        
+        // Split classpath args (hacky, better to add to exec_args individually if no spaces)
+        // For safety, let's just assume we need to run it properly
+        // execvp requires individual args
+        
+        // Simplified: set CLASSPATH env var? No, passed as args.
+        // We'll just construct the args for java
+        exec_args.push_back("-cp");
+        std::string cp_str = path.parent_path().string() + ":" + (exe_dir / "../src/instrumentation/language_runtimes/java").string();
+        // Leak memory for safety in execvp (execvp replaces process anyway)
+        exec_args.push_back(strdup(cp_str.c_str())); 
+        
+        exec_args.push_back(strdup(lib_path.c_str()));
+        exec_args.push_back(strdup(path.stem().c_str())); // Class name
+        
+    } else if (extension == "" || extension == ".exe" || extension == ".bin") {
+        // Compiled binary
+        cmd = temp_file;
+        exec_args.push_back(cmd.c_str());
     } else {
-        return false; // Unsupported file type for execution
+        return false; // Unsupported file type
     }
     
-    // Create argument vector for execvp (safe execution)
-    std::vector<const char*> exec_args;
-    exec_args.push_back(interpreter);
-    exec_args.push_back(temp_file.c_str());
-    
-    // Add any additional arguments (skip the first one as it's the file path)
+    // Add any additional arguments
     for (size_t i = 1; i < args.size(); ++i) {
         exec_args.push_back(args[i].c_str());
     }
-    exec_args.push_back(nullptr); // execvp requires null termination
+    exec_args.push_back(nullptr);
     
-    // Safe process execution using fork and execvp
+    // Safe process execution
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process - execute the instrumented code
-        execvp(interpreter, const_cast<char* const*>(exec_args.data()));
-        // If we reach here, execvp failed
+        // Set LD_LIBRARY_PATH for C/C++ binaries
+        auto& config = Config::instance();
+        std::filesystem::path lib_dir = config.get_executable_directory() / "../lib";
+        std::string current_ld = getenv("LD_LIBRARY_PATH") ? getenv("LD_LIBRARY_PATH") : "";
+        std::string new_ld = "LD_LIBRARY_PATH=" + lib_dir.string() + (current_ld.empty() ? "" : ":" + current_ld);
+        putenv(strdup(new_ld.c_str()));
+        
+        execvp(cmd.c_str(), const_cast<char* const*>(exec_args.data()));
         _exit(1);
     } else if (pid > 0) {
-        // Parent process - wait for child to complete
         int status;
         waitpid(pid, &status, 0);
         return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    } else {
-        // Fork failed
-        return false;
     }
+    return false;
 }
 
 std::unique_ptr<Measurement> MeasurementEngine::convert_nemb_difference_to_measurement(

@@ -8,7 +8,7 @@
 
 namespace codegreen {
 
-PythonBridgeAdapter::PythonBridgeAdapter() {
+PythonBridgeAdapter::PythonBridgeAdapter(const std::string& language_id) : language_id_(language_id) {
     // Get the path to the instrumentation system
     auto exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
     // The binary is in bin/, and instrumentation is in bin/src/instrumentation
@@ -18,7 +18,16 @@ PythonBridgeAdapter::PythonBridgeAdapter() {
 }
 
 std::string PythonBridgeAdapter::get_language_id() const {
-    return "python";
+    return language_id_;
+}
+
+std::string get_extension_for_language(const std::string& lang) {
+    if (lang == "python") return ".py";
+    if (lang == "c") return ".c";
+    if (lang == "cpp") return ".cpp";
+    if (lang == "java") return ".java";
+    if (lang == "javascript") return ".js";
+    return ".txt";
 }
 
 std::unique_ptr<ASTNode> PythonBridgeAdapter::parse(const std::string& source_code) {
@@ -37,8 +46,9 @@ std::vector<CodeCheckpoint> PythonBridgeAdapter::generate_checkpoints(const std:
     std::vector<CodeCheckpoint> checkpoints;
     
     try {
-        // Write source code to temp file
-        std::string temp_file = "/tmp/codegreen_temp_" + std::to_string(getpid()) + ".py";
+        // Write source code to temp file with correct extension
+        std::string ext = get_extension_for_language(language_id_);
+        std::string temp_file = "/tmp/codegreen_temp_" + std::to_string(getpid()) + ext;
         std::ofstream temp_out(temp_file);
         temp_out << source_code;
         temp_out.close();
@@ -53,6 +63,7 @@ std::vector<CodeCheckpoint> PythonBridgeAdapter::generate_checkpoints(const std:
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) {
             std::cerr << "Failed to call Python instrumentation system" << std::endl;
+            std::filesystem::remove(temp_file);
             return checkpoints;
         }
         
@@ -68,9 +79,7 @@ std::vector<CodeCheckpoint> PythonBridgeAdapter::generate_checkpoints(const std:
             std::cerr << "Python instrumentation failed with status: " << status << std::endl;
             std::cerr << "Output: " << result << std::endl;
         } else {
-            std::cout << "Python instrumentation output: " << result << std::endl;
             // Parse the results and create checkpoints
-            // For now, create some mock checkpoints
             checkpoints = parse_python_results(result);
         }
         
@@ -88,7 +97,8 @@ std::string PythonBridgeAdapter::instrument_code(const std::string& source_code,
                                                const std::vector<CodeCheckpoint>& checkpoints) {
     try {
         // Write source code to temp file
-        std::string temp_file = "/tmp/codegreen_temp_" + std::to_string(getpid()) + ".py";
+        std::string ext = get_extension_for_language(language_id_);
+        std::string temp_file = "/tmp/codegreen_temp_" + std::to_string(getpid()) + ext;
         std::ofstream temp_out(temp_file);
         temp_out << source_code;
         temp_out.close();
@@ -103,6 +113,7 @@ std::string PythonBridgeAdapter::instrument_code(const std::string& source_code,
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) {
             std::cerr << "Failed to call Python instrumentation system" << std::endl;
+            std::filesystem::remove(temp_file);
             return source_code; // Return original code on failure
         }
         
@@ -142,24 +153,40 @@ std::vector<std::string> PythonBridgeAdapter::get_suggestions() const {
 }
 
 std::vector<std::string> PythonBridgeAdapter::get_file_extensions() const {
-    return {".py", ".pyw"};
+    if (language_id_ == "python") return {".py", ".pyw"};
+    if (language_id_ == "c") return {".c", ".h"};
+    if (language_id_ == "cpp") return {".cpp", ".hpp", ".cc", ".cxx"};
+    if (language_id_ == "java") return {".java"};
+    if (language_id_ == "javascript") return {".js", ".ts"};
+    return {};
 }
 
 std::vector<CodeCheckpoint> PythonBridgeAdapter::parse_python_results(const std::string& output) {
     std::vector<CodeCheckpoint> checkpoints;
+    std::stringstream ss(output);
+    std::string line;
     
-    // Parse the Python output - for now create some basic checkpoints
-    // This should be enhanced to parse actual Python instrumentation results
-    if (!output.empty()) {
-        // Create a simple checkpoint for demonstration
-        CodeCheckpoint checkpoint;
-        checkpoint.id = "python_checkpoint_1";
-        checkpoint.type = "function_enter";
-        checkpoint.name = "main_function";
-        checkpoint.line_number = 1;
-        checkpoint.column_number = 1;
-        checkpoint.context = "Auto-generated from Python instrumentation";
-        checkpoints.push_back(checkpoint);
+    while (std::getline(ss, line)) {
+        if (line.find("POINT|") == 0) {
+            std::stringstream line_ss(line);
+            std::string part;
+            std::vector<std::string> parts;
+            
+            while (std::getline(line_ss, part, '|')) {
+                parts.push_back(part);
+            }
+            
+            if (parts.size() >= 6) {
+                CodeCheckpoint checkpoint;
+                checkpoint.id = parts[1];
+                checkpoint.type = parts[2];
+                checkpoint.name = parts[3];
+                checkpoint.line_number = std::stoul(parts[4]);
+                checkpoint.column_number = std::stoul(parts[5]);
+                checkpoint.context = "Auto-generated from Python instrumentation";
+                checkpoints.push_back(checkpoint);
+            }
+        }
     }
     
     return checkpoints;

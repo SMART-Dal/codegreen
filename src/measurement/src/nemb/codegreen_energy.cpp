@@ -302,8 +302,36 @@ extern "C" {
         if(res.is_valid) { if(e)*e=res.energy_joules; if(p)*p=res.power_watts; return 1; }
         return 0;
     }
+
+    void nemb_report_at_exit() {
+        std::lock_guard<std::mutex> l(c_api_mutex);
+        std::cout << "[DEBUG] nemb_report_at_exit called" << std::endl;
+        if(!c_api_meter) {
+            std::cout << "[DEBUG] c_api_meter is null" << std::endl;
+            return;
+        }
+        auto cps = c_api_meter->get_checkpoint_measurements();
+        std::cout << "[DEBUG] Found " << cps.size() << " checkpoints" << std::endl;
+        if (cps.empty()) return;
+
+        std::cout << "\n--- CODEGREEN_RESULT_START ---" << std::endl;
+        std::cout << "{\"measurements\": [";
+        for(size_t i=0; i<cps.size(); ++i) {
+            std::cout << "{\"checkpoint_id\": \"" << cps[i].name << "\", \"timestamp\": " << cps[i].timestamp_ns 
+               << ", \"joules\": " << cps[i].cumulative_energy_joules << ", \"watts\": " << cps[i].instantaneous_power_watts << "}";
+            if(i < cps.size()-1) std::cout << ", ";
+        }
+        std::cout << "]}" << std::endl;
+        std::cout << "--- CODEGREEN_RESULT_END ---" << std::endl;
+    }
+
     void nemb_mark_checkpoint(const char* n) {
         std::lock_guard<std::mutex> l(c_api_mutex);
+        if(!c_api_meter) {
+            std::cout << "[DEBUG] Initializing c_api_meter for " << (n?n:"null") << std::endl;
+            c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+            std::atexit(nemb_report_at_exit);
+        }
         if(c_api_meter) c_api_meter->mark_checkpoint(n?n:"");
     }
     int nemb_get_checkpoints_json(char* b, int m) {

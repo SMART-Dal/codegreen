@@ -42,6 +42,7 @@ class ASTEdit:
     insertion_text: str
     edit_type: str  # 'insert_before', 'insert_after', 'insert_inside_start', 'insert_inside_end'
     node_info: Optional[str] = None  # Debug info about the node
+    node_end_byte: Optional[int] = None # End of the node for wrapping/replacing
 
 class ASTProcessor:
     """Language-agnostic AST processor using configuration-driven approach."""
@@ -182,6 +183,7 @@ class ASTProcessor:
             mode_mapping = {
                 'inside_start': 'function_enter',
                 'inside_end': 'function_exit',
+                'immediately_before': 'function_return',
                 'before': 'before',
                 'after': 'after'
             }
@@ -1015,7 +1017,8 @@ class ASTRewriter:
                 byte_offset=byte_offset,
                 insertion_text=instrumentation_code,
                 edit_type=edit_type,
-                node_info=f"{point.type}:{point.name}"
+                node_info=f"{point.type}:{point.name}",
+                node_end_byte=point.node.end_byte if hasattr(point, 'node') and point.node else None
             )
             
             self.edits.append(edit)
@@ -1336,6 +1339,19 @@ class ASTRewriter:
             logger.debug(f"   Using insert_inside_end mode - inserting on new line before target")
             result = code[:offset] + indented_text + '\n' + code[offset:]
             logger.debug(f"   insert_inside_end: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
+        elif edit.edit_type == 'insert_immediately_before':
+            # Insert directly before the node, without adding newlines or matching line indentation
+            # This is used for return statements to handle one-liner if blocks
+            logger.debug(f"   Using insert_immediately_before mode")
+            
+            # For C-like languages, if we have the node end byte, wrap in braces to handle one-liners
+            if edit.node_end_byte is not None and self.language in ['c', 'cpp', 'java', 'javascript']:
+                stmt_text = code[offset:edit.node_end_byte]
+                result = code[:offset] + "{ " + edit.insertion_text + " " + stmt_text + " }" + code[edit.node_end_byte:]
+                logger.debug(f"   insert_immediately_before: wrapped in braces, result length: {len(result)}")
+            else:
+                result = code[:offset] + edit.insertion_text + code[offset:]
+                logger.debug(f"   insert_immediately_before: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
         else:
             logger.warning(f"Unknown edit type: {edit.edit_type}")
             return code

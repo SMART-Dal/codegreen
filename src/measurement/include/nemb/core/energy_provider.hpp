@@ -6,6 +6,7 @@
 #include <chrono>
 #include <atomic>
 #include <map>
+#include <functional>
 #include <optional>
 
 namespace codegreen::nemb {
@@ -152,6 +153,13 @@ public:
         uint64_t total = total_measurements_.load();
         return (total > 0) ? (1.0 - static_cast<double>(failed_measurements_.load()) / total) : 0.0;
     }
+
+    // Factory registration
+    using ProviderFactory = std::function<std::unique_ptr<EnergyProvider>()>;
+    
+    static void register_provider(const std::string& name, ProviderFactory factory);
+    static std::unique_ptr<EnergyProvider> create(const std::string& name);
+    static std::vector<std::string> get_registered_providers();
     
 protected:
     // Statistics tracking

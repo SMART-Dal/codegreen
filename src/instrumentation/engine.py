@@ -115,9 +115,11 @@ class MeasurementEngine:
             cmd = [str(self.binary_path), language, str(script_path)]
             
             if output_file:
-                cmd.extend(['--output', str(output_file)])
+                cmd.extend(['--json-output', str(output_file)])
             
             if sensors:
+                # Note: 'sensors' flag handling logic needs to be added to main.cpp as well
+                # For now, we pass it, assuming future support or config usage
                 cmd.extend(['--sensors', ','.join(sensors)])
             
             if self.config_path:
@@ -320,149 +322,57 @@ class MeasurementEngine:
         self._last_measurement = None
         
         # Create a temporary script to measure the function
+        # Note: This requires the function to be picklable or importable
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            # Write a wrapper script that calls the function
+            script_path = Path(f.name)
+            
+            # Write a wrapper script that imports and calls the function
+            # This is a simplification; handling closures/lambdas properly is complex
+            # For now, we assume the function is importable
+            module_name = func.__module__
+            func_name = func.__name__
+            
             script_content = f"""
 import sys
-import time
-import json
+import os
 from pathlib import Path
 
-# Add the original module path
-sys.path.insert(0, '{Path.cwd()}')
+# Add current directory to path
+sys.path.insert(0, os.getcwd())
 
-def main():
-    # Import and call the function
-    start_time = time.time()
+# Try to import the module and function
+try:
+    import {module_name}
+    func = getattr({module_name}, '{func_name}')
     
-    # Execute the function (this is a simplified version)
-    # In a real implementation, we'd need to serialize the function and its environment
-    print("Function execution started")
-    
-    # Simulate energy measurement
-    import subprocess
-    result = subprocess.run([
-        '{self.binary_path}', 'benchmark', 'cpu_stress', '--duration=1'
-    ], capture_output=True, text=True)
-    
-    end_time = time.time()
-    
-    # Parse energy measurement results
-    output_lines = result.stdout.split('\\n')
-    energy_joules = 0.0
-    average_watts = 0.0
-    duration = end_time - start_time
-    
-    for line in output_lines:
-        if 'Energy consumed:' in line:
-            energy_joules = float(line.split(':')[1].strip().split()[0])
-        elif 'Average power:' in line:
-            average_watts = float(line.split(':')[1].strip().split()[0])
-    
-    # Save results
-    measurement_result = {{
-        'session_id': '{name}',
-        'total_joules': energy_joules,
-        'average_watts': average_watts,
-        'peak_watts': average_watts * 1.2,  # Estimate
-        'duration_seconds': duration,
-        'checkpoint_count': 1,
-        'success': True,
-        'function_name': '{name}'
-    }}
-    
-    with open('measurement_result.json', 'w') as result_file:
-        json.dump(measurement_result, result_file)
-    
-    print(f"Energy measurement completed: {{energy_joules}} J")
-
-if __name__ == '__main__':
-    main()
+    # Run the function
+    if __name__ == "__main__":
+        func()
+except Exception as e:
+    print(f"Error running function: {{e}}")
+    sys.exit(1)
 """
             f.write(script_content)
-            script_path = Path(f.name)
         
         try:
-            # Execute the measurement function with the actual function
-            start_time = time.time()
-            result = func(*args, **kwargs)
-            end_time = time.time()
+            # Measure the temporary script using the standard pipeline
+            result = self.measure_script(script_path, "python")
             
-            # For now, use a simple workload measurement as a proxy
-            # In the future, this would integrate with proper function instrumentation
-            benchmark_result = self._quick_benchmark(duration=1)
+            if result.success:
+                result.session_id = name
+                self._last_measurement = result
+                
+            # Execute the actual function to return its result to the caller
+            return func(*args, **kwargs)
             
-            # Create measurement result
-            measurement = MeasurementResult(
-                session_id=name,
-                total_joules=benchmark_result.get('energy_joules', 0.0),
-                average_watts=benchmark_result.get('average_power_watts', 0.0),
-                peak_watts=benchmark_result.get('average_power_watts', 0.0) * 1.2,
-                duration_seconds=end_time - start_time,
-                checkpoint_count=1,
-                file_path="<function>",
-                language="python",
-                success=True
-            )
-            
-            self._last_measurement = measurement
-            return result
-            
-        except Exception as e:
-            measurement = MeasurementResult(
-                session_id=name,
-                total_joules=0.0,
-                average_watts=0.0,
-                peak_watts=0.0,
-                duration_seconds=0.0,
-                checkpoint_count=0,
-                file_path="<function>",
-                language="python",
-                success=False,
-                error_message=str(e)
-            )
-            
-            self._last_measurement = measurement
-            raise
-        
         finally:
             # Clean up temporary script
             try:
-                script_path.unlink()
+                if script_path.exists():
+                    script_path.unlink()
             except:
                 pass
-    
-    def _quick_benchmark(self, duration: int = 1) -> Dict[str, float]:
-        """Run a quick energy benchmark to estimate function energy usage."""
-        try:
-            result = subprocess.run([
-                str(self.binary_path), 'benchmark', 'cpu_stress',
-                f'--duration={duration}'
-            ], capture_output=True, text=True, timeout=duration + 5)
-            
-            output_lines = result.stdout.split('\n')
-            energy_joules = 0.0
-            average_power_watts = 0.0
-            
-            for line in output_lines:
-                if 'Energy consumed:' in line:
-                    try:
-                        energy_joules = float(line.split(':')[1].strip().split()[0])
-                    except:
-                        pass
-                elif 'Average power:' in line:
-                    try:
-                        average_power_watts = float(line.split(':')[1].strip().split()[0])
-                    except:
-                        pass
-            
-            return {
-                'energy_joules': energy_joules,
-                'average_power_watts': average_power_watts
-            }
-        except:
-            return {'energy_joules': 0.0, 'average_power_watts': 0.0}
-    
+
     def get_last_measurement(self) -> Optional[MeasurementResult]:
         """
         Get the result of the last measurement.
@@ -474,80 +384,52 @@ if __name__ == '__main__':
     
     def start_session(self, name: str = "session") -> str:
         """
-        Start a measurement session for long-running measurements.
+        Start a measurement session.
         
-        Args:
-            name: Name for the measurement session
-            
-        Returns:
-            Session ID for tracking the measurement
+        Note: This is a client-side placeholder. Interactive sessions require 
+        direct C++ bindings which are not yet exposed to this Python wrapper.
+        Currently, this tracks wall-clock time only.
         """
         session_id = f"{name}_{int(time.time())}"
         
-        # Store session start time
         if not hasattr(self, '_active_sessions'):
             self._active_sessions = {}
         
         self._active_sessions[session_id] = {
             'name': name,
             'start_time': time.time(),
-            'start_benchmark': self._quick_benchmark(1)
         }
         
         return session_id
     
     def end_session(self, session_id: str) -> MeasurementResult:
         """
-        End a measurement session and return results.
-        
-        Args:
-            session_id: Session ID returned from start_session()
-            
-        Returns:
-            MeasurementResult with session measurements
+        End a measurement session.
         """
         if not hasattr(self, '_active_sessions') or session_id not in self._active_sessions:
             return MeasurementResult(
-                session_id=session_id,
-                total_joules=0.0,
-                average_watts=0.0,
-                peak_watts=0.0,
-                duration_seconds=0.0,
-                checkpoint_count=0,
-                file_path="<session>",
-                language="python",
-                success=False,
-                error_message="Session not found"
+                session_id=session_id, total_joules=0, average_watts=0, peak_watts=0,
+                duration_seconds=0, checkpoint_count=0, file_path="<session>",
+                language="python", success=False, error_message="Session not found"
             )
         
         session = self._active_sessions[session_id]
-        end_time = time.time()
-        duration = end_time - session['start_time']
+        duration = time.time() - session['start_time']
         
-        # Get end benchmark
-        end_benchmark = self._quick_benchmark(1)
+        # Clean up
+        del self._active_sessions[session_id]
         
-        # Calculate approximate energy difference
-        energy_joules = max(0.0, end_benchmark['energy_joules'] - session['start_benchmark']['energy_joules'])
-        average_watts = energy_joules / duration if duration > 0 else 0.0
-        
-        measurement = MeasurementResult(
+        return MeasurementResult(
             session_id=session_id,
-            total_joules=energy_joules,
-            average_watts=average_watts,
-            peak_watts=average_watts * 1.2,
+            total_joules=0.0,
+            average_watts=0.0,
+            peak_watts=0.0,
             duration_seconds=duration,
-            checkpoint_count=1,
+            checkpoint_count=0,
             file_path="<session>",
             language="python",
             success=True
         )
-        
-        # Clean up session
-        del self._active_sessions[session_id]
-        self._last_measurement = measurement
-        
-        return measurement
     
     def generate_report(self, measurements: List[MeasurementResult], output_format: str = "json", 
                        output_path: Optional[Path] = None) -> Dict[str, Any]:

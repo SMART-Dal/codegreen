@@ -53,6 +53,15 @@ rsmi_status_t rsmi_dev_fan_speed_get(uint32_t dv_ind, uint32_t sensor_ind, int64
 
 namespace codegreen::nemb::drivers {
 
+namespace {
+    bool registered = []() {
+        EnergyProvider::register_provider("amd_gpu", []() {
+            return std::make_unique<AMDGPUProvider>();
+        });
+        return true;
+    }();
+}
+
 // AMDGPUEnergyIntegrator implementation
 void AMDGPUEnergyIntegrator::add_power_sample(double power_watts, uint64_t timestamp_ns) {
     std::lock_guard<std::mutex> lock(integration_mutex_);

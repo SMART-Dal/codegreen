@@ -3,12 +3,7 @@
 # Legacy CodeGreen sources
 set(CORE_SOURCES
     src/measurement_engine.cpp
-    src/energy_monitor.cpp
     src/measurement_session.cpp
-    src/plugin/plugin_registry.cpp
-    src/adapters/arm_pmu.cpp
-    src/adapters/intel_rapl.cpp
-    src/adapters/nvidia_gpu.cpp
     src/adapters/python_bridge_adapter.cpp
     src/energy_storage.cpp
     src/config.cpp
@@ -33,6 +28,8 @@ set(NEMB_DRIVERS_SOURCES
     src/nemb/drivers/intel_rapl_provider.cpp
     src/nemb/drivers/nvidia_gpu_provider.cpp
     src/nemb/drivers/amd_gpu_provider.cpp
+    src/nemb/drivers/arm_energy_provider.cpp
+    src/nemb/drivers/amd_rapl_provider.cpp
 )
 
 set(NEMB_CONFIG_SOURCES

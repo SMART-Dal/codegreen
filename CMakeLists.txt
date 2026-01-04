@@ -221,6 +221,8 @@ add_custom_target(sync_instrumentation
         ${LANGUAGE_ENGINE_DEST}
         ${AST_PROCESSOR_DEST}
         ${LANGUAGE_CONFIGS_DEST}
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/language_runtimes
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/configs ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/configs
     COMMENT "Ensuring all instrumentation files are up to date"
 )
 
@@ -245,12 +247,17 @@ add_custom_target(dev-install ALL
     DEPENDS codegreen
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.so ${CMAKE_SOURCE_DIR}/lib/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/src/instrumentation
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/language_runtimes
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/configs
     COMMENT "Copying binary and instrumentation files to development bin directory for CLI integration"
 )
 

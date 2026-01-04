@@ -11,6 +11,15 @@
 
 namespace codegreen::nemb::drivers {
 
+namespace {
+    bool registered = []() {
+        EnergyProvider::register_provider("intel_rapl", []() {
+            return std::make_unique<IntelRAPLProvider>();
+        });
+        return true;
+    }();
+}
+
 IntelRAPLProvider::IntelRAPLProvider() {
 }
 

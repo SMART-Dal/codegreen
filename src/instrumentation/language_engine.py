@@ -493,6 +493,16 @@ class LanguageEngine:
                 # Always compile built-in queries as fallback/auxiliary (e.g. for return statements)
                 self._compile_builtin_queries(lang_id, language, config['queries'])
                 
+                # Load custom queries from config if available
+                config_obj = self._config_manager.get_config(lang_id)
+                if config_obj and hasattr(config_obj, 'custom_queries'):
+                    for q_name, q_text in config_obj.custom_queries.items():
+                        try:
+                            self._queries[lang_id][q_name] = Query(language, q_text)
+                            logger.info(f"✅ Compiled custom query '{q_name}' for {lang_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to compile custom query '{q_name}' for {lang_id}: {e}")
+                
                 if not self._queries[lang_id]:
                     msg = f"No valid queries compiled for {lang_id}"
                     logger.error(f"❌ {msg}")
@@ -593,7 +603,7 @@ class LanguageEngine:
             else:
                 # Fallback to regex analysis
                 logger.warning(f"🚨 FALLBACK WARNING: Tree-sitter not available for {language}, using regex analysis instead of AST-based analysis")
-                print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
+                # print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
                 points = self._analyze_with_regex(source_code, language)
                 analysis_method = 'regex_fallback'
             
@@ -674,7 +684,7 @@ class LanguageEngine:
             except (TimeoutError, MemoryError) as e:
                 logger.error(f"Tree-sitter parsing failed for {language}: {e}")
                 logger.warning(f"🚨 FALLBACK WARNING: Tree-sitter parsing failed, using regex analysis instead of AST-based analysis for {language}")
-                print(f"🚨 WARNING: Tree-sitter parsing failed for {language}, using fallback regex analysis - some instrumentation may be less accurate")
+                # print(f"🚨 WARNING: Tree-sitter parsing failed for {language}, using fallback regex analysis - some instrumentation may be less accurate")
                 # Fallback to regex analysis
                 return self._analyze_with_regex(source_code, language)
             
@@ -736,10 +746,18 @@ class LanguageEngine:
                     if config and hasattr(config, 'query_config') and 'capture_mapping' in config.query_config:
                         capture_map = {}
                         for capture_name, point_type in config.query_config['capture_mapping'].items():
+                            # Determine insertion mode based on point type
+                            if 'enter' in point_type:
+                                insertion_mode = 'inside_start'
+                            elif point_type == 'function_return':
+                                insertion_mode = 'immediately_before'
+                            else:
+                                insertion_mode = 'before'
+                                
                             capture_map[capture_name] = {
                                 'type': point_type,
                                 'subtype': point_type.split('_')[1] if '_' in point_type else point_type,
-                                'insertion_mode': 'inside_start' if 'enter' in point_type else 'before',
+                                'insertion_mode': insertion_mode,
                                 'priority': 1
                             }
                         logger.debug(f"   Using language-specific capture mapping with {len(capture_map)} mappings")
@@ -892,7 +910,7 @@ class LanguageEngine:
     def _analyze_with_regex(self, source_code: str, language: str) -> List[InstrumentationPoint]:
         """Analyze code using regex fallback patterns with optimization"""
         logger.warning(f"🚨 FALLBACK WARNING: Using regex analysis for {language} instead of AST-based analysis")
-        print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
+        # print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
         patterns = self._config_manager.get_analysis_patterns(language)
         points = []
         
@@ -944,6 +962,63 @@ class LanguageEngine:
             current = current.parent
         return None
 
+    def _is_inside_call(self, node: 'Node') -> bool:
+        """Check if a node is inside a call expression"""
+        current = node.parent
+        while current:
+            if current.type in ['call_expression', 'template_function', 'template_method']:
+                # template_function/method in some contexts might be calls too if not in a declarator
+                if current.type == 'call_expression': return True
+                # Check parent of template_function/method
+                if current.parent and current.parent.type == 'call_expression': return True
+            current = current.parent
+        return False
+
+    def _get_node_name(self, node: 'Node', source_code: str, language: str) -> str:
+        """Robustly extract name from a definition node (function, class, etc.)"""
+        if not node: return ""
+        
+        # Try 'name' field first
+        name_node = node.child_by_field_name('name')
+        
+        # For C/C++, try 'declarator' recursively
+        if not name_node and language in ['c', 'cpp']:
+            curr = node.child_by_field_name('declarator')
+            while curr:
+                # If we hit an identifier, that's likely the name
+                if curr.type in ['identifier', 'field_identifier', 'type_identifier']:
+                    name_node = curr
+                    break
+                
+                # Dig deeper into declarators
+                # Common wrappers: function_declarator, pointer_declarator, reference_declarator, array_declarator, parenthesized_declarator
+                next_decl = curr.child_by_field_name('declarator')
+                if next_decl:
+                    curr = next_decl
+                    continue
+                
+                # If no 'declarator' field, maybe it's a qualified_identifier (C++)
+                if curr.type == 'qualified_identifier':
+                    name_node = curr.child_by_field_name('name')
+                    break
+                
+                # If we're at a function_declarator but explicit 'declarator' field lookup failed (unlikely),
+                # or other types.
+                # Just break if we can't go deeper.
+                break
+                
+            if not name_node and curr:
+                # Fallback: if we stopped at a node that IS an identifier type (checked above)
+                if curr.type in ['identifier', 'field_identifier']:
+                    name_node = curr
+        
+        if not name_node: name_node = node
+        
+        text = self._extract_text_from_node(name_node, source_code, language)
+        if not text or not self._is_valid_identifier(text, language):
+            return ""
+        return text
+
     def _create_instrumentation_point_from_capture(
         self,
         node: 'Node',
@@ -955,68 +1030,62 @@ class LanguageEngine:
         """Create instrumentation point from a single tree-sitter capture"""
         logger.debug(f"🔧 Creating instrumentation point for capture '{capture_name}' in {language}")
 
+        # Skip nodes that are clearly inside calls (prevents false positives in C++/Java)
+        if capture_config['type'] in ['function_enter', 'class_enter'] and self._is_inside_call(node):
+            logger.debug(f"   ❌ Node is inside a call, skipping")
+            return None
+
         try:
-            # Smart node resolution: separate the "definition node" (for insertion context)
-            # from the "name node" (for naming the checkpoint)
+            # Smart node resolution
             target_def_node = node
-            name_node = node
+            name = ""
             
             node_types = self._config_manager.get_node_types(language)
-            func_types = node_types.get('function_types', [])
-            class_types = node_types.get('class_types', [])
-            def_types = func_types + class_types
+            def_types = node_types.get('function_types', []) + node_types.get('class_types', [])
             
-            if node.type in def_types:
-                # Captured the definition itself (e.g. @function capturing function_definition)
-                target_def_node = node
-                # Try to find name child to get a good checkpoint name
-                child_name = node.child_by_field_name('name')
-                if child_name:
-                    name_node = child_name
-            elif node.type in ['identifier', 'type_identifier', 'field_identifier', 'name']:
-                # Captured the name/identifier (e.g. @function.name)
-                name_node = node
-                # Find parent definition for context
-                parent = self._find_parent_definition(node, language)
-                if parent:
-                    target_def_node = parent
-            
-            # Extract text from name_node for the checkpoint ID
-            text = self._extract_text_from_node(name_node, source_code, language)
-            
-            # Validate identifier if it's a function/method name
-            if capture_config['type'] in ['function_enter', 'class_enter']:
-                # STRICT VALIDATION: Ensure we captured a valid definition or identifier
-                # Reject keywords, punctuation, blocks, etc.
-                valid_node_types = def_types + ['identifier', 'type_identifier', 'field_identifier', 'name', 'method_name', 'function_name', 'class_name']
-                if node.type not in valid_node_types:
-                    logger.debug(f"   ❌ Node type '{node.type}' is not a valid definition or identifier, skipping")
-                    return None
-
-                # We trust the query captures for most parts, but we still ensure we have a name
-                if not text:
-                     logger.debug(f"   ❌ Could not extract name from definition node {node.type}, skipping")
-                     return None
-            
-            # Use the resolved definition node for AST operations (finding body, etc.)
-            node = target_def_node
-            
-            # Determine the name for the instrumentation point
-            name = text if text else capture_name
-            
-            # For function exit points (returns), use the parent function name
-            if capture_config['type'] == 'function_exit':
+            if capture_config['type'] in ['function_exit', 'function_return']:
+                # For returns, we want the full return statement node if possible
+                if capture_config['type'] == 'function_return':
+                    # Find parent return_statement
+                    curr = node
+                    while curr and curr.type != 'return_statement':
+                        curr = curr.parent
+                    if curr:
+                        target_def_node = curr
+                        # Update node reference so point creation uses the full statement
+                        node = curr
+                
                 parent_func = self._find_parent_function(node, language)
                 if parent_func:
-                    func_name_node = parent_func.child_by_field_name('name')
-                    if func_name_node:
-                        func_name = self._extract_text_from_node(func_name_node, source_code, language)
-                        if func_name:
-                            name = func_name
+                    name = self._get_node_name(parent_func, source_code, language)
+            elif capture_config['type'] == 'loop_start':
+                # For loops, we prefer the capture name (e.g. loop_for) over any extracted name
+                name = capture_name.replace('.', '_')
+            elif node.type in def_types:
+                name = self._get_node_name(node, source_code, language)
+            else:
+                # Check if it's a name node itself
+                if node.type in ['identifier', 'type_identifier', 'field_identifier', 'name']:
+                    parent = self._find_parent_definition(node, language)
+                    if parent:
+                        target_def_node = parent
+                        name = self._extract_text_from_node(node, source_code, language)
+                
+            if not name:
+                name = self._get_node_name(target_def_node, source_code, language)
+            
+            if not name:
+                name = capture_name.replace('.', '_')
+            
+            # Reject if name is still empty or invalid
+            if not name or not self._is_valid_identifier(name, language):
+                logger.debug(f"   ❌ Invalid name '{name}' for capture '{capture_name}', skipping")
+                return None
             
             logger.debug(f"   Point name determined: '{name}'")
 
             # Extract node information
+            node = target_def_node
             start_point = node.start_point
             
             # Initialize insertion variables
@@ -1050,9 +1119,17 @@ class LanguageEngine:
                             insertion_byte = ast_insertion_byte
                             insertion_point = self._byte_to_point(source_code, insertion_byte)
                         else:
+                            # If AST processor returns None (no body), we should also skip if we required a body
+                            # But here we found body_node via children check, so it exists.
+                            # Fallback to body start
                             insertion_point = body_node.start_point
                             insertion_byte = body_node.start_byte
                     else:
+                        # No body found - likely a prototype or declaration
+                        if capture_config['type'] in ['function_enter']:
+                            logger.debug(f"   ⚠️  No body found for function {name}, skipping (likely prototype)")
+                            return None
+                        
                         insertion_point = def_node.start_point
                         insertion_byte = def_node.start_byte
                 else:

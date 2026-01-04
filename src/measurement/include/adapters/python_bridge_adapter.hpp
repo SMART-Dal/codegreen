@@ -8,7 +8,7 @@ namespace codegreen {
 /// Python Bridge Adapter that calls the Python AST-based instrumentation system
 class PythonBridgeAdapter : public LanguageAdapter {
 public:
-    PythonBridgeAdapter();
+    explicit PythonBridgeAdapter(const std::string& language_id = "python");
     
     // LanguageAdapter interface
     std::string get_language_id() const override;
@@ -22,6 +22,7 @@ public:
 
 private:
     std::filesystem::path instrumentation_path_;
+    std::string language_id_;
     
     /// Parse results from Python instrumentation system
     std::vector<CodeCheckpoint> parse_python_results(const std::string& output);

@@ -90,6 +90,15 @@ const char* nvmlErrorString(nvmlReturn_t result) { return "NVML not available"; 
 
 namespace codegreen::nemb::drivers {
 
+namespace {
+    bool registered = []() {
+        EnergyProvider::register_provider("nvidia_gpu", []() {
+            return std::make_unique<NVIDIAGPUProvider>();
+        });
+        return true;
+    }();
+}
+
 // GPUEnergyIntegrator implementation
 void GPUEnergyIntegrator::add_power_sample(double power_watts, uint64_t timestamp_ns) {
     std::lock_guard<std::mutex> lock(integration_mutex_);

@@ -10,7 +10,6 @@
 #include <fstream>
 #include <algorithm>
 #include "measurement_engine.hpp"
-#include "energy_monitor.hpp"
 #include "config.hpp"
 #include "nemb/codegreen_energy.hpp"
 // Legacy python.hpp removed - using Python AST-based system
@@ -381,9 +380,19 @@ int main(int argc, char* argv[]) {
         }
         
         // Prepare execution arguments (everything after the source file)
+        // Also scan for CodeGreen-specific flags mixed in
         std::vector<std::string> exec_args;
+        std::string json_output_path = "";
+        
         for (int i = 3; i < argc; ++i) {
-            exec_args.push_back(argv[i]);
+            std::string arg = argv[i];
+            if (arg.find("--json-output=") == 0) {
+                json_output_path = arg.substr(14);
+            } else if (arg == "--json-output" && i + 1 < argc) {
+                json_output_path = argv[++i];
+            } else {
+                exec_args.push_back(arg);
+            }
         }
         
         // Configure measurement
@@ -398,6 +407,50 @@ int main(int argc, char* argv[]) {
         
         // Execute the full measurement workflow
         auto result = measurement_engine->instrument_and_execute(config);
+        
+        // Handle JSON output if requested
+        if (result.success && !json_output_path.empty()) {
+            std::cout << "📝 Writing results to " << json_output_path << std::endl;
+            
+            // Create JSON object
+            Json::Value root;
+            root["session_id"] = "session_" + std::to_string(std::time(nullptr));
+            root["file_path"] = source_file;
+            root["language"] = language;
+            root["success"] = true;
+            
+            // Calculate aggregates
+            double total_joules = 0.0;
+            double total_watts = 0.0;
+            double max_watts = 0.0;
+            double duration = 0.0;
+            
+            if (!result.measurements.empty()) {
+                const auto& m = result.measurements.back(); // Assuming one summary measurement for now
+                total_joules = m.joules;
+                total_watts = m.watts; // This is avg power for differential measurement
+                max_watts = m.watts;   // Placeholder
+                duration = m.duration_seconds;
+            }
+            
+            root["total_joules"] = total_joules;
+            root["average_watts"] = total_watts;
+            root["peak_watts"] = max_watts;
+            root["duration_seconds"] = duration;
+            root["checkpoint_count"] = (int)result.checkpoints.size();
+            
+            // Write to file
+            std::ofstream json_file(json_output_path);
+            if (json_file.is_open()) {
+                Json::StreamWriterBuilder builder;
+                builder["indentation"] = "  ";
+                std::unique_ptr<Json::StreamWriter> writer(builder.newStreamWriter());
+                writer->write(root, &json_file);
+                json_file.close();
+            } else {
+                std::cerr << "Error: Failed to write JSON output to " << json_output_path << std::endl;
+            }
+        }
         
         if (!result.success) {
             std::cerr << "Error: " << result.error_message << std::endl;
@@ -418,6 +471,13 @@ int main(int argc, char* argv[]) {
         
         std::cout << std::endl;
         std::cout << "=== Code Execution Complete ===" << std::endl;
+        
+        if (!result.measurements.empty()) {
+            double total_joules = 0;
+            for (const auto& m : result.measurements) total_joules += m.joules;
+            std::cout << "Total Energy consumed: " << std::fixed << std::setprecision(6) << total_joules << " J" << std::endl;
+        }
+        
         std::cout << "Energy measurement data collected." << std::endl;
         
         // Display optimization suggestions if available

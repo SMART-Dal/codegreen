@@ -98,3 +98,4 @@ energy_data.db
 # Archive directory (except .gitkeep)
 archive/*
 !archive/.gitkeep
+bin/*

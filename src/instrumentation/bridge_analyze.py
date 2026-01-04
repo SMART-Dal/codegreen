@@ -1,61 +1,59 @@
 #!/usr/bin/env python3
 """
-Bridge script for C++ to Python instrumentation system - Analysis phase
-Called by PythonBridgeAdapter to analyze code and generate checkpoints
+Bridge script for C++ to call Python LanguageEngine for analysis.
 """
-
 import sys
 import os
+import json
 from pathlib import Path
 
-# Add instrumentation directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add current directory to path to find modules
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(current_dir.parent))
 
 try:
     from language_engine import LanguageEngine
-    
-    def main():
-        if len(sys.argv) < 2 or len(sys.argv) > 3:
-            print("ERROR: Usage: bridge_analyze.py <source_file> [language]", file=sys.stderr)
-            sys.exit(1)
-        
-        source_file = sys.argv[1]
-        language = sys.argv[2] if len(sys.argv) == 3 else 'python'
-        
-        try:
-            # Read source code
-            with open(source_file, 'r') as f:
-                source_code = f.read()
-            
-            # Initialize language engine
-            engine = LanguageEngine()
-            
-            # Analyze the code
-            analysis_result = engine.analyze_code(source_code, language)
-            
-            if analysis_result.success:
-                print(f"ANALYSIS_SUCCESS: Found {len(analysis_result.instrumentation_points)} instrumentation points")
-                
-                # Output each instrumentation point
-                for i, point in enumerate(analysis_result.instrumentation_points):
-                    print(f"CHECKPOINT_{i}: {point.type}:{point.name}:{point.line}:{point.column}")
-                    
-            else:
-                error_msg = analysis_result.error if analysis_result.error else "Unknown analysis error"
-                print(f"ANALYSIS_ERROR: {error_msg}", file=sys.stderr)
-                sys.exit(1)
-                
-        except FileNotFoundError:
-            print(f"ERROR: Source file not found: {source_file}", file=sys.stderr)
-            sys.exit(1)
-        except Exception as e:
-            print(f"ERROR: Analysis failed: {str(e)}", file=sys.stderr)
-            sys.exit(1)
+except ImportError:
+    # Try relative import if running from different context
+    try:
+        from src.instrumentation.language_engine import LanguageEngine
+    except ImportError:
+        print("Error: Could not import LanguageEngine")
+        sys.exit(1)
 
-    if __name__ == "__main__":
-        main()
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: bridge_analyze.py <source_file>")
+        sys.exit(1)
+
+    source_file = sys.argv[1]
+    if not os.path.exists(source_file):
+        print(f"Error: File not found: {source_file}")
+        sys.exit(1)
+
+    try:
+        with open(source_file, 'r') as f:
+            source_code = f.read()
+            
+        engine = LanguageEngine()
+        result = engine.analyze_code(source_code, filename=source_file)
         
-except ImportError as e:
-    print(f"ERROR: Failed to import instrumentation modules: {e}", file=sys.stderr)
-    print("Make sure the instrumentation system is properly installed", file=sys.stderr)
-    sys.exit(1)
+        if not result.success:
+            print(f"Analysis failed: {result.error}")
+            sys.exit(1)
+            
+        # Output checkpoints in a simple format for C++ adapter logging
+        # or future JSON parsing
+        print(f"Analysis complete: {len(result.instrumentation_points)} points found")
+        for point in result.instrumentation_points:
+            print(f"POINT|{point.id}|{point.type}|{point.name}|{point.line}|{point.column}")
+            
+    except Exception as e:
+        print(f"Error during analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

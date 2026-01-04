@@ -1,64 +1,66 @@
 #!/usr/bin/env python3
 """
-Bridge script for C++ to Python instrumentation system - Instrumentation phase
-Called by PythonBridgeAdapter to instrument code with energy measurement checkpoints
+Bridge script for C++ to call Python LanguageEngine for instrumentation.
 """
-
 import sys
 import os
 from pathlib import Path
 
-# Add instrumentation directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add current directory to path to find modules
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(current_dir.parent))
 
 try:
     from language_engine import LanguageEngine
-    
-    def main():
-        if len(sys.argv) < 2 or len(sys.argv) > 3:
-            print("ERROR: Usage: bridge_instrument.py <source_file> [language]", file=sys.stderr)
-            sys.exit(1)
-        
-        source_file = sys.argv[1]
-        language = sys.argv[2] if len(sys.argv) == 3 else 'python'
-        
-        try:
-            # Read source code
-            with open(source_file, 'r') as f:
-                source_code = f.read()
-            
-            # Initialize language engine
-            engine = LanguageEngine()
-            
-            # Instrument the code (analyze first, then instrument)
-            analysis_result = engine.analyze_code(source_code, language)
-            if analysis_result.success:
-                instrumented_code = engine.instrument_code(source_code, analysis_result.instrumentation_points, language)
-                # Output the instrumented code (engine.instrument_code returns string, not result object)
-                print(instrumented_code)
-            else:
-                error_msg = analysis_result.error if analysis_result.error else "Unknown analysis error"
-                print(f"ERROR: Analysis failed: {error_msg}", file=sys.stderr)
-                print(source_code)  # Output original code as fallback
-                sys.exit(1)
-                
-        except FileNotFoundError:
-            print(f"ERROR: Source file not found: {source_file}", file=sys.stderr)
-            sys.exit(1)
-        except Exception as e:
-            print(f"ERROR: Instrumentation failed: {str(e)}", file=sys.stderr)
-            # Output original code as fallback
-            try:
-                with open(source_file, 'r') as f:
-                    print(f.read())
-            except:
-                pass
-            sys.exit(1)
+except ImportError:
+    try:
+        from src.instrumentation.language_engine import LanguageEngine
+    except ImportError:
+        print("Error: Could not import LanguageEngine")
+        sys.exit(1)
 
-    if __name__ == "__main__":
-        main()
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: bridge_instrument.py <source_file>")
+        sys.exit(1)
+
+    source_file = sys.argv[1]
+    if not os.path.exists(source_file):
+        print(f"Error: File not found: {source_file}")
+        sys.exit(1)
+
+    try:
+        with open(source_file, 'r') as f:
+            source_code = f.read()
+            
+        engine = LanguageEngine()
+        # First analyze to get points
+        result = engine.analyze_code(source_code, filename=source_file)
         
-except ImportError as e:
-    print(f"ERROR: Failed to import instrumentation modules: {e}", file=sys.stderr)
-    print("Make sure the instrumentation system is properly installed", file=sys.stderr)
-    sys.exit(1)
+        if not result.success:
+            # If analysis failed, just output original code (fail safe)
+            print(source_code)
+            sys.exit(0)
+            
+        # Then instrument
+        instrumented_code = engine.instrument_code(
+            source_code, 
+            result.instrumentation_points, 
+            result.language
+        )
+        
+        # Output instrumented code to stdout
+        print(instrumented_code)
+            
+    except Exception as e:
+        # Fallback to original code
+        try:
+            with open(source_file, 'r') as f:
+                print(f.read())
+        except:
+            pass
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

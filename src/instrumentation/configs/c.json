@@ -27,7 +27,7 @@
         "insertion_rules": {
             "function_enter": {
                 "mode": "inside_start",
-                "find_first_statement": true,
+                "find_first_statement": false,
                 "skip_docstrings": false,
                 "skip_comments": true
             },
@@ -35,15 +35,8 @@
                 "mode": "inside_end",
                 "find_last_statement": true
             },
-            "class_enter": {
-                "mode": "inside_start",
-                "find_first_statement": true,
-                "skip_docstrings": false,
-                "skip_comments": true
-            },
-            "class_exit": {
-                "mode": "inside_end",
-                "find_last_statement": true
+            "function_return": {
+                "mode": "immediately_before"
             },
             "before": {
                 "mode": "before"
@@ -53,24 +46,26 @@
             }
         }
     },
+    "custom_queries": {
+        "definitions": "(function_definition body: (compound_statement)) @function_def",
+        "loops": "(for_statement) @loop.for (while_statement) @loop.while (do_statement) @loop.do",
+        "returns": "(return_statement) @return"
+    },
     "query_config": {
         "capture_mapping": {
-            "function": "function_enter",
-            "local.definition.function": "function_enter",
-            "keyword.return": "function_exit",
-            "return": "function_exit",
+            "function_def": "function_enter",
             "loop.for": "loop_start",
             "loop.while": "loop_start",
-            "loop.do": "loop_start"
+            "loop.do": "loop_start",
+            "keyword.return": "function_return",
+            "return": "function_return"
         },
         "priority_order": [
-            "function",
-            "local.definition.function",
-            "keyword.return",
-            "return",
+            "function_def",
             "loop.for",
             "loop.while",
-            "loop.do"
+            "loop.do",
+            "return"
         ]
     },
     "instrumentation_config": {
@@ -78,6 +73,7 @@
         "templates": {
             "function_enter": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"enter\");",
             "function_exit": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
+            "function_return": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
             "loop_start": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
             "loop_exit": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
         },

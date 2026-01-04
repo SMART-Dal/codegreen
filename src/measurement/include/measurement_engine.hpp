@@ -7,8 +7,6 @@
 #include <unordered_map>
 #include <filesystem>
 #include "measurement_session.hpp"
-#include "plugin/hardware_plugin.hpp"
-#include "plugin/plugin_registry.hpp"
 #include "adapters/language_adapter.hpp"
 #include "energy_storage.hpp"
 #include "energy_code_mapper.hpp"
@@ -57,6 +55,7 @@ struct InstrumentationResult {
     std::vector<CodeCheckpoint> checkpoints;
     std::string temp_file_path;
     std::string error_message;
+    std::vector<Measurement> measurements;
 };
 
 /// Configuration for measurement execution
@@ -99,7 +98,6 @@ public:
         std::string read_source_file(const std::string& file_path);
 
     private:
-        std::unique_ptr<PluginRegistry> plugin_registry_;
         std::vector<std::unique_ptr<LanguageAdapter>> language_adapters_;
         std::unique_ptr<EnergyStorage> energy_storage_;
 
