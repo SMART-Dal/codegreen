@@ -22,9 +22,16 @@ scripts = [
     ("v17_nested_loop.py", "def workload():\n    count = 0\n    for i in range(1000): \n        for j in range(1000): count += 1"),
     ("v18_mem_copy.py", "def workload():\n    data = bytearray(10*1024*1024)\n    for _ in range(50): _ = data[:]"),
     ("v19_class_inst.py", "def workload():\n    class A: pass\n    for _ in range(100000): _ = A()"),
-    ("v20_large_sum.py", "def workload():\n    data = list(range(1000000))\n    sum(data)")
+    ("v20_large_sum.py", "def workload():\n    data = list(range(1000000))\n    sum(data)"),
+    ("v21_fib.c", "#include <stdio.h>\nint main() {\n    long long x = 0;\n    for (int i = 0; i < 500000000; i++) {\n        x += (i % 2 == 0 ? 1 : -1);\n    }\n    printf(\"%lld\\n\", x);\n    return 0;\n}"),
+    ("v22_mat_mul.c", "#include <stdio.h>\n#include <stdlib.h>\nint main() {\n    int size = 200;\n    double *res = calloc(size * size, sizeof(double));\n    for (int i = 0; i < size; i++) {\n        for (int j = 0; j < size; j++) {\n            for (int k = 0; k < size; k++) {\n                res[i * size + j] += i * k;\n            }\n        }\n    }\n    free(res);\n    return 0;\n}"),
+    ("v23_fib.cpp", "#include <iostream>\nint main() {\n    long long x = 0;\n    for (int i = 0; i < 500000000; i++) {\n        x += (i % 2 == 0 ? 1 : -1);\n    }\n    std::cout << x << std::endl;\n    return 0;\n}"),
+    ("v24_prime.java", "public class v24_prime {\n    public static void main(String[] args) {\n        java.util.List<Integer> primes = new java.util.ArrayList<>();\n        for (int num = 2; num < 50000; num++) {\n            boolean isPrime = true;\n            for (int i = 2; i <= Math.sqrt(num); i++) {\n                if (num % i == 0) {\n                    isPrime = false;\n                    break;\n                }\n            }\n            if (isPrime) primes.add(num);\n        }\n        System.out.println(primes.size());\n    }\n}")
 ]
 
-for name, body in scripts:
+for name, content in scripts:
     with open(os.path.join(path, name), "w") as f:
-        f.write(body + "\n\nif __name__ == '__main__':\n    workload()")
+        if name.endswith(".py"):
+            f.write(content + "\n\nif __name__ == '__main__':\n    workload()")
+        else:
+            f.write(content)

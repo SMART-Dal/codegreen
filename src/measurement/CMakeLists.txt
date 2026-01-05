@@ -15,6 +15,12 @@ set(NEMB_CORE_SOURCES
     src/nemb/core/measurement_coordinator.cpp
 )
 
+# Find JNI for Java runtime support
+find_package(JNI)
+if(JNI_FOUND)
+    message(STATUS "✓ JNI found: ${JNI_INCLUDE_DIRS}")
+endif()
+
 set(NEMB_HAL_SOURCES
     src/nemb/hal/counter_manager.cpp
 )
@@ -65,6 +71,10 @@ target_include_directories(codegreen-nemb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+if(JNI_FOUND)
+    target_include_directories(codegreen-nemb PRIVATE ${JNI_INCLUDE_DIRS})
+endif()
 
 # Set compile definitions for legacy core
 target_compile_definitions(codegreen-core PRIVATE

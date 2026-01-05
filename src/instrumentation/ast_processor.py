@@ -43,6 +43,7 @@ class ASTEdit:
     edit_type: str  # 'insert_before', 'insert_after', 'insert_inside_start', 'insert_inside_end'
     node_info: Optional[str] = None  # Debug info about the node
     node_end_byte: Optional[int] = None # End of the node for wrapping/replacing
+    node_end_byte: Optional[int] = None # End of the node for wrapping/replacing
 
 class ASTProcessor:
     """Language-agnostic AST processor using configuration-driven approach."""
@@ -120,6 +121,12 @@ class ASTProcessor:
         """Find the body/block node for a given node using language configuration."""
         ast_config = self.config.ast_config
         
+        # Check if the node itself is a body/block
+        body_types = self.config.node_types.get("body_types", ["block"])
+        if node.type in body_types or node.type in ["compound_statement", "block", "body", "class_body"]:
+            logger.debug(f"   Node is already a body/block: {node.type}")
+            return node
+        
         # If this is an identifier (function name, class name, etc.), look for parent definition
         if node.type in ["identifier", "type_identifier", "field_identifier"]:
             logger.debug(f"🔍 Finding body for identifier node: {node.type} at {node.start_point}-{node.end_point}")
@@ -151,10 +158,15 @@ class ASTProcessor:
         if body:
             return body
         
-        # Fallback: Search named children for block type
-        block_type = ast_config.get("block_type", "block")
+        # Fallback: check all possible body types from config
+        body_types = self.config.node_types.get("body_types", ["block"])
         for child in node.named_children:
-            if child.type == block_type:
+            if child.type in body_types:
+                return child
+        
+        # Super fallback: look for any child that looks like a block
+        for child in node.named_children:
+            if child.type in ["compound_statement", "block", "body", "class_body"]:
                 return child
         
         return None
@@ -170,7 +182,7 @@ class ASTProcessor:
         logger.debug(f"   Available insertion rules: {list(insertion_rules.keys())}")
         
         # Map insertion modes to rule keys based on node type
-        if node.type in ['class_definition', 'class_declaration']:
+        if node.type in ['class_definition', 'class_declaration', 'class_specifier', 'struct_specifier']:
             # For class definitions, use different mapping
             mode_mapping = {
                 'inside_start': 'class_enter',
@@ -240,16 +252,12 @@ class ASTProcessor:
     def _find_insertion_point_manual(self, node: Node, mode: str, rule: Dict[str, Any]) -> Optional[int]:
         """Manual AST walking logic (fallback)."""
         if mode == "inside_start":
-            logger.debug(f"   Processing inside_start mode")
-            # If node is already a body/block node, use it directly
-            body_types = self.config.ast_config.get("body_types", ["block"])
-            if node.type in body_types:
-                body_node = node
-            else:
-                body_node = self.find_body_node(node)
+            logger.debug(f"   Processing inside_start mode for {node.type}")
+            # Get the internal body/block node
+            body_node = self.find_body_node(node)
 
             if not body_node:
-                logger.debug(f"   No body node found, using node start: {node.start_byte}")
+                logger.debug(f"   No body node found for inside_start mode, using node start: {node.start_byte}")
                 return node.start_byte
 
             if rule.get("find_first_statement", False):
@@ -265,12 +273,8 @@ class ASTProcessor:
                     # For Python, find the first non-docstring statement
                     logger.debug(f"   Calling _find_python_function_start for Python")
                     insertion_byte = self._find_python_function_start(body_node, rule)
-                    logger.debug(f"   _find_python_function_start returned: {insertion_byte}")
                     if insertion_byte is not None:
-                        logger.debug(f"   Found Python function start: {insertion_byte}")
                         return insertion_byte
-                    else:
-                        logger.debug(f"   _find_python_function_start returned None, using fallback")
                 else:
                     # For C/C++/Java, look for opening brace
                     # Get configurable text preview length
@@ -295,30 +299,42 @@ class ASTProcessor:
                 logger.debug(f"   Using body start: {body_node.start_byte}")
                 return body_node.start_byte
         
-        elif rule.get("mode") == "inside_end":
-            logger.debug(f"   Processing inside_end mode")
-            # If node is already a body/block node, use it directly
-            body_types = self.config.ast_config.get("body_types", ["block"])
-            if node.type in body_types:
-                body_node = node
-            else:
-                body_node = self.find_body_node(node)
+        elif mode == "inside_end":
+            logger.debug(f"   Processing inside_end mode for {node.type}")
+            # Get the internal body/block node
+            body_node = self.find_body_node(node)
 
             if not body_node:
-                logger.debug(f"   No body node found, using node end: {node.end_byte}")
+                logger.debug(f"   No body node found for inside_end mode, using node end: {node.end_byte}")
                 return node.end_byte
 
-            if rule.get("find_last_statement", False):
-                logger.debug(f"   find_last_statement=True, calling _find_last_statement_line_end")
-                insertion_byte = self._find_last_statement_line_end(body_node, rule)
-                # Ensure we don't cross the block's closing dedent/brace
-                bounded = min(insertion_byte, body_node.end_byte)
-                logger.debug(f"   _find_last_statement_line_end returned: {insertion_byte}")
-                logger.debug(f"   Bounded to body end: {bounded} (body_node.end_byte={body_node.end_byte})")
-                return bounded
-            else:
-                logger.debug(f"   find_last_statement=False, using body end: {body_node.end_byte}")
-                return body_node.end_byte
+            # For brace-based languages, we want to insert BEFORE the closing brace '}'
+            # but only if the body actually uses braces.
+            if self.language in ['c', 'cpp', 'java', 'javascript', 'typescript']:
+                 # Find the LAST closing brace in the body node
+                 body_text = self.source_code[body_node.start_byte:body_node.end_byte]
+                 last_brace_idx = body_text.rfind('}')
+                 if last_brace_idx != -1:
+                     insertion_pos = body_node.start_byte + last_brace_idx
+                     
+                     # We want to be at the end of the line BEFORE the closing brace
+                     # so find the newline preceding the brace
+                     search_start = max(0, last_brace_idx - 1)
+                     prev_newline = body_text.rfind('\n', 0, last_brace_idx)
+                     
+                     if prev_newline != -1:
+                         # Insert after the last statement's newline but before the brace's line
+                         insertion_pos = body_node.start_byte + prev_newline + 1
+                     else:
+                         # No newline, just move slightly before the brace
+                         while insertion_pos > body_node.start_byte and self.source_code[insertion_pos-1] in ' \t':
+                             insertion_pos -= 1
+                         
+                     logger.debug(f"   Found closing brace at {body_node.start_byte + last_brace_idx}, inserting at {insertion_pos}")
+                     return insertion_pos
+            
+            # Fallback to node end
+            return body_node.end_byte
                 
         elif rule.get("mode") == "before":
             logger.debug(f"   Processing before mode - inserting before node")
@@ -336,12 +352,12 @@ class ASTProcessor:
             return insertion_byte
         
         # Default fallback
-        logger.warning(f"⚠️  FALLBACK: Unknown rule mode '{rule.get('mode')}' for insertion mode '{insertion_mode}'")
-        if insertion_mode == 'before':
+        logger.warning(f"⚠️  FALLBACK: Unknown rule mode '{rule.get('mode')}' for insertion mode '{mode}'")
+        if mode == 'before':
             fallback_byte = node.start_byte
             logger.debug(f"   Using default before position: {fallback_byte}")
             return fallback_byte
-        elif insertion_mode == 'after':
+        elif mode == 'after':
             fallback_byte = node.end_byte
             logger.debug(f"   Using default after position: {fallback_byte}")
             return fallback_byte
@@ -1035,17 +1051,19 @@ class ASTRewriter:
         """Configuration-driven offset calculation using AST processor."""
         node: Node = point.node  # Assume added to dataclass
         
+        # If we have a node and an insertion mode, let the AST processor find the best point.
+        # This is more accurate than a fixed byte offset because it handles block boundaries,
+        # braces, and indentation based on the actual tree structure.
+        if node and point.insertion_mode:
+            insertion_offset = self.ast_processor.find_insertion_point(node, point.insertion_mode)
+            if insertion_offset is not None:
+                logger.debug(f"   AST processor found insertion offset: {insertion_offset}")
+                return insertion_offset
+
         if point.byte_offset is not None:
             logger.debug(f"   Using provided byte offset: {point.byte_offset}")
             return point.byte_offset
             
-        # Use the AST processor to find insertion point
-        insertion_offset = self.ast_processor.find_insertion_point(node, point.insertion_mode)
-        
-        if insertion_offset is not None:
-            logger.debug(f"   AST processor found insertion offset: {insertion_offset}")
-            return insertion_offset
-        
         # Fallback to line/column conversion
         fallback_offset = self._line_column_to_byte_offset(point.line, point.column)
         logger.debug(f"   Using fallback line/column offset: {fallback_offset}")
@@ -1111,6 +1129,11 @@ class ASTRewriter:
         result_code = self.current_code
         current_tree = self.tree.copy()
         
+        # Check if the tree already has errors to be more lenient during validation
+        had_errors_initially = self.tree.root_node.has_error
+        if had_errors_initially:
+            logger.info("⚠️  Original tree has syntax errors (possibly due to macros). Validation will be more lenient.")
+        
         successful_edits = 0
         failed_edits = 0
         
@@ -1130,7 +1153,9 @@ class ASTRewriter:
                 result_code, current_tree = self._apply_edit_with_tree_parsing(result_code, current_tree, edit)
                 
                 # Validate the edit didn't break syntax
-                if current_tree and current_tree.root_node.has_error:
+                # If it had errors initially, we only fail if it causes a crash or major failure
+                # (since we can't easily detect if NEW errors were added vs old ones remaining)
+                if current_tree and current_tree.root_node.has_error and not had_errors_initially:
                     logger.error(f"❌ Edit {i+1} caused syntax error: {edit.node_info}")
                     logger.error(f"   Edit type: {edit.edit_type}")
                     logger.error(f"   Byte offset: {edit.byte_offset}")
@@ -1337,7 +1362,8 @@ class ASTRewriter:
         elif edit.edit_type == 'insert_inside_end':
             # Insert before the last statement in the body (for implicit function exits)
             logger.debug(f"   Using insert_inside_end mode - inserting on new line before target")
-            result = code[:offset] + indented_text + '\n' + code[offset:]
+            prefix = '\n' if offset > 0 and code[offset-1] != '\n' else ''
+            result = code[:offset] + prefix + indented_text + '\n' + code[offset:]
             logger.debug(f"   insert_inside_end: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
         elif edit.edit_type == 'insert_immediately_before':
             # Insert directly before the node, without adding newlines or matching line indentation

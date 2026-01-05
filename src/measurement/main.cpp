@@ -379,6 +379,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         
+        // Configure measurement
+        codegreen::MeasurementConfig config;
+        config.language = language;
+        config.source_file = source_file;
+        config.cleanup_temp_files = true;
+        config.generate_report = true;
+
         // Prepare execution arguments (everything after the source file)
         // Also scan for CodeGreen-specific flags mixed in
         std::vector<std::string> exec_args;
@@ -390,18 +397,14 @@ int main(int argc, char* argv[]) {
                 json_output_path = arg.substr(14);
             } else if (arg == "--json-output" && i + 1 < argc) {
                 json_output_path = argv[++i];
+            } else if (arg == "--no-cleanup") {
+                config.cleanup_temp_files = false;
             } else {
                 exec_args.push_back(arg);
             }
         }
         
-        // Configure measurement
-        codegreen::MeasurementConfig config;
-        config.language = language;
-        config.source_file = source_file;
         config.execution_args = exec_args;
-        config.cleanup_temp_files = true;
-        config.generate_report = true;
         
         std::cout << "Generating energy measurement checkpoints..." << std::endl;
         

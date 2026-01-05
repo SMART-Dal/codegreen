@@ -40,11 +40,16 @@
                 "skip_comments": true
             },
             "function_exit": {
-                "mode": "inside_end",
-                "find_last_statement": true
+                "mode": "inside_end"
+            },
+            "class_exit": {
+                "mode": "inside_end"
             },
             "function_return": {
                 "mode": "immediately_before"
+            },
+            "loop_start": {
+                "mode": "inside_start"
             },
             "before": {
                 "mode": "before"
@@ -62,24 +67,10 @@
     "query_config": {
         "capture_mapping": {
             "function_def": "function_enter",
-            "class_specifier": "class_enter",
-            "struct_specifier": "class_enter",
-            "local.definition.type": "class_enter",
-            "loop.for": "loop_start",
-            "loop.while": "loop_start",
-            "loop.do": "loop_start",
-            "keyword.return": "function_return",
             "return": "function_return"
         },
         "priority_order": [
             "function_def",
-            "class_specifier",
-            "struct_specifier",
-            "local.definition.type",
-            "loop.for",
-            "loop.while",
-            "loop.do",
-            "keyword.return",
             "return"
         ]
     },
@@ -156,7 +147,8 @@
             "function_definition"
         ],
         "body_types": [
-            "compound_statement"
+            "compound_statement",
+            "class_body"
         ],
         "loop_types": [
             "for_statement",

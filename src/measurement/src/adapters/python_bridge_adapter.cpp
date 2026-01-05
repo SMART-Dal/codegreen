@@ -55,7 +55,8 @@ std::vector<CodeCheckpoint> PythonBridgeAdapter::generate_checkpoints(const std:
         
         // Call Python instrumentation system
         std::string python_script = instrumentation_path_.string() + "/bridge_analyze.py";
-        std::string command = "python3 " + python_script + " " + temp_file;
+        std::string stderr_file = "/tmp/codegreen_stderr_analyze_" + std::to_string(getpid()) + ".log";
+        std::string command = "python3 " + python_script + " " + temp_file + " 2> " + stderr_file;
         
         std::cout << "Calling Python instrumentation: " << command << std::endl;
         
@@ -64,6 +65,7 @@ std::vector<CodeCheckpoint> PythonBridgeAdapter::generate_checkpoints(const std:
         if (!pipe) {
             std::cerr << "Failed to call Python instrumentation system" << std::endl;
             std::filesystem::remove(temp_file);
+            std::filesystem::remove(stderr_file);
             return checkpoints;
         }
         
@@ -75,6 +77,18 @@ std::vector<CodeCheckpoint> PythonBridgeAdapter::generate_checkpoints(const std:
         }
         
         int status = pclose(pipe);
+        
+        // Read stderr
+        std::ifstream stderr_stream(stderr_file);
+        std::string stderr_content((std::istreambuf_iterator<char>(stderr_stream)),
+                                    std::istreambuf_iterator<char>());
+        stderr_stream.close();
+        std::filesystem::remove(stderr_file);
+        
+        if (!stderr_content.empty()) {
+            std::cout << "Analysis log:" << std::endl << stderr_content << std::endl;
+        }
+        
         if (status != 0) {
             std::cerr << "Python instrumentation failed with status: " << status << std::endl;
             std::cerr << "Output: " << result << std::endl;
@@ -105,7 +119,9 @@ std::string PythonBridgeAdapter::instrument_code(const std::string& source_code,
         
         // Call Python instrumentation system to instrument the code
         std::string python_script = instrumentation_path_.string() + "/bridge_instrument.py";
-        std::string command = "python3 " + python_script + " " + temp_file;
+        // Create a temporary file for stderr to avoid mixing streams in popen
+        std::string stderr_file = "/tmp/codegreen_stderr_" + std::to_string(getpid()) + ".log";
+        std::string command = "python3 " + python_script + " " + temp_file + " 2> " + stderr_file;
         
         std::cout << "Calling Python instrumentation for code generation: " << command << std::endl;
         
@@ -114,7 +130,8 @@ std::string PythonBridgeAdapter::instrument_code(const std::string& source_code,
         if (!pipe) {
             std::cerr << "Failed to call Python instrumentation system" << std::endl;
             std::filesystem::remove(temp_file);
-            return source_code; // Return original code on failure
+            std::filesystem::remove(stderr_file);
+            return source_code; 
         }
         
         // Read the instrumented code
@@ -125,9 +142,21 @@ std::string PythonBridgeAdapter::instrument_code(const std::string& source_code,
         }
         
         int status = pclose(pipe);
+        
+        // Read stderr content from file
+        std::ifstream stderr_stream(stderr_file);
+        std::string stderr_content((std::istreambuf_iterator<char>(stderr_stream)),
+                                    std::istreambuf_iterator<char>());
+        stderr_stream.close();
+        std::filesystem::remove(stderr_file);
+        
+        if (!stderr_content.empty()) {
+            std::cout << "Instrumentation log:" << std::endl << stderr_content << std::endl;
+        }
+        
         if (status != 0) {
             std::cerr << "Python instrumentation failed with status: " << status << std::endl;
-            return source_code; // Return original code on failure
+            return source_code; 
         }
         
         // Clean up temp file

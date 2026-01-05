@@ -150,32 +150,25 @@ def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
 
 
 def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str):
-    """Simplified checkpoint function for compatibility with instrumented code."""
+    """
+    Mark a checkpoint in the energy measurement stream.
+
+    Invocation tracking is handled automatically by the NEMB C++ backend.
+    Each call to the same checkpoint gets a unique invocation counter (#inv_N)
+    without overhead in the Python runtime.
+
+    Args:
+        checkpoint_id: Unique identifier for the checkpoint
+        name: Human-readable name
+        checkpoint_type: Type of checkpoint (enter, exit, etc.)
+    """
+    # Simple pass-through to NEMB backend
+    # Invocation counter (#inv_N) added automatically by backend
     measure_checkpoint(checkpoint_id, checkpoint_type, name, 0, "")
-
-
-def get_session_info() -> Dict:
-    """Get information about the current measurement session."""
-    global _measurement_session
-    
-    with _session_lock:
-        if _measurement_session is None:
-            return {'active': False}
-        
-        return {
-            'active': True,
-            'session_id': _measurement_session.session_id,
-            'start_time': _measurement_session.start_time,
-            'checkpoint_count': len(_measurement_session.measurements),
-            'process_id': _measurement_session.process_id
-        }
 
 
 # Export key functions for instrumented code
 __all__ = [
     'measure_checkpoint',
-    'checkpoint',
-    'initialize_session', 
-    'finalize_session',
-    'get_session_info'
+    'checkpoint'
 ]

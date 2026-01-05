@@ -304,13 +304,13 @@ class LanguageAgnosticInstrumentationGenerator:
             comment_prefix = config.get('comment_prefix', '//')
             return f'{comment_prefix} CodeGreen {point.type}: {point.name}'
         
-        # Generate the instrumentation code using the template
-        instrumentation_code = template.format(
-            checkpoint_id=point.id,
-            name=point.name,
-            function_name=point.name,
-            loop_name=point.name
-        )
+        # Generate the instrumentation code using manual replacement
+        # to avoid issues with literal braces in templates (like Java class_enter)
+        instrumentation_code = template
+        instrumentation_code = instrumentation_code.replace("{checkpoint_id}", point.id)
+        instrumentation_code = instrumentation_code.replace("{name}", point.name)
+        instrumentation_code = instrumentation_code.replace("{function_name}", point.name)
+        instrumentation_code = instrumentation_code.replace("{loop_name}", point.name)
         
         # Add statement terminator if needed
         terminator = config.get('statement_terminator', '')
@@ -1043,21 +1043,34 @@ class LanguageEngine:
             node_types = self._config_manager.get_node_types(language)
             def_types = node_types.get('function_types', []) + node_types.get('class_types', [])
             
-            if capture_config['type'] in ['function_exit', 'function_return']:
+            if capture_config['type'] in ['function_exit', 'function_return', 'class_enter', 'class_exit']:
                 # For returns, we want the full return statement node if possible
                 if capture_config['type'] == 'function_return':
-                    # Find parent return_statement
+                    # Find parent return_statement or similar
                     curr = node
-                    while curr and curr.type != 'return_statement':
+                    # Java/C/C++ usually use 'return_statement'
+                    while curr and curr.type not in ['return_statement', 'return']:
                         curr = curr.parent
                     if curr:
                         target_def_node = curr
                         # Update node reference so point creation uses the full statement
                         node = curr
                 
-                parent_func = self._find_parent_function(node, language)
-                if parent_func:
-                    name = self._get_node_name(parent_func, source_code, language)
+                # For class entry/exit, find the parent class definition
+                if capture_config['type'] in ['class_enter', 'class_exit']:
+                    # If we are already at a class definition type, use it
+                    if node.type in node_types.get('class_types', []):
+                        parent_def = node
+                    else:
+                        parent_def = self._find_parent_definition(node, language)
+                        
+                    if parent_def:
+                        target_def_node = parent_def
+                        name = self._get_node_name(parent_def, source_code, language)
+                else:
+                    parent_func = self._find_parent_function(node, language)
+                    if parent_func:
+                        name = self._get_node_name(parent_func, source_code, language)
             elif capture_config['type'] == 'loop_start':
                 # For loops, we prefer the capture name (e.g. loop_for) over any extracted name
                 name = capture_name.replace('.', '_')
@@ -1177,9 +1190,16 @@ class LanguageEngine:
                         
                         # Only create implicit exit if function doesn't end with return/raise
                         if not terminates:
+                            # Use AST processor to find correct insertion point
+                            ast_processor = ASTProcessor(language, source_code, None)
+                            exit_byte = ast_processor.find_insertion_point(body_node, 'inside_end')
+                            
                             exit_line = body_node.end_point.row + line_offset
                             exit_column = body_node.start_point.column + line_offset
-                            exit_byte = self._line_column_to_byte_offset(source_code, exit_line, exit_column)
+                            
+                            if exit_byte is None:
+                                exit_byte = self._line_column_to_byte_offset(source_code, exit_line, exit_column)
+                                
                             exit_point = InstrumentationPoint(
                                 id=f"function_exit_{name}_implicit_{exit_line}",
                                 type='function_exit',
@@ -2025,12 +2045,19 @@ class LanguageEngine:
         Returns:
             Instrumented source code with measurement calls
         """
+        logger.info(f"Instrumenting {len(points)} points for {language}")
         if not points:
+            logger.warning("No points to instrument")
             return source_code
         
         # Use AST-based instrumentation if tree-sitter is available
         if TREE_SITTER_AVAILABLE:
-            return self._instrument_code_ast_based(source_code, points, language)
+            result = self._instrument_code_ast_based(source_code, points, language)
+            if result == source_code:
+                logger.warning("Instrumentation returned original source code")
+            else:
+                logger.info(f"Instrumentation successful, length: {len(result)} (was {len(source_code)})")
+            return result
         else:
             # Fallback to line-based instrumentation
             logger.warning("Tree-sitter unavailable, using legacy line-based instrumentation")
@@ -2145,31 +2172,42 @@ class LanguageEngine:
             tree = parser.parse(source_code.encode('utf-8'))
             if not tree: return source_code
             rewriter = ASTRewriter(source_code, language, parser, tree)
+            
+            # Combine all points including import
+            all_points = self._deduplicate_checkpoints(points)
+            
             if points:
                 import_stmt = self._language_agnostic_generator.get_import_statement(language)
                 if import_stmt:
                     offset = self._find_import_insertion_point(source_code, language)
                     if offset is not None:
-                        rewriter.add_instrumentation(InstrumentationPoint(
+                        all_points.append(InstrumentationPoint(
                             id="import_runtime", type="import", subtype="runtime", name="import", 
                             line=1, column=0, context="import", byte_offset=offset, insertion_mode='before'
-                        ), import_stmt + '\n')
-            deduped = self._deduplicate_checkpoints(points)
-            sorted_p = sorted(deduped, key=lambda p: (
+                        ))
+            
+            sorted_p = sorted(all_points, key=lambda p: (
                 p.byte_offset if p.byte_offset is not None else p.line * 1000,
                 0 if p.type == 'function_enter' else 1
             ), reverse=True)
+            
             success_count = 0
             for p in sorted_p:
-                if p.byte_offset is not None and p.byte_offset > 0:
-                    if p.insertion_mode in ['inside_start', 'before', 'insert_inside_start', 'insert_before']:
-                        line_start = source_code.rfind('\n', 0, p.byte_offset) + 1
-                        if line_start != p.byte_offset: p.byte_offset = line_start
+                if p.type == "import":
+                    import_stmt = self._language_agnostic_generator.get_import_statement(language)
+                    if rewriter.add_instrumentation(p, import_stmt + '\n'):
+                        success_count += 1
+                    continue
+                    
                 code = self._language_agnostic_generator.generate_instrumentation(p, language)
                 if code and rewriter.add_instrumentation(p, code):
                     success_count += 1
             return rewriter.apply_edits() if success_count > 0 else source_code
-        except Exception: return source_code
+        except Exception as e:
+            logger.error(f"AST-based instrumentation failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return source_code
 
     def _instrument_code_legacy(self, source_code: str, points: List[InstrumentationPoint], language: str) -> str:
         """Minimal fallback legacy instrumenter"""

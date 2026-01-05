@@ -51,13 +51,17 @@ def main():
         )
         
         # Output instrumented code to stdout
-        print(instrumented_code)
+        sys.stderr.write(f"✓ Instrumentation complete ({len(instrumented_code)} bytes)\n")
+        sys.stdout.write(instrumented_code)
+        sys.stdout.flush()
             
     except Exception as e:
+        sys.stderr.write(f"Error in bridge_instrument: {e}\n")
         # Fallback to original code
         try:
             with open(source_file, 'r') as f:
-                print(f.read())
+                sys.stdout.write(f.read())
+                sys.stdout.flush()
         except:
             pass
         sys.exit(1)

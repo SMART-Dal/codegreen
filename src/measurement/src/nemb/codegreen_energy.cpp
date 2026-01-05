@@ -3,6 +3,7 @@
 #include "nemb/core/measurement_coordinator.hpp"
 #include "nemb/core/energy_provider.hpp"
 #include "nemb/utils/precision_timer.hpp"
+#include <jni.h>
 
 #include <sstream>
 #include <iomanip>
@@ -129,9 +130,18 @@ EnergyMeter::Impl::~Impl() {
 }
 
 void EnergyMeter::Impl::mark_checkpoint(const std::string& name) {
+    // Invocation tracking - thread_local for zero-lock performance
+    thread_local std::unordered_map<std::string, uint32_t> invocation_counters;
+
+    // Get and increment invocation counter
+    uint32_t invocation = ++invocation_counters[name];
+
+    // Format: "original_name#inv_N" for unique tracking
+    std::string enhanced_name = name + "#inv_" + std::to_string(invocation);
+
     uint64_t ts = timer_.get_timestamp_ns();
     std::lock_guard<std::mutex> lock(markers_mutex_);
-    markers_.push_back({name, ts});
+    markers_.push_back({enhanced_name, ts});
 }
 
 std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint_measurements() {
@@ -305,19 +315,24 @@ extern "C" {
 
     void nemb_report_at_exit() {
         std::lock_guard<std::mutex> l(c_api_mutex);
-        std::cout << "[DEBUG] nemb_report_at_exit called" << std::endl;
-        if(!c_api_meter) {
-            std::cout << "[DEBUG] c_api_meter is null" << std::endl;
+        if(!c_api_meter) return;
+
+        // Ensure measurements are stopped to flush buffered readings
+        // (Required for get_checkpoint_measurements to have data)
+        if (c_api_meter->impl_ && c_api_meter->impl_->coordinator_) {
+            c_api_meter->impl_->coordinator_->stop_measurements();
+        }
+
+        auto cps = c_api_meter->get_checkpoint_measurements();
+        if (cps.empty()) {
+            std::cerr << "DEBUG: No checkpoints collected (markers or readings empty)" << std::endl;
             return;
         }
-        auto cps = c_api_meter->get_checkpoint_measurements();
-        std::cout << "[DEBUG] Found " << cps.size() << " checkpoints" << std::endl;
-        if (cps.empty()) return;
 
         std::cout << "\n--- CODEGREEN_RESULT_START ---" << std::endl;
         std::cout << "{\"measurements\": [";
         for(size_t i=0; i<cps.size(); ++i) {
-            std::cout << "{\"checkpoint_id\": \"" << cps[i].name << "\", \"timestamp\": " << cps[i].timestamp_ns 
+            std::cout << "{\"checkpoint_id\": \"" << cps[i].name << "\", \"timestamp\": " << cps[i].timestamp_ns
                << ", \"joules\": " << cps[i].cumulative_energy_joules << ", \"watts\": " << cps[i].instantaneous_power_watts << "}";
             if(i < cps.size()-1) std::cout << ", ";
         }
@@ -328,12 +343,27 @@ extern "C" {
     void nemb_mark_checkpoint(const char* n) {
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
-            std::cout << "[DEBUG] Initializing c_api_meter for " << (n?n:"null") << std::endl;
             c_api_meter = std::make_unique<codegreen::EnergyMeter>();
             std::atexit(nemb_report_at_exit);
         }
         if(c_api_meter) c_api_meter->mark_checkpoint(n?n:"");
     }
+
+    // JNI Implementation for Java Runtime
+    JNIEXPORT void JNICALL Java_codegreen_runtime_CodeGreenRuntime_nemb_1mark_1checkpoint(
+        JNIEnv* env, jclass clazz, jstring name) {
+        const char* n = env->GetStringUTFChars(name, nullptr);
+        if (n) {
+            nemb_mark_checkpoint(n);
+            env->ReleaseStringUTFChars(name, n);
+        }
+    }
+
+    JNIEXPORT void JNICALL Java_codegreen_runtime_CodeGreenRuntime_nemb_1report_1at_1exit(
+        JNIEnv* env, jclass clazz) {
+        nemb_report_at_exit();
+    }
+
     int nemb_get_checkpoints_json(char* b, int m) {
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter || !b || m <= 0) return 0;

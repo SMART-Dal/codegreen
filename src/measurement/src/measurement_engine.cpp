@@ -85,10 +85,11 @@ bool compile_code(const std::string& source_file, std::string& out_binary, const
         out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".bin";
         cmd = "g++ -O2 -std=c++17 -o " + out_binary + " " + source_file + " -I" + include_dir.string() + " -L" + lib_dir.string() + " -lcodegreen-nemb -Wl,-rpath," + lib_dir.string() + " -lm";
     } else if (language == "java") {
-        std::filesystem::path src_dir = exe_dir / "../src/instrumentation/language_runtimes/java";
+        std::filesystem::path src_dir = exe_dir.parent_path() / "src/instrumentation/language_runtimes/java";
+        std::filesystem::path runtime_java = src_dir / "codegreen/runtime/CodeGreenRuntime.java";
         out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".class";
-        // Compile both runtime and source (simplification)
-        cmd = "javac -cp " + src_dir.string() + " " + source_file;
+        // Compile both runtime and source
+        cmd = "javac -cp " + src_dir.string() + " " + runtime_java.string() + " " + source_file;
     } else {
         return false;
     }
@@ -367,6 +368,11 @@ bool MeasurementEngine::execute_instrumented_code(const std::string& temp_file, 
         exec_args.push_back(strdup(cp_str.c_str())); 
         
         exec_args.push_back(strdup(lib_path.c_str()));
+        
+        // Add absolute library path for Java System.load()
+        std::string codegreen_lib_prop = "-Dcodegreen.lib.path=" + (lib_dir / "libcodegreen-nemb.so").string();
+        exec_args.push_back(strdup(codegreen_lib_prop.c_str()));
+        
         exec_args.push_back(strdup(path.stem().c_str())); // Class name
         
     } else if (extension == "" || extension == ".exe" || extension == ".bin") {
@@ -386,11 +392,16 @@ bool MeasurementEngine::execute_instrumented_code(const std::string& temp_file, 
     // Safe process execution
     pid_t pid = fork();
     if (pid == 0) {
-        // Set LD_LIBRARY_PATH for C/C++ binaries
+        // Set LD_LIBRARY_PATH for C/C++ binaries and Java native libraries
         auto& config = Config::instance();
-        std::filesystem::path lib_dir = config.get_executable_directory() / "../lib";
+        std::filesystem::path exe_dir = config.get_executable_directory();
+        std::filesystem::path lib_dir = exe_dir.parent_path() / "lib";
+        
         std::string current_ld = getenv("LD_LIBRARY_PATH") ? getenv("LD_LIBRARY_PATH") : "";
-        std::string new_ld = "LD_LIBRARY_PATH=" + lib_dir.string() + (current_ld.empty() ? "" : ":" + current_ld);
+        std::string new_ld = "LD_LIBRARY_PATH=" + lib_dir.string();
+        if (!current_ld.empty()) {
+            new_ld += ":" + current_ld;
+        }
         putenv(strdup(new_ld.c_str()));
         
         execvp(cmd.c_str(), const_cast<char* const*>(exec_args.data()));

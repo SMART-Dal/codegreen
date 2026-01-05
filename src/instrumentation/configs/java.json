@@ -37,8 +37,7 @@
                 "skip_comments": true
             },
             "function_exit": {
-                "mode": "inside_end",
-                "find_last_statement": true
+                "mode": "inside_end"
             },
             "function_return": {
                 "mode": "immediately_before"
@@ -50,8 +49,7 @@
                 "skip_comments": true
             },
             "class_exit": {
-                "mode": "inside_end",
-                "find_last_statement": true
+                "mode": "inside_end"
             },
             "before": {
                 "mode": "before"
@@ -71,24 +69,12 @@
             "method_def": "function_enter",
             "function.method": "function_enter",
             "local.definition.method": "function_enter",
-            "local.definition.type": "class_enter",
-            "loop.for": "loop_start",
-            "loop.while": "loop_start",
-            "loop.do": "loop_start",
-            "loop.enhanced_for": "loop_start",
-            "keyword.return": "function_return",
             "return": "function_return"
         },
         "priority_order": [
             "method_def",
             "function.method",
             "local.definition.method",
-            "local.definition.type",
-            "loop.for",
-            "loop.while",
-            "loop.do",
-            "loop.enhanced_for",
-            "keyword.return",
             "return"
         ]
     },
@@ -165,7 +151,8 @@
         ],
         "body_types": [
             "block",
-            "constructor_body"
+            "constructor_body",
+            "class_body"
         ],
         "class_types": [
             "class_declaration",

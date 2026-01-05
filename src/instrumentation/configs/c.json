@@ -32,8 +32,10 @@
                 "skip_comments": true
             },
             "function_exit": {
-                "mode": "inside_end",
-                "find_last_statement": true
+                "mode": "inside_end"
+            },
+            "class_exit": {
+                "mode": "inside_end"
             },
             "function_return": {
                 "mode": "immediately_before"
@@ -54,17 +56,10 @@
     "query_config": {
         "capture_mapping": {
             "function_def": "function_enter",
-            "loop.for": "loop_start",
-            "loop.while": "loop_start",
-            "loop.do": "loop_start",
-            "keyword.return": "function_return",
             "return": "function_return"
         },
         "priority_order": [
             "function_def",
-            "loop.for",
-            "loop.while",
-            "loop.do",
             "return"
         ]
     },

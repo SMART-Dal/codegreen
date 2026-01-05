@@ -10,6 +10,8 @@ extern "C" {
 /*
  * CodeGreen Runtime API for C
  * Links against libcodegreen-nemb.so
+ *
+ * Invocation tracking is handled automatically by the NEMB C++ backend.
  */
 
 /**
@@ -25,7 +27,8 @@ int nemb_initialize();
 void nemb_mark_checkpoint(const char* name);
 
 /**
- * Convenience macro for marking checkpoints with format string
+ * Checkpoint macro - simple pass-through to NEMB backend.
+ * Invocation counter (#inv_N) is added automatically by the backend.
  */
 #define codegreen_checkpoint(id, name, type) \
     do { \

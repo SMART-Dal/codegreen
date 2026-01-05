@@ -20,6 +20,7 @@ import subprocess
 import platform
 import shutil
 import json
+import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Annotated, Union
 from enum import Enum
@@ -739,6 +740,8 @@ def measure_energy(
     json_output: Annotated[bool, typer.Option("--json", help="Output results in JSON format")] = False,
     precision: Annotated[Precision, typer.Option("--precision", "-p", help="Measurement precision")] = Precision.high,
     timeout: Annotated[Optional[int], typer.Option("--timeout", "-t", help="Timeout in seconds")] = None,
+    no_cleanup: Annotated[bool, typer.Option("--no-cleanup", help="Keep temporary files")] = False,
+    is_instrumented: Annotated[bool, typer.Option("--instrumented", help="Script is already instrumented")] = False,
     args: Annotated[Optional[List[str]], typer.Argument(help="Arguments to pass to the script")] = None,
 ):
     """
@@ -768,7 +771,7 @@ def measure_energy(
         raise typer.Exit(1)
     
     try:
-        # Read source code
+        # Step 1: Analyze code (always do this for suggestions and metadata)
         with open(script, 'r', encoding='utf-8') as f:
             source_code = f.read()
         
@@ -776,13 +779,8 @@ def measure_energy(
             console.print(f"[green]Analyzing code structure...[/green]")
             console.print(f"Language: [cyan]{language.value}[/cyan]")
             console.print(f"Script: [cyan]{script}[/cyan]")
-            console.print(f"Precision: [cyan]{precision.value}[/cyan]")
             
-            if sensors:
-                console.print(f"Sensors: [cyan]{', '.join([s.value for s in sensors])}[/cyan]")
-
         from ..instrumentation.language_engine import LanguageEngine
-
         engine = LanguageEngine()
         result = engine.analyze_code(source_code, language.value)
 
@@ -794,86 +792,65 @@ def measure_energy(
             raise typer.Exit(1)
         
         if not json_output:
-            # Display analysis results
             console.print(f"[green]✓ Analysis completed![/green]")
-            console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
             console.print(f"Instrumentation points found: [cyan]{result.checkpoint_count}[/cyan]")
-            console.print(f"Analysis time: [cyan]{result.metadata.get('analysis_time_ms', 0):.2f}ms[/cyan]")
         
-        if verbose and not json_output:
-            # Show instrumentation points
-            console.print("\n[bold]Instrumentation Points:[/bold]")
-            table = Table()
-            table.add_column("Type", style="cyan")
-            table.add_column("Name", style="green")
-            table.add_column("Line", style="yellow")
-            table.add_column("Context", style="dim")
-            
-            for point in result.instrumentation_points[:10]:  # Show first 10
-                table.add_row(
-                    point.type,
-                    point.name,
-                    str(point.line),
-                    point.context[:50] + "..." if len(point.context) > 50 else point.context
-                )
-            
-            if len(result.instrumentation_points) > 10:
-                table.add_row("...", f"+{len(result.instrumentation_points) - 10} more", "", "")
-            
-            console.print(table)
+        # Step 2: Handle Instrumentation
+        run_path = script
+        temp_dir = None
         
-        # Show optimization suggestions
-        if result.optimization_suggestions and not json_output:
-            console.print(f"\n[bold yellow]💡 Optimization Suggestions:[/bold yellow]")
-            for i, suggestion in enumerate(result.optimization_suggestions, 1):
-                console.print(f"  {i}. {suggestion}")
-        
-        # Instrument code
-        if not json_output:
-            console.print(f"\n[green]Instrumenting code for energy measurement...[/green]")
-        instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
-        
-        # Create instrumented file
-        instrumented_path = script.with_name(f'{script.stem}_instrumented{script.suffix}')
-        with open(instrumented_path, 'w', encoding='utf-8') as f:
-            f.write(instrumented_code)
-        
-        if not json_output:
-            console.print(f"[green]✓ Instrumented code saved to: {instrumented_path}[/green]")
-        
-        # Now run the measurement
-        measurement_result = None
-        if _should_run_actual_measurement(sensors):
+        if language == Language.python and not is_instrumented:
+            # Python MUST be pre-instrumented because the measurement is done via runtime hooks
             if not json_output:
-                console.print(f"\n[green]Running energy measurement...[/green]")
-            measurement_result = _run_energy_measurement(
-                instrumented_path, language, sensors, verbose and not json_output, timeout, args, json_output
-            )
+                console.print(f"\n[green]Instrumenting Python code...[/green]")
+            instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
+            run_path = script.with_name(f'{script.stem}_instrumented{script.suffix}')
+            with open(run_path, 'w', encoding='utf-8') as f:
+                f.write(instrumented_code)
+        elif not is_instrumented:
+            # For C/C++/Java, we let the C++ binary handle instrumentation and execution
+            # This avoids double-instrumentation bugs and handles Java filename requirements
+            pass
             
-            if output:
-                _save_measurement_results(output, result, measurement_result)
+        # Step 3: Run the measurement
+        try:
+            measurement_result = None
+            if _should_run_actual_measurement(sensors):
                 if not json_output:
-                    console.print(f"[green]✓ Results saved to: {output}[/green]")
-        else:
-            if not json_output:
-                console.print(f"\n[yellow]Note: No energy sensors available. Code analysis and instrumentation completed.[/yellow]")
-                console.print(f"To run with actual energy measurement, ensure RAPL or other sensors are available.")
-        
-        if json_output:
-            combined_results = {
-                'timestamp': datetime.now().isoformat(),
-                'analysis': {
-                    'language': result.language,
-                    'success': result.success,
-                    'instrumentation_points_count': result.checkpoint_count,
-                    'optimization_suggestions': result.optimization_suggestions,
-                    'metadata': result.metadata
-                },
-                'measurement': measurement_result
-            }
-            print(json.dumps(combined_results, indent=2))
-        else:
-            console.print(f"\n[green]✓ CodeGreen measurement completed successfully![/green]")
+                    console.print(f"\n[green]Running energy measurement...[/green]")
+                measurement_result = _run_energy_measurement(
+                    run_path, language, sensors, verbose and not json_output, timeout, args, json_output
+                )
+                
+                if output:
+                    _save_measurement_results(output, result, measurement_result)
+                    if not json_output:
+                        console.print(f"[green]✓ Results saved to: {output}[/green]")
+            else:
+                if not json_output:
+                    console.print(f"\n[yellow]Note: No energy sensors available. Code analysis completed.[/yellow]")
+            
+            if json_output:
+                combined_results = {
+                    'timestamp': datetime.now().isoformat(),
+                    'analysis': {
+                        'language': result.language,
+                        'success': result.success,
+                        'instrumentation_points_count': result.checkpoint_count,
+                        'optimization_suggestions': result.optimization_suggestions,
+                        'metadata': result.metadata
+                    },
+                    'measurement': measurement_result
+                }
+                print(json.dumps(combined_results, indent=2))
+            else:
+                if measurement_result and measurement_result.get('success'):
+                    console.print(f"\n[green]✓ CodeGreen measurement completed successfully![/green]")
+        finally:
+            # Cleanup
+            if not no_cleanup and run_path != script:
+                if run_path.exists():
+                    os.remove(run_path)
         
     except FileNotFoundError as e:
         if not json_output:
@@ -929,7 +906,8 @@ def _run_energy_measurement(
     verbose: bool,
     timeout: Optional[int],
     args: Optional[List[str]],
-    json_output: bool = False
+    json_output: bool = False,
+    no_cleanup: bool = False
 ) -> Dict[str, Any]:
     """Run actual energy measurement on instrumented code"""
 
@@ -964,6 +942,9 @@ def _run_energy_measurement(
 
         if verbose:
             cmd.append('--verbose')
+
+        if no_cleanup:
+            cmd.append('--no-cleanup')
 
         if args:
             cmd.extend(args)
