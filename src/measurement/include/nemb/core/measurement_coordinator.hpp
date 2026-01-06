@@ -204,8 +204,8 @@ private:
     mutable std::mutex readings_mutex_;
     std::condition_variable readings_condition_;
     std::vector<SynchronizedReading> readings_buffer_;
-    size_t buffer_write_index_{0};
-    bool buffer_full_{false};
+    std::atomic<size_t> buffer_write_index_{0};
+    std::atomic<bool> buffer_full_{false};
     
     // Statistics
     mutable std::mutex stats_mutex_;

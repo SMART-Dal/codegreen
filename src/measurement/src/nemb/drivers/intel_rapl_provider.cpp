@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <ctime>
 
 namespace codegreen::nemb::drivers {
 
@@ -78,8 +79,14 @@ bool IntelRAPLProvider::initialize() {
 EnergyReading IntelRAPLProvider::get_reading() {
     EnergyReading reading;
     reading.provider_id = "intel_rapl";
+
+    // Use CLOCK_MONOTONIC to match PrecisionTimer for checkpoint correlation
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    reading.timestamp_ns = static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
+
+    // Keep system_time for compatibility and dt calculation
     auto now = std::chrono::steady_clock::now();
-    reading.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
     reading.system_time = now;
     
     if (!initialized_) {

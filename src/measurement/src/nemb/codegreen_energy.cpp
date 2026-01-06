@@ -107,12 +107,15 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
     coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
     
     coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
-    
+
+    // Pre-allocate marker storage to reduce reallocation overhead (typical workload ~10K checkpoints)
+    markers_.reserve(10000);
+
     auto providers = nemb::detect_available_providers();
     for (auto& provider : providers) {
         coordinator_->add_provider(std::move(provider));
     }
-    
+
     if (!coordinator_->start_measurements()) {
         throw std::runtime_error("Failed to start NEMB measurement coordinator");
     }
@@ -133,23 +136,37 @@ void EnergyMeter::Impl::mark_checkpoint(const std::string& name) {
     // Invocation tracking - thread_local for zero-lock performance
     thread_local std::unordered_map<std::string, uint32_t> invocation_counters;
 
+    // Get thread ID for multi-thread uniqueness (computed once per thread)
+    thread_local std::hash<std::thread::id> hasher;
+    thread_local size_t thread_hash = hasher(std::this_thread::get_id());
+
     // Get and increment invocation counter
     uint32_t invocation = ++invocation_counters[name];
 
-    // Format: "original_name#inv_N" for unique tracking
-    std::string enhanced_name = name + "#inv_" + std::to_string(invocation);
-
+    // Get timestamp BEFORE lock to minimize critical section
     uint64_t ts = timer_.get_timestamp_ns();
-    std::lock_guard<std::mutex> lock(markers_mutex_);
-    markers_.push_back({enhanced_name, ts});
+
+    // Pre-allocate buffer to avoid heap allocations (stack-based)
+    // Format: "original_name#inv_N_tTHREADID"
+    thread_local char enhanced_buffer[512];
+    int len = snprintf(enhanced_buffer, sizeof(enhanced_buffer),
+                       "%s#inv_%u_t%zu", name.c_str(), invocation, thread_hash);
+
+    if (len < 0 || len >= static_cast<int>(sizeof(enhanced_buffer))) {
+        // Fallback for very long names (rare)
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        markers_.push_back({name + "#inv_" + std::to_string(invocation) + "_t" + std::to_string(thread_hash), ts});
+    } else {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        markers_.push_back({std::string(enhanced_buffer, len), ts});
+    }
 }
 
 std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint_measurements() {
     std::vector<EnergyMeter::CorrelatedCheckpoint> result;
     auto readings = coordinator_->get_buffered_readings();
-    
     if (readings.empty()) return result;
-    
+
     std::lock_guard<std::mutex> lock(markers_mutex_);
     result.reserve(markers_.size());
     
@@ -170,12 +187,13 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             cc.cumulative_energy_joules = it->total_system_energy_joules;
             cc.instantaneous_power_watts = it->total_system_power_watts;
         } else {
-            const auto& r2 = *it;
-            const auto& r1 = *std::prev(it);
-            uint64_t dt = r2.common_timestamp_ns - r1.common_timestamp_ns;
-            double ratio = (dt > 0) ? static_cast<double>(marker.timestamp_ns - r1.common_timestamp_ns) / dt : 0.0;
-            cc.cumulative_energy_joules = r1.total_system_energy_joules + ratio * (r2.total_system_energy_joules - r1.total_system_energy_joules);
-            cc.instantaneous_power_watts = r1.total_system_power_watts + ratio * (r2.total_system_power_watts - r1.total_system_power_watts);
+                const auto& r2 = *it;
+                const auto& r1 = *std::prev(it);
+                uint64_t dt = r2.common_timestamp_ns - r1.common_timestamp_ns;
+                double ratio = (dt > 0) ? static_cast<double>(marker.timestamp_ns - r1.common_timestamp_ns) / dt : 0.0;
+                cc.cumulative_energy_joules = r1.total_system_energy_joules + ratio * (r2.total_system_energy_joules - r1.total_system_energy_joules);
+                cc.instantaneous_power_watts = r1.total_system_power_watts + ratio * (r2.total_system_power_watts - r1.total_system_power_watts);
+            }
         }
         result.push_back(cc);
     }
@@ -317,17 +335,8 @@ extern "C" {
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) return;
 
-        // Ensure measurements are stopped to flush buffered readings
-        // (Required for get_checkpoint_measurements to have data)
-        if (c_api_meter->impl_ && c_api_meter->impl_->coordinator_) {
-            c_api_meter->impl_->coordinator_->stop_measurements();
-        }
-
         auto cps = c_api_meter->get_checkpoint_measurements();
-        if (cps.empty()) {
-            std::cerr << "DEBUG: No checkpoints collected (markers or readings empty)" << std::endl;
-            return;
-        }
+        if (cps.empty()) return;
 
         std::cout << "\n--- CODEGREEN_RESULT_START ---" << std::endl;
         std::cout << "{\"measurements\": [";

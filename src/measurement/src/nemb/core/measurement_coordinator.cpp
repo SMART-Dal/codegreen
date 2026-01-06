@@ -230,32 +230,33 @@ bool MeasurementCoordinator::restart_provider(const std::string& provider_name) 
 
 std::vector<SynchronizedReading> MeasurementCoordinator::get_buffered_readings() const {
     std::lock_guard<std::mutex> lock(readings_mutex_);
-    
+
     std::vector<SynchronizedReading> result;
     if (readings_buffer_.empty()) return result;
-    
+
     result.reserve(readings_buffer_.size());
-    
-    if (!buffer_full_) {
+
+    if (!buffer_full_.load(std::memory_order_acquire)) {
         // Simple case: just copy the readings
         result.assign(readings_buffer_.begin(), readings_buffer_.end());
     } else {
         // Circular buffer: start from buffer_write_index_ and wrap around
+        size_t write_idx = buffer_write_index_.load(std::memory_order_acquire);
         for (size_t i = 0; i < readings_buffer_.size(); ++i) {
-            result.push_back(readings_buffer_[(buffer_write_index_ + i) % readings_buffer_.size()]);
+            result.push_back(readings_buffer_[(write_idx + i) % readings_buffer_.size()]);
         }
     }
-    
+
     return result;
 }
 
 void MeasurementCoordinator::set_buffer_size(size_t size) {
     std::lock_guard<std::mutex> lock(readings_mutex_);
-    
+
     readings_buffer_.clear();
     readings_buffer_.reserve(size);
-    buffer_write_index_ = 0;
-    buffer_full_ = false;
+    buffer_write_index_.store(0, std::memory_order_release);
+    buffer_full_.store(false, std::memory_order_release);
     config_.measurement_buffer_size = static_cast<uint32_t>(size);
 }
 
@@ -458,16 +459,17 @@ void MeasurementCoordinator::apply_real_time_filtering(SynchronizedReading& read
 
 void MeasurementCoordinator::buffer_reading(const SynchronizedReading& reading) {
     std::lock_guard<std::mutex> lock(readings_mutex_);
-    
+
     if (readings_buffer_.size() < config_.measurement_buffer_size) {
         readings_buffer_.push_back(reading);
     } else {
         // Circular buffer - overwrite oldest
-        readings_buffer_[buffer_write_index_] = reading;
-        buffer_write_index_ = (buffer_write_index_ + 1) % config_.measurement_buffer_size;
-        buffer_full_ = true;
+        size_t write_idx = buffer_write_index_.load(std::memory_order_relaxed);
+        readings_buffer_[write_idx] = reading;
+        buffer_write_index_.store((write_idx + 1) % config_.measurement_buffer_size, std::memory_order_release);
+        buffer_full_.store(true, std::memory_order_release);
     }
-    
+
     readings_condition_.notify_one();
 }
 
