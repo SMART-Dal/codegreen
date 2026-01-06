@@ -134,9 +134,11 @@ nav:
     - Configuration: getting-started/configuration.md
   - User Guide:
     - CLI Reference: user-guide/cli-reference.md
+    - Configuration Reference: user-guide/configuration-reference.md
     - Energy Measurement: user-guide/energy-measurement.md
     - Code Analysis: user-guide/code-analysis.md
     - Reports and Visualization: user-guide/reports.md
+    - CI/CD Integration: user-guide/cicd-integration.md
   - API Reference:
     - Python API: api/python.md
     - Core Engine: api/core.md

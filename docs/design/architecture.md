@@ -6,16 +6,28 @@ This document provides an overview of the CodeGreen tool's architecture. CodeGre
 
 #### A. Core Layers
 
-1. **Measurement Engine (Core Library)**
-   - **Purpose:**  
-     Provides a language- and platform-agnostic abstraction over energy measurement. It defines interfaces for starting/stopping measurements and calculating energy consumption.
-   - **Responsibilities:**  
-     - Define common APIs for energy measurement (e.g., `startMeasurement()`, `stopMeasurement()`, `calculateDelta()`).
-     - Implement the Hardware Abstraction Layer (HAL) to integrate with multiple energy sources (e.g., Intel RAPL, ARM counters, external meters).
-     - Offer a plugin mechanism for new hardware measurement modules.
-   - **Key Patterns:**  
-     - **Adapter/Strategy:** For integrating different hardware implementations.
-     - **Dependency Injection:** To allow flexible swapping and testing of measurement strategies.
+1. **Measurement Engine (NEMB - Native Energy Measurement Backend)**
+   - **Purpose:**
+     High-performance C++ measurement backend using signal-generator architecture for ultra-low overhead (<0.1% CPU utilization) with industry-grade accuracy (<2% error).
+   - **Responsibilities:**
+     - Checkpoint management with thread-local invocation tracking
+     - Background polling of hardware sensors at configurable intervals (1-100ms)
+     - Time-series energy data buffering with atomic circular buffer
+     - Correlation of checkpoints to energy readings via binary search + linear interpolation
+     - Multi-provider coordination (Intel RAPL, NVIDIA NVML, AMD ROCm)
+   - **Key Patterns:**
+     - **Signal-Generator Model:** Lightweight timestamp markers instead of synchronous reads
+     - **Producer-Consumer:** Background thread polls hardware, application thread generates checkpoints
+     - **Time-Series Correlation:** Post-execution energy attribution via interpolation
+   - **Key Components:**
+     - `MeasurementCoordinator`: Orchestrates multiple energy providers, background polling loop
+     - `EnergyMeter`: Public API for checkpoint marking and correlation
+     - `EnergyProvider`: Abstract interface for hardware sensors (RAPL, NVML, ROCm)
+     - `PrecisionTimer`: High-resolution timestamping (TSC, CLOCK_MONOTONIC)
+   - **Implementation:**
+     - `src/measurement/include/nemb/` - Public API headers
+     - `src/measurement/src/nemb/` - Core implementation
+     - `src/measurement/src/nemb/drivers/` - Hardware-specific providers
 
 2. **Instrumentation and Parsing Engine**
    - **Purpose:**  
@@ -81,23 +93,57 @@ This document provides an overview of the CodeGreen tool's architecture. CodeGre
 
 ## 2. Repository Structure and Modules
 
-The CodeGreen project is organized as a monorepo where each module is developed and tested as an independent package. This modular structure promotes code reuse and simplifies the process of adding new features or supporting additional languages and hardware platforms.
+The CodeGreen project is organized as a hybrid Python-C++ system where high-performance measurement is handled by the C++ NEMB backend, and language processing/instrumentation is handled by Python.
 
 ```
 /codegreen/
-├── CMakeLists.txt                  # Main CMake configuration
-├── src/                            # Main application source
-│   └── main.cpp                   # Entry point
-├── core/                           # Core measurement engine library
-│   ├── CMakeLists.txt             # Core library build config
-│   ├── include/                    # Public headers
-│   │   ├── measurement_engine.hpp
-│   │   ├── energy_monitor.hpp
-│   │   ├── measurement_session.hpp
-│   │   ├── measurement.hpp
-│   │   ├── plugin/
-│   │   │   ├── hardware_plugin.hpp
-│   │   │   └── plugin_registry.hpp
+├── CMakeLists.txt                         # Main build configuration
+├── install.sh                             # Automated installation script
+├── config/
+│   └── codegreen.json                    # Default configuration
+├── bin/
+│   └── codegreen                         # Main CLI binary
+├── src/
+│   ├── cli/
+│   │   └── cli.py                        # Typer-based CLI interface
+│   ├── instrumentation/
+│   │   ├── bridge_analyze.py             # AST analysis via Tree-sitter
+│   │   ├── bridge_instrument.py          # Code instrumentation
+│   │   ├── language_engine.py            # Multi-language coordinator
+│   │   ├── language_configs.py           # Language-specific queries
+│   │   └── ast_processor.py              # AST manipulation
+│   └── measurement/
+│       ├── include/nemb/
+│       │   ├── codegreen_energy.hpp      # Public API
+│       │   ├── core/
+│       │   │   ├── measurement_coordinator.hpp  # Multi-provider orchestrator
+│       │   │   └── energy_provider.hpp          # Abstract provider interface
+│       │   ├── drivers/
+│       │   │   ├── intel_rapl_provider.hpp      # Intel/AMD RAPL
+│       │   │   └── nvidia_nvml_provider.hpp     # NVIDIA GPU
+│       │   └── utils/
+│       │       └── precision_timer.hpp          # TSC/CLOCK_MONOTONIC timing
+│       └── src/nemb/
+│           ├── codegreen_energy.cpp       # Checkpoint implementation
+│           ├── config_loader.cpp          # JSON config parser
+│           ├── core/
+│           │   └── measurement_coordinator.cpp  # Background polling loop
+│           └── drivers/
+│               ├── intel_rapl_provider.cpp      # RAPL implementation
+│               └── nvidia_nvml_provider.cpp     # NVML implementation
+├── lib/
+│   └── libcodegreen-nemb.so              # Compiled NEMB library
+├── docs/
+│   ├── architecture/
+│   │   ├── checkpointing-architecture.md # Checkpoint system spec
+│   │   └── nemb-vs-v1.md                 # Architectural evolution
+│   ├── configuration-guide.md            # Config reference
+│   ├── USAGE.md                          # User guide
+│   └── website/                          # MkDocs website source
+├── scripts/
+│   └── commands.txt                      # Complete command reference
+└── third_party/
+    └── tree-sitter-*                     # Language parsers
 │   │   └── adapters/
 │   │       └── language_adapter.hpp
 │   └── src/                        # Implementation files

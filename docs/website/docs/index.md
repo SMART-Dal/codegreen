@@ -24,7 +24,7 @@
 
     Detailed energy reports, visualizations, and optimization suggestions.
 
-    [:octicons-arrow-right-24: Reports](user-guide/reports.md)
+    [:octicons-arrow-right-24: CLI Reference](user-guide/cli-reference.md)
 
 -   :material-cog:{ .lg .middle } **Easy Integration**
 
@@ -36,9 +36,28 @@
 
 </div>
 
+## Demo
+
+<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; height: auto;">
+    <!-- Replace src with your actual video URL or embed link -->
+    <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" frameborder="0" allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe>
+</div>
+*Watch CodeGreen in action: measuring energy consumption of a Python script.*
+
 ## What is CodeGreen?
 
 CodeGreen is a comprehensive energy monitoring and optimization tool designed to help developers understand and reduce the energy consumption of their software. By providing real-time energy measurements, detailed analytics, and optimization suggestions, CodeGreen enables energy-aware software development.
+
+### Architecture
+
+CodeGreen uses the **Native Energy Measurement Backend (NEMB)**, a high-performance C++ measurement engine that:
+
+- **Signal-Generator Model**: Lightweight timestamp markers (~100-200ns overhead) instead of synchronous hardware reads (~5-20μs)
+- **Background Polling**: Independent C++ thread samples hardware sensors at configurable intervals (1-100ms)
+- **Time-Series Correlation**: Binary search + linear interpolation matches checkpoints to energy readings
+- **Thread-Safe Invocation Tracking**: Handles recursive functions and multi-threaded code with zero-lock performance
+
+This achieves **25-100x lower overhead** than traditional profiling while maintaining **±2% accuracy**.
 
 ### Key Features
 
@@ -56,13 +75,15 @@ Get started with CodeGreen in just a few steps:
 === "Installation"
 
     ```bash
-    pip install codegreen
+    git clone https://github.com/codegreen/codegreen.git
+    cd codegreen
+    ./install.sh
     ```
 
 === "Initialize"
 
     ```bash
-    codegreen init
+    sudo codegreen init-sensors
     ```
 
 === "Measure"
@@ -106,7 +127,6 @@ Get started with CodeGreen in just a few steps:
 Join our community to get help, share ideas, and contribute to CodeGreen:
 
 - [:material-github: GitHub](https://github.com/codegreen/codegreen) - Source code and issues
-- [:material-python: PyPI](https://pypi.org/project/codegreen/) - Python package
 - [:material-chat: Discussions](https://github.com/codegreen/codegreen/discussions) - Community discussions
 
 ## License

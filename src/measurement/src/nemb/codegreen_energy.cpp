@@ -187,13 +187,12 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             cc.cumulative_energy_joules = it->total_system_energy_joules;
             cc.instantaneous_power_watts = it->total_system_power_watts;
         } else {
-                const auto& r2 = *it;
-                const auto& r1 = *std::prev(it);
-                uint64_t dt = r2.common_timestamp_ns - r1.common_timestamp_ns;
-                double ratio = (dt > 0) ? static_cast<double>(marker.timestamp_ns - r1.common_timestamp_ns) / dt : 0.0;
-                cc.cumulative_energy_joules = r1.total_system_energy_joules + ratio * (r2.total_system_energy_joules - r1.total_system_energy_joules);
-                cc.instantaneous_power_watts = r1.total_system_power_watts + ratio * (r2.total_system_power_watts - r1.total_system_power_watts);
-            }
+            const auto& r2 = *it;
+            const auto& r1 = *std::prev(it);
+            uint64_t dt = r2.common_timestamp_ns - r1.common_timestamp_ns;
+            double ratio = (dt > 0) ? static_cast<double>(marker.timestamp_ns - r1.common_timestamp_ns) / dt : 0.0;
+            cc.cumulative_energy_joules = r1.total_system_energy_joules + ratio * (r2.total_system_energy_joules - r1.total_system_energy_joules);
+            cc.instantaneous_power_watts = r1.total_system_power_watts + ratio * (r2.total_system_power_watts - r1.total_system_power_watts);
         }
         result.push_back(cc);
     }

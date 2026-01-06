@@ -24,46 +24,38 @@
     }
   },
   "measurement": {
-    "timing": {
-      "precision": "maximum",
-      "clock_source": "auto",
-      "sync_method": "tsc",
-      "calibration_samples": 100
-    },
     "nemb": {
       "enabled": true,
-      "accuracy_mode": "production",
+      "coordinator": {
+        "measurement_interval_ms": 1,
+        "measurement_buffer_size": 100000,
+        "auto_restart_failed_providers": true,
+        "provider_restart_interval": 5000,
+        "cross_validation": true,
+        "cross_validation_threshold": 0.05
+      },
+      "timing": {
+        "precision": "high",
+        "clock_source": "auto"
+      },
       "providers": {
         "intel_rapl": {
           "enabled": true,
-          "access_method": "auto",
           "domains": [
             "package",
             "pp0",
-            "pp1",
             "dram"
           ],
           "validation_enabled": true
         },
-        "nvidia_gpu": {
+        "nvidia_nvml": {
           "enabled": true,
-          "device_selection": "all",
-          "power_sampling_hz": 100,
+          "device_indices": [0],
           "validation_enabled": true
         },
-        "amd_cpu": {
-          "enabled": true,
-          "access_method": "auto",
-          "validation_enabled": true
+        "amd_rocm": {
+          "enabled": false
         }
-      },
-      "coordinator": {
-        "cross_validation": true,
-        "cross_validation_threshold": 0.05,
-        "temporal_alignment_tolerance_ms": 0.1,
-        "measurement_buffer_size": 1000,
-        "auto_restart_failed_providers": true,
-        "provider_restart_interval_s": 30
       },
       "accuracy": {
         "target_uncertainty_percent": 1.0,
@@ -73,28 +65,25 @@
         "statistical_validation": true,
         "confidence_threshold": 0.95
       }
-    },
-    "pmt_legacy": {
-      "enabled": false,
-      "preferred_sensors": [
-        "rapl",
-        "nvml",
-        "dummy"
-      ],
-      "fallback_enabled": true,
-      "validation_enabled": true,
-      "max_init_time_ms": 5000,
-      "measurement_interval_ms": 1
-    },
-    "accuracy": {
-      "priority": "maximum",
-      "separate_instrumentation_phase": true,
-      "minimize_io_during_measurement": true,
-      "preload_runtime_modules": true,
-      "disable_frequency_scaling": false,
-      "cpu_affinity": "auto",
-      "memory_prefaulting": true,
-      "minimize_system_noise": true
+    }
+  },
+  "instrumentation": {
+    "checkpoint_strategy": "functions",
+    "track_invocations": true,
+    "track_threads": true,
+    "language_specific": {
+      "python": {
+        "instrument_loops": false,
+        "max_recursion_depth": 100
+      },
+      "cpp": {
+        "instrument_loops": false,
+        "track_templates": true
+      },
+      "java": {
+        "instrument_loops": false,
+        "track_lambdas": true
+      }
     }
   },
   "performance": {
@@ -123,30 +112,22 @@
     "python": {
       "executable": "python3",
       "runtime_module": "codegreen_runtime.py",
-      "extensions": [
-        ".py",
-        ".pyw",
-        ".pyi"
-      ],
-      "optimization_enabled": true
+      "extensions": [".py", ".pyw", ".pyi"]
+    },
+    "c": {
+      "executable": "gcc",
+      "compiler_flags": ["-O0", "-g"],
+      "extensions": [".c", ".h"]
     },
     "cpp": {
       "executable": "g++",
-      "extensions": [
-        ".cpp",
-        ".cxx",
-        ".cc",
-        ".hpp",
-        ".h"
-      ],
-      "optimization_enabled": false
+      "compiler_flags": ["-O0", "-g", "-std=c++17"],
+      "extensions": [".cpp", ".cxx", ".cc", ".hpp", ".h"]
     },
     "java": {
       "executable": "java",
-      "extensions": [
-        ".java"
-      ],
-      "optimization_enabled": false
+      "compiler": "javac",
+      "extensions": [".java"]
     }
   },
   "developer": {

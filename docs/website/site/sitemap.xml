@@ -2,34 +2,86 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://codegreen.github.io/codegreen/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/about/changelog/</loc>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/about/license/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/api/config/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/api/core/</loc>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/api/python/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/development/architecture/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/development/building/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/development/contributing/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/examples/cpp/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/examples/java/</loc>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/examples/python/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/getting-started/configuration/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/getting-started/installation/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/getting-started/quickstart/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/user-guide/cicd-integration/</loc>
+         <lastmod>2026-01-06</lastmod>
     </url>
     <url>
          <loc>https://codegreen.github.io/codegreen/user-guide/cli-reference/</loc>
-         <lastmod>2025-09-03</lastmod>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/user-guide/code-analysis/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/user-guide/configuration-reference/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/user-guide/energy-measurement/</loc>
+         <lastmod>2026-01-06</lastmod>
+    </url>
+    <url>
+         <loc>https://codegreen.github.io/codegreen/user-guide/reports/</loc>
+         <lastmod>2026-01-06</lastmod>
     </url>
 </urlset>

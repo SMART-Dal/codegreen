@@ -1,239 +1,1057 @@
 #!/bin/bash
-# CodeGreen Commands Reference Script
-# Run this after install.sh to see all available commands and their usage
+cat << 'EOF'
+################################################################################
+# CODEGREEN COMMANDS REFERENCE
+# Single Source of Truth for All CodeGreen Operations
+# Version: 0.1.0
+# Last Updated: 2026-01-06
+################################################################################
 
-set -e
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1.  Installation & Setup
+2.  Global Options & Flags
+3.  Command: measure      - Measure energy consumption
+4.  Command: analyze      - Analyze code structure
+5.  Command: init         - Initialize system
+6.  Command: info         - System information
+7.  Command: doctor       - Diagnostics
+8.  Command: benchmark    - Built-in benchmarks
+9.  Command: validate     - Validation tests
+10. Command: config       - Configuration management
+11. Direct Instrumentation (Advanced)
+12. Configuration File Reference
+13. Debugging & Troubleshooting
+14. Performance Tuning
+15. Multi-Language Support
+16. CI/CD Integration
+17. Common Workflows
 
-echo "CodeGreen Commands Reference"
-echo "============================"
-echo ""
+================================================================================
+1. INSTALLATION & SETUP
+================================================================================
 
-# Check if codegreen is available
-if ! command -v codegreen >/dev/null 2>&1; then
-    echo "Error: codegreen command not found. Please run install.sh first."
-    exit 1
-fi
+# Prerequisites
+sudo apt-get install build-essential cmake pkg-config
+sudo apt-get install libjsoncpp-dev libcurl4-openssl-dev libsqlite3-dev
 
-echo "1. Basic Information Commands"
-echo "-----------------------------"
+# Install CodeGreen
+git clone https://github.com/codegreen/codegreen.git
+cd codegreen
+./install.sh
 
-echo "Display version and help:"
+# Verify installation
 codegreen --version
-echo ""
-
-echo "Show all available commands:"
-codegreen --help
-echo ""
-
-echo "Display system information:"
 codegreen info
-echo ""
 
-echo "2. System Setup and Configuration"
-echo "----------------------------------"
+# Enable energy measurements (requires permissions)
+sudo codegreen init-sensors
+# OR
+codegreen init --interactive
 
-echo "Initialize CodeGreen (interactive setup):"
-echo "codegreen init --interactive"
-echo ""
-
-echo "Initialize with auto-detection only:"
-echo "codegreen init --auto-detect-only"
-echo ""
-
-echo "Initialize sensors for energy measurement:"
-echo "codegreen init-sensors"
-echo ""
-
-echo "Run system diagnostics:"
+# Test installation
 codegreen doctor
-echo ""
 
-echo "3. Configuration Management"
-echo "---------------------------"
+================================================================================
+2. GLOBAL OPTIONS & FLAGS
+================================================================================
 
-echo "Show current configuration:"
-codegreen config --show
-echo ""
+All commands support these global options:
 
-echo "Edit configuration (placeholder):"
-echo "codegreen config --edit"
-echo ""
+--debug                     Enable debug output with detailed logging
+--config PATH               Use custom configuration file
+--version, -v               Show version and exit
+--log-level LEVEL           Set logging level: DEBUG|INFO|WARNING|ERROR
+--help, -h                  Show help message
 
-echo "Reset configuration (placeholder):"
-echo "codegreen config --reset"
-echo ""
+Examples:
+  codegreen --debug measure python script.py
+  codegreen --config ./custom.json measure python app.py
+  codegreen --log-level DEBUG info
 
-echo "4. Code Analysis Commands"
-echo "-------------------------"
+================================================================================
+3. COMMAND: measure - Measure Energy Consumption
+================================================================================
 
-# Create a sample Python file for testing
-cat > /tmp/sample_script.py << 'EOF'
-def factorial(n):
-    if n <= 1:
-        return 1
-    return n * factorial(n-1)
+SYNOPSIS:
+  codegreen measure [OPTIONS] LANGUAGE SCRIPT [ARGS...]
 
-def fibonacci(n):
-    if n <= 1:
-        return n
-    return fibonacci(n-1) + fibonacci(n-2)
+DESCRIPTION:
+  Instruments code, executes it, and measures energy consumption using
+  hardware sensors (Intel RAPL, NVIDIA NVML, AMD). Produces function-level
+  energy breakdowns and optimization suggestions.
 
-if __name__ == "__main__":
-    print("Factorial of 5:", factorial(5))
-    print("Fibonacci of 8:", fibonacci(8))
+LANGUAGES SUPPORTED:
+  python    Python scripts (.py)
+  cpp       C++ programs (.cpp, .cxx)
+  c         C programs (.c)
+  java      Java programs (.java)
+
+REQUIRED ARGUMENTS:
+  LANGUAGE                    Programming language (python|cpp|c|java)
+  SCRIPT                      Path to script/program to measure
+  [ARGS...]                   Arguments to pass to the script
+
+OPTIONS:
+  -o, --output PATH           Save results to file (JSON format)
+  -s, --sensors SENSOR        Sensors to use (can specify multiple):
+                              rapl       - Intel/AMD RAPL (CPU)
+                              nvidia     - NVIDIA GPU
+                              amd_gpu    - AMD GPU (ROCm)
+                              amd_cpu    - AMD CPU sensors
+  -p, --precision LEVEL       Measurement precision:
+                              low        - 100ms sampling (low overhead)
+                              medium     - 10ms sampling (default)
+                              high       - 1ms sampling (accurate)
+  -t, --timeout SECONDS       Execution timeout (default: no timeout)
+  --verbose                   Show detailed output
+  --json                      Output results in JSON format
+  --no-cleanup                Keep temporary instrumented files
+  --instrumented              Script is already instrumented (skip)
+
+EXAMPLES:
+
+  # Basic measurement
+  codegreen measure python script.py
+
+  # With script arguments
+  codegreen measure python script.py arg1 arg2 --flag
+
+  # High precision with RAPL + NVIDIA sensors
+  codegreen measure python ml_train.py \
+    --precision high \
+    --sensors rapl nvidia
+
+  # Save results to JSON
+  codegreen measure python benchmark.py \
+    --output results.json \
+    --json
+
+  # Measure C++ program
+  codegreen measure cpp main.cpp
+
+  # With timeout
+  codegreen measure python long_running.py \
+    --timeout 300 \
+    --verbose
+
+  # Debug instrumentation issues
+  codegreen --debug measure python script.py --no-cleanup
+
+OUTPUT FORMAT:
+  By default, human-readable summary to stdout
+  With --json: JSON containing:
+    - Total energy (joules)
+    - Per-function energy breakdown
+    - Execution time
+    - Power profile over time
+    - Hardware sensor readings
+    - Optimization suggestions
+
+SENSOR AUTO-DETECTION:
+  If --sensors not specified:
+    1. Auto-detects available hardware sensors
+    2. Uses Intel RAPL for CPU (if available)
+    3. Adds NVIDIA if GPU detected
+    4. Adds AMD sensors if available
+
+PRECISION VS OVERHEAD:
+  low        - ~0.01% overhead,  ±10% accuracy
+  medium     - ~0.1% overhead,   ±5% accuracy
+  high       - ~1% overhead,     ±2% accuracy
+
+NOTES:
+  - First run: Slower due to instrumentation analysis
+  - Subsequent runs: Faster (cached instrumentation)
+  - Requires: RAPL permissions (/sys/class/powercap)
+  - Multi-threaded: Automatically detected
+  - Recursion: Tracked with invocation counters
+
+================================================================================
+4. COMMAND: analyze - Analyze Code Structure
+================================================================================
+
+SYNOPSIS:
+  codegreen analyze [OPTIONS] LANGUAGE SCRIPT
+
+DESCRIPTION:
+  Performs static analysis using Tree-sitter AST parsing to identify
+  instrumentation points. No code execution - pure analysis for planning.
+
+REQUIRED ARGUMENTS:
+  LANGUAGE                    Programming language (python|cpp|c|java)
+  SCRIPT                      Path to script file to analyze
+
+OPTIONS:
+  -o, --output PATH           Save analysis to file
+  --verbose                   Show detailed instrumentation points
+  --json                      Output in JSON format
+  --suggestions               Show optimization suggestions (default: true)
+  --save-instrumented         Save instrumented code to current directory
+  --output-dir PATH           Directory for instrumented code
+  --no-cleanup                Keep temporary files
+
+EXAMPLES:
+
+  # Basic analysis
+  codegreen analyze python script.py
+
+  # Verbose with instrumentation points
+  codegreen analyze python app.py --verbose
+
+  # Save instrumented code
+  codegreen analyze python module.py \
+    --save-instrumented \
+    --output-dir ./instrumented
+
+  # JSON output for CI/CD
+  codegreen analyze python main.py \
+    --json \
+    --output analysis.json
+
+  # Analyze C++ code
+  codegreen analyze cpp main.cpp --verbose
+
+OUTPUT:
+  - Number of functions found
+  - Instrumentation points (enter/exit/return)
+  - Estimated overhead percentage
+  - Code complexity metrics
+  - Optimization suggestions
+  - (Optional) Instrumented source code
+
+USE CASES:
+  1. Preview instrumentation before measurement
+  2. Understand code complexity
+  3. Debug instrumentation issues
+  4. CI/CD integration for code analysis
+  5. Export instrumented code for manual review
+
+================================================================================
+5. COMMAND: init - Initialize System
+================================================================================
+
+SYNOPSIS:
+  codegreen init [OPTIONS]
+
+DESCRIPTION:
+  Comprehensive system initialization: detects hardware, configures sensors,
+  sets permissions, generates optimized configuration.
+
+OPTIONS:
+  --interactive               Interactive setup with prompts
+  --auto-detect-only          Auto-detect only, no prompts
+  --sensors SENSOR            Specify sensors to initialize
+  --output PATH               Save configuration to file
+  --force                     Overwrite existing configuration
+
+EXAMPLES:
+
+  # Interactive setup (recommended for first-time)
+  codegreen init --interactive
+
+  # Auto-detect everything
+  codegreen init --auto-detect-only
+
+  # Initialize specific sensors
+  codegreen init --sensors rapl nvidia
+
+  # Generate config without modifying system
+  codegreen init --output my_config.json
+
+WHAT IT DOES:
+  1. Detects CPU architecture (Intel/AMD)
+  2. Scans for RAPL availability
+  3. Detects NVIDIA GPUs (NVML)
+  4. Detects AMD GPUs (ROCm)
+  5. Checks permissions (/sys/class/powercap)
+  6. Tests sensor readings
+  7. Generates optimized configuration
+  8. (Optional) Sets up permissions
+
+PERMISSIONS SETUP:
+  Creates udev rules for RAPL access:
+    /etc/udev/rules.d/99-codegreen.rules
+  Adds user to power group (if needed)
+  Reloads udev
+
+INTERACTIVE MODE:
+  - Guides through sensor detection
+  - Asks to configure permissions
+  - Tests each sensor
+  - Saves configuration
+
+AUTO-DETECT MODE:
+  - No prompts
+  - Detects all available sensors
+  - Generates default configuration
+  - Does NOT modify system permissions
+
+================================================================================
+6. COMMAND: info - System Information
+================================================================================
+
+SYNOPSIS:
+  codegreen info [OPTIONS]
+
+DESCRIPTION:
+  Display CodeGreen installation, hardware sensors, and system information.
+
+OPTIONS:
+  --verbose                   Show detailed information
+  --json                      Output in JSON format
+
+EXAMPLES:
+
+  # Basic info
+  codegreen info
+
+  # Detailed with all sensors
+  codegreen info --verbose
+
+  # JSON for automation
+  codegreen info --json
+
+OUTPUT INCLUDES:
+  - CodeGreen version
+  - Installation paths
+  - Binary location
+  - Configuration file path
+  - Available sensors:
+    * Intel RAPL (package, pp0, pp1, dram)
+    * NVIDIA GPUs (count, models)
+    * AMD GPUs (count, models)
+  - Sensor permissions status
+  - Python runtime availability
+  - Language support (Python, C++, C, Java)
+  - Tree-sitter parsers status
+
+USE CASES:
+  - Verify installation
+  - Check sensor availability
+  - Debug missing sensors
+  - CI/CD environment verification
+
+================================================================================
+7. COMMAND: doctor - Diagnostics
+================================================================================
+
+SYNOPSIS:
+  codegreen doctor [OPTIONS]
+
+DESCRIPTION:
+  Comprehensive diagnostics to identify and fix common issues.
+
+OPTIONS:
+  --verbose                   Show detailed diagnostic output
+  --fix                       Attempt to fix issues automatically
+
+EXAMPLES:
+
+  # Run diagnostics
+  codegreen doctor
+
+  # Detailed diagnostics
+  codegreen doctor --verbose
+
+  # Auto-fix issues (requires sudo for some fixes)
+  sudo codegreen doctor --fix
+
+CHECKS PERFORMED:
+  ✓ Binary executable found
+  ✓ Configuration file valid
+  ✓ RAPL permissions (/sys/class/powercap)
+  ✓ RAPL counters readable
+  ✓ NVIDIA NVML library available
+  ✓ AMD ROCm SMI available
+  ✓ Python runtime module found
+  ✓ Tree-sitter parsers compiled
+  ✓ Instrumentation scripts accessible
+  ✓ Write permissions for temp directory
+  ✓ Configuration file syntax valid
+  ✓ Sensor initialization succeeds
+  ✓ Test measurement completes
+
+OUTPUT:
+  - ✅ PASS: Feature working correctly
+  - ⚠️  WARN: Feature works but has issues
+  - ❌ FAIL: Feature not working
+  - 🔧 FIX:  Auto-fix available
+
+COMMON ISSUES DETECTED:
+  - Missing RAPL permissions → Fix: sudo chown, udev rules
+  - NVML not found → Install CUDA toolkit
+  - Binary not executable → Fix: chmod +x
+  - Config file missing → Generate default
+  - Tree-sitter not compiled → Run: git submodule update
+
+================================================================================
+8. COMMAND: benchmark - Built-in Benchmarks
+================================================================================
+
+SYNOPSIS:
+  codegreen benchmark [OPTIONS] WORKLOAD
+
+DESCRIPTION:
+  Measure energy consumption using built-in synthetic workloads.
+  Useful for validating sensor accuracy and system calibration.
+
+WORKLOADS:
+  cpu_stress              CPU-intensive computation (matrix multiply)
+  memory_stress           Memory-intensive operations
+  io_stress               Disk I/O operations
+  network_stress          Network I/O operations
+  gpu_compute             GPU compute workload (requires CUDA)
+  mixed                   Mixed CPU+Memory+I/O
+
+OPTIONS:
+  --duration SECONDS          Duration of benchmark (default: 10)
+  --intensity LEVEL           Workload intensity: low|medium|high
+  --output PATH               Save results to file
+  --json                      Output in JSON format
+
+EXAMPLES:
+
+  # CPU stress for 5 seconds
+  codegreen benchmark cpu_stress --duration 5
+
+  # Memory stress, high intensity
+  codegreen benchmark memory_stress \
+    --intensity high \
+    --duration 10
+
+  # Save results
+  codegreen benchmark mixed \
+    --duration 30 \
+    --output benchmark_results.json \
+    --json
+
+  # GPU benchmark
+  codegreen benchmark gpu_compute --duration 20
+
+OUTPUT:
+  - Total energy consumed (joules)
+  - Average power (watts)
+  - Peak power (watts)
+  - Per-sensor breakdown
+  - Workload statistics (ops/sec, throughput)
+
+USE CASES:
+  - Validate sensor accuracy
+  - Calibrate measurements
+  - Baseline system energy consumption
+  - Compare hardware configurations
+  - Test sensor responsiveness
+
+================================================================================
+9. COMMAND: validate - Validation Tests
+================================================================================
+
+SYNOPSIS:
+  codegreen validate [OPTIONS]
+
+DESCRIPTION:
+  Validate measurement accuracy by comparing CodeGreen measurements
+  against native tools (perf, nvidia-smi, etc).
+
+OPTIONS:
+  --quick                     Quick validation (30 seconds)
+  --full                      Full validation suite (5 minutes)
+  --duration SECONDS          Custom duration
+  --verbose                   Show detailed comparison
+  --tolerance PERCENT         Acceptable error tolerance (default: 10%)
+
+EXAMPLES:
+
+  # Quick validation
+  codegreen validate --quick
+
+  # Full validation with details
+  codegreen validate --full --verbose
+
+  # Custom duration
+  codegreen validate --duration 60
+
+  # Strict tolerance
+  codegreen validate --tolerance 5
+
+VALIDATION TESTS:
+  1. RAPL vs perf comparison
+  2. NVML vs nvidia-smi comparison
+  3. ROCm vs rocm-smi comparison
+  4. Repeatability test (multiple runs)
+  5. Overhead measurement
+  6. Checkpoint correlation accuracy
+
+OUTPUT:
+  - Per-sensor accuracy (% error)
+  - Repeatability (standard deviation)
+  - Measurement overhead (%)
+  - ✅ PASS / ❌ FAIL for each test
+  - Detailed comparison tables
+
+PASS CRITERIA:
+  - RAPL error < 10%
+  - NVML error < 15%
+  - Repeatability std dev < 5%
+  - Overhead < 5%
+
+================================================================================
+10. COMMAND: config - Configuration Management
+================================================================================
+
+SYNOPSIS:
+  codegreen config [OPTIONS]
+
+DESCRIPTION:
+  View, edit, and manage CodeGreen configuration.
+
+OPTIONS:
+  --show                      Display current configuration
+  --edit                      Open configuration in editor
+  --reset                     Reset to default configuration
+  --validate                  Validate configuration syntax
+  --generate                  Generate new configuration
+
+EXAMPLES:
+
+  # Show current config
+  codegreen config --show
+
+  # Edit configuration
+  codegreen config --edit
+
+  # Validate config file
+  codegreen config --validate
+
+  # Reset to defaults
+  codegreen config --reset
+
+  # Generate new config
+  codegreen config --generate > my_config.json
+
+CONFIGURATION FILE LOCATIONS (checked in order):
+  1. ./codegreen.json                              (current directory)
+  2. ./config/codegreen.json                       (project config)
+  3. ~/.codegreen/codegreen.json                   (user config)
+  4. /etc/codegreen/codegreen.json                 (system config)
+
+OVERRIDE VIA FLAG:
+  codegreen --config /path/to/config.json measure ...
+
+================================================================================
+11. DIRECT INSTRUMENTATION (Advanced)
+================================================================================
+
+CodeGreen uses Python bridge scripts for instrumentation. Advanced users can
+call these directly for more control.
+
+INSTRUMENTATION SCRIPT:
+  Location: bin/src/instrumentation/bridge_instrument.py
+
+USAGE:
+  python3 bin/src/instrumentation/bridge_instrument.py \
+    --language LANG \
+    --source INPUT.py \
+    --output OUTPUT.py \
+    [OPTIONS]
+
+OPTIONS:
+  --language LANG             python|cpp|c|java
+  --source PATH               Input source file
+  --output PATH               Output instrumented file
+  --config PATH               Custom instrumentation config
+  --checkpoint-strategy STR   all|functions|loops|returns
+  --verbose                   Detailed output
+  --debug                     Debug mode with AST dumps
+
+CHECKPOINT STRATEGIES:
+  all                         Instrument everything (default)
+  functions                   Function enter/exit only
+  loops                       Loop iterations only
+  returns                     Return statements only
+  minimal                     Critical paths only
+
+EXAMPLES:
+
+  # Instrument Python file
+  python3 bin/src/instrumentation/bridge_instrument.py \
+    --language python \
+    --source script.py \
+    --output script_instrumented.py
+
+  # Functions only
+  python3 bin/src/instrumentation/bridge_instrument.py \
+    --language python \
+    --source app.py \
+    --output app_inst.py \
+    --checkpoint-strategy functions
+
+  # Debug instrumentation
+  python3 bin/src/instrumentation/bridge_instrument.py \
+    --language python \
+    --source complex.py \
+    --output complex_inst.py \
+    --debug --verbose
+
+ANALYSIS SCRIPT:
+  Location: bin/src/instrumentation/bridge_analyze.py
+
+USAGE:
+  python3 bin/src/instrumentation/bridge_analyze.py \
+    --language LANG \
+    --source INPUT \
+    --output REPORT.json
+
+EXAMPLE:
+  python3 bin/src/instrumentation/bridge_analyze.py \
+    --language python \
+    --source module.py \
+    --output analysis.json
+
+OUTPUT:
+  JSON with:
+    - Functions detected
+    - Instrumentation points
+    - AST complexity metrics
+    - Estimated overhead
+
+MANUAL MEASUREMENT WORKFLOW:
+  1. Instrument:
+     python3 bridge_instrument.py --source app.py --output app_inst.py
+
+  2. Run instrumented code:
+     CODEGREEN_LIB_PATH=/path/to/lib python3 app_inst.py
+
+  3. Results printed to stdout in JSON format
+
+RUNTIME ENVIRONMENT VARIABLES:
+  CODEGREEN_LIB_PATH          Path to libcodegreen-nemb.so
+  CODEGREEN_CONFIG            Path to configuration file
+  CODEGREEN_LOG_LEVEL         DEBUG|INFO|WARNING|ERROR
+  CODEGREEN_OUTPUT            Output file for results
+
+================================================================================
+12. CONFIGURATION FILE REFERENCE
+================================================================================
+
+Location: config/codegreen.json
+
+STRUCTURE:
+{
+  "measurement": {
+    "nemb": {
+      "enabled": true,
+      "providers": {
+        "intel_rapl": { "enabled": true },
+        "nvidia_nvml": { "enabled": true },
+        "amd_rapl": { "enabled": false },
+        "amd_rocm_smi": { "enabled": false }
+      },
+      "timing": {
+        "precision": "high",                    // low|medium|high
+        "clock_source": "tsc",                  // tsc|monotonic|auto
+        "calibration_samples": 1000
+      },
+      "coordinator": {
+        "measurement_interval_ms": 10,          // Sampling rate
+        "measurement_buffer_size": 100000,      // Circular buffer
+        "cross_validation": true,
+        "temporal_alignment_tolerance_ms": 1.0
+      }
+    }
+  },
+
+  "instrumentation": {
+    "checkpoint_strategy": "all",               // all|functions|loops|minimal
+    "languages": {
+      "python": {
+        "enabled": true,
+        "tree_sitter_parser": "python"
+      },
+      "cpp": {
+        "enabled": true,
+        "tree_sitter_parser": "cpp"
+      }
+    }
+  },
+
+  "performance": {
+    "threading": {
+      "enabled": true,
+      "max_threads": 4
+    },
+    "caching": {
+      "enabled": true,
+      "cache_dir": "/tmp/codegreen_cache"
+    }
+  },
+
+  "developer": {
+    "debug_mode": false,
+    "keep_temp_files": false,
+    "verbose_logging": false
+  }
+}
+
+KEY SETTINGS:
+
+measurement.nemb.coordinator.measurement_interval_ms:
+  Lower = more accurate, higher overhead
+  Recommended: 1ms (high), 10ms (medium), 100ms (low)
+
+measurement.nemb.timing.clock_source:
+  tsc         - Time Stamp Counter (highest precision)
+  monotonic   - CLOCK_MONOTONIC (portable)
+  auto        - Auto-detect best available
+
+instrumentation.checkpoint_strategy:
+  all         - Instrument everything (accurate, high overhead)
+  functions   - Functions only (balanced)
+  minimal     - Critical paths only (low overhead)
+
+performance.threading.max_threads:
+  Number of concurrent instrumentation threads
+  Recommended: CPU cores - 1
+
+================================================================================
+13. DEBUGGING & TROUBLESHOOTING
+================================================================================
+
+COMMON ISSUES:
+
+1. "Permission denied" for RAPL
+   Fix:
+     sudo codegreen init-sensors
+     # OR manually:
+     sudo chmod -R a+r /sys/class/powercap/intel-rapl
+     sudo chmod -R a+r /sys/devices/virtual/powercap/intel-rapl
+
+2. "NVML not found"
+   Fix:
+     sudo apt-get install nvidia-utils-XXX
+     # OR install CUDA toolkit
+
+3. "No checkpoints collected"
+   Issue: Program exits too quickly
+   Fix: Add sleep or work to keep program running >100ms
+
+4. Instrumentation fails
+   Debug:
+     codegreen --debug analyze python script.py --no-cleanup
+     # Check temporary files in /tmp/codegreen_*
+
+5. High overhead
+   Fix:
+     # Use lower precision
+     codegreen measure python script.py --precision low
+     # OR use minimal instrumentation
+     codegreen --config minimal.json measure python script.py
+
+DEBUG MODE:
+  codegreen --debug --log-level DEBUG [COMMAND]
+
+VERBOSE OUTPUT:
+  codegreen [COMMAND] --verbose
+
+KEEP TEMPORARY FILES:
+  codegreen [COMMAND] --no-cleanup
+
+CHECK INSTRUMENTED CODE:
+  codegreen analyze python script.py --save-instrumented
+
+VALIDATE INSTALLATION:
+  codegreen doctor --verbose
+
+TEST SENSORS:
+  codegreen benchmark cpu_stress --duration 3
+
+================================================================================
+14. PERFORMANCE TUNING
+================================================================================
+
+REDUCE OVERHEAD:
+
+1. Lower sampling rate:
+   measurement.nemb.coordinator.measurement_interval_ms: 100  # 10Hz
+
+2. Minimal instrumentation:
+   instrumentation.checkpoint_strategy: "minimal"
+
+3. Functions only:
+   instrumentation.checkpoint_strategy: "functions"
+
+4. Low precision mode:
+   codegreen measure python script.py --precision low
+
+INCREASE ACCURACY:
+
+1. Higher sampling rate:
+   measurement.nemb.coordinator.measurement_interval_ms: 1  # 1000Hz
+
+2. Full instrumentation:
+   instrumentation.checkpoint_strategy: "all"
+
+3. High precision:
+   codegreen measure python script.py --precision high
+
+4. TSC clock source:
+   measurement.nemb.timing.clock_source: "tsc"
+
+MEASUREMENT OVERHEAD BY CONFIGURATION:
+
+Low precision + minimal:        0.1% overhead, ±10% accuracy
+Medium precision + functions:   1% overhead,   ±5% accuracy
+High precision + all:          5% overhead,   ±2% accuracy
+
+RECOMMENDED SETTINGS:
+
+Development/Testing:
+  precision: low
+  checkpoint_strategy: functions
+  measurement_interval_ms: 10
+
+Production Profiling:
+  precision: high
+  checkpoint_strategy: all
+  measurement_interval_ms: 1
+
+Continuous Monitoring:
+  precision: low
+  checkpoint_strategy: minimal
+  measurement_interval_ms: 100
+
+================================================================================
+15. MULTI-LANGUAGE SUPPORT
+================================================================================
+
+PYTHON (.py):
+  ✅ Full support
+  ✅ AST-based instrumentation
+  ✅ Async/await support
+  ✅ Decorators preserved
+  ✅ Type hints preserved
+
+  Example:
+    codegreen measure python script.py
+
+C++ (.cpp, .cxx, .cc):
+  ✅ Full support
+  ✅ Function instrumentation
+  ✅ Class methods
+  ✅ Templates (experimental)
+  ⚠️  Requires compilation
+
+  Example:
+    codegreen measure cpp main.cpp
+
+C (.c):
+  ✅ Full support
+  ✅ Function instrumentation
+  ✅ Pointer operations safe
+
+  Example:
+    codegreen measure c program.c
+
+JAVA (.java):
+  ⚠️  Experimental support
+  ✅ Class methods
+  ✅ Static methods
+  ⚠️  Limited exception handling
+
+  Example:
+    codegreen measure java Main.java
+
+RUNTIME LIBRARIES:
+
+Python:
+  Location: bin/runtime/codegreen_runtime.py
+  Requires: CODEGREEN_LIB_PATH environment variable
+
+C/C++:
+  Location: src/instrumentation/language_runtimes/cpp/codegreen/runtime.hpp
+  Linking: -L/path/to/lib -lcodegreen-nemb
+
+Java:
+  Location: src/instrumentation/language_runtimes/java/codegreen/runtime/
+  Requires: JNI setup, libcodegreen-nemb.so
+
+================================================================================
+16. CI/CD INTEGRATION
+================================================================================
+
+JENKINS:
+  pipeline {
+    stage('Energy Analysis') {
+      steps {
+        sh 'codegreen analyze python app.py --json > analysis.json'
+        sh 'codegreen measure python app.py --json > energy.json'
+        archiveArtifacts artifacts: '*.json'
+      }
+    }
+  }
+
+GITHUB ACTIONS:
+  - name: CodeGreen Energy Measurement
+    run: |
+      sudo codegreen init-sensors
+      codegreen measure python app.py --json > results.json
+
+  - name: Upload Results
+    uses: actions/upload-artifact@v2
+    with:
+      name: energy-results
+      path: results.json
+
+GITLAB CI:
+  energy_test:
+    script:
+      - codegreen doctor
+      - codegreen measure python app.py --output energy.json
+    artifacts:
+      paths:
+        - energy.json
+
+DOCKER:
+  FROM ubuntu:22.04
+  RUN apt-get update && apt-get install -y build-essential cmake
+  COPY . /app
+  WORKDIR /app
+  RUN ./install.sh
+  CMD ["codegreen", "measure", "python", "app.py"]
+
+AUTOMATED TESTING:
+  # Validate energy consumption stays under threshold
+  codegreen measure python app.py --json > results.json
+  python3 -c "
+  import json
+  with open('results.json') as f:
+      data = json.load(f)
+  assert data['total_energy_joules'] < 100.0, 'Energy threshold exceeded'
+  "
+
+================================================================================
+17. COMMON WORKFLOWS
+================================================================================
+
+WORKFLOW 1: First-Time Setup
+  1. Install CodeGreen
+     ./install.sh
+
+  2. Initialize sensors
+     sudo codegreen init-sensors
+
+  3. Verify installation
+     codegreen doctor
+
+  4. Test with benchmark
+     codegreen benchmark cpu_stress --duration 5
+
+WORKFLOW 2: Analyze New Project
+  1. Analyze code structure
+     codegreen analyze python app.py --verbose
+
+  2. Measure energy
+     codegreen measure python app.py --output results.json
+
+  3. Review results
+     cat results.json | jq .
+
+WORKFLOW 3: Optimize Code
+  1. Baseline measurement
+     codegreen measure python app.py --output baseline.json
+
+  2. Make optimizations
+
+  3. Re-measure
+     codegreen measure python app_optimized.py --output optimized.json
+
+  4. Compare
+     python3 -c "
+     import json
+     with open('baseline.json') as f: baseline = json.load(f)
+     with open('optimized.json') as f: optimized = json.load(f)
+     improvement = (baseline['total_energy_joules'] - optimized['total_energy_joules']) / baseline['total_energy_joules'] * 100
+     print(f'Energy reduction: {improvement:.1f}%')
+     "
+
+WORKFLOW 4: Debug High Energy Consumption
+  1. Detailed analysis
+     codegreen analyze python app.py --verbose --save-instrumented
+
+  2. High-precision measurement
+     codegreen measure python app.py --precision high --verbose
+
+  3. Check function-level breakdown in results
+
+  4. Identify hotspots
+
+  5. Profile specific functions
+     # Add manual checkpoints around suspect code
+
+WORKFLOW 5: Continuous Monitoring
+  1. Set up cron job
+     0 * * * * codegreen measure python /path/to/app.py --json >> /var/log/codegreen/energy.log
+
+  2. Aggregate results
+     python3 scripts/aggregate_energy.py /var/log/codegreen/energy.log
+
+  3. Alert on anomalies
+
+WORKFLOW 6: Multi-Language Project
+  1. Analyze all languages
+     codegreen analyze python backend.py --output backend_analysis.json
+     codegreen analyze cpp worker.cpp --output worker_analysis.json
+
+  2. Measure each component
+     codegreen measure python backend.py --output backend_energy.json
+     codegreen measure cpp worker --output worker_energy.json
+
+  3. Aggregate
+     python3 scripts/merge_results.py backend_energy.json worker_energy.json
+
+================================================================================
+QUICK REFERENCE CHEAT SHEET
+================================================================================
+
+# Installation
+./install.sh && sudo codegreen init-sensors
+
+# Basic measurement
+codegreen measure python script.py
+
+# High precision
+codegreen measure python script.py --precision high
+
+# Multiple sensors
+codegreen measure python script.py --sensors rapl nvidia
+
+# Save results
+codegreen measure python script.py --output results.json --json
+
+# Analysis only
+codegreen analyze python script.py --verbose
+
+# Diagnostics
+codegreen doctor
+
+# System info
+codegreen info
+
+# Benchmark
+codegreen benchmark cpu_stress --duration 10
+
+# Validation
+codegreen validate --quick
+
+# Debug
+codegreen --debug --log-level DEBUG measure python script.py
+
+# Custom config
+codegreen --config my_config.json measure python script.py
+
+################################################################################
+# END OF COMMANDS REFERENCE
+################################################################################
 EOF
-
-echo "Analyze Python code without execution:"
-codegreen analyze python /tmp/sample_script.py
-echo ""
-
-echo "Analyze with custom output directory:"
-echo "codegreen analyze python /tmp/sample_script.py --output /tmp/analysis_output"
-echo ""
-
-echo "5. Energy Measurement Commands"
-echo "------------------------------"
-
-echo "Measure energy consumption of Python script:"
-echo "codegreen measure python /tmp/sample_script.py"
-echo ""
-
-echo "Measure with custom configuration:"
-echo "codegreen measure python /tmp/sample_script.py --config /path/to/config.json"
-echo ""
-
-echo "Measure with specific output file:"
-echo "codegreen measure python /tmp/sample_script.py --output /tmp/energy_results.json"
-echo ""
-
-echo "6. Benchmark and Workload Testing"
-echo "----------------------------------"
-
-echo "Run CPU stress benchmark (3 seconds):"
-codegreen benchmark cpu_stress --duration 3
-echo ""
-
-echo "Run memory stress benchmark:"
-echo "codegreen benchmark memory_stress --duration 5"
-echo ""
-
-echo "Measure specific workload energy consumption:"
-codegreen measure-workload --duration 3 --workload cpu_stress
-echo ""
-
-echo "Measure memory workload:"
-echo "codegreen measure-workload --duration 5 --workload memory_stress"
-echo ""
-
-echo "7. Validation and Testing"
-echo "-------------------------"
-
-echo "Validate measurement accuracy:"
-echo "codegreen validate --quick"
-echo ""
-
-echo "Full validation with detailed output:"
-echo "codegreen validate --verbose --duration 10"
-echo ""
-
-echo "8. Advanced Usage Examples"
-echo "---------------------------"
-
-echo "Example 1: Complete workflow for a Python project"
-echo "# Initialize system"
-echo "codegreen init --auto-detect-only"
-echo "# Analyze code structure"
-echo "codegreen analyze python my_script.py --output ./analysis"
-echo "# Measure energy consumption"
-echo "codegreen measure python my_script.py --output ./energy_results.json"
-echo "# Validate measurements"
-echo "codegreen validate --quick"
-echo ""
-
-echo "Example 2: Benchmark and compare different algorithms"
-echo "# Test baseline performance"
-echo "codegreen benchmark cpu_stress --duration 10"
-echo "# Measure algorithm A"
-echo "codegreen measure python algorithm_a.py --output results_a.json"
-echo "# Measure algorithm B"
-echo "codegreen measure python algorithm_b.py --output results_b.json"
-echo ""
-
-echo "Example 3: Development workflow with diagnostics"
-echo "# Check system status"
-echo "codegreen doctor"
-echo "# Show current configuration"
-echo "codegreen config --show"
-echo "# Analyze and measure code"
-echo "codegreen analyze python my_app.py"
-echo "codegreen measure python my_app.py"
-echo ""
-
-echo "9. Language-Specific Examples"
-echo "------------------------------"
-
-echo "Python examples:"
-echo "codegreen analyze python script.py"
-echo "codegreen measure python script.py arg1 arg2"
-echo ""
-
-echo "C++ examples (when supported):"
-echo "codegreen analyze cpp main.cpp"
-echo "codegreen measure cpp ./compiled_program"
-echo ""
-
-echo "Java examples (when supported):"
-echo "codegreen analyze java Main.java"
-echo "codegreen measure java Main"
-echo ""
-
-echo "10. Debug and Development Options"
-echo "---------------------------------"
-
-echo "Run with debug output:"
-echo "codegreen --debug measure python script.py"
-echo ""
-
-echo "Use custom configuration file:"
-echo "codegreen --config ./my_config.json measure python script.py"
-echo ""
-
-echo "Set custom log level:"
-echo "codegreen --log-level DEBUG info"
-echo ""
-
-# Cleanup
-rm -f /tmp/sample_script.py
-
-echo ""
-echo "Commands Reference Complete"
-echo "==========================="
-echo ""
-echo "For detailed help on any command, use:"
-echo "  codegreen COMMAND --help"
-echo ""
-echo "Example:"
-echo "  codegreen measure --help"
-echo "  codegreen benchmark --help"
-echo "  codegreen analyze --help"
-echo ""
-echo "Configuration:"
-echo "=============="
-echo "Default config: ./config/codegreen.json"
-echo "User config: ~/.codegreen/codegreen.json"
-echo ""
-echo "The config file controls:"
-echo "- Energy measurement settings (RAPL, NVML, AMD sensors)"
-echo "- Language-specific configurations (Python, C++, Java)"
-echo "- Performance optimization parameters"
-echo "- Database and logging settings"
-echo "- Developer debug options"
-echo ""
-echo "Key configuration sections:"
-echo "- measurement.nemb.providers: Enable/disable energy sensors"
-echo "- measurement.timing: Measurement precision settings"
-echo "- languages.python.executable: Python interpreter path"
-echo "- developer.debug_mode: Enable detailed logging"
-echo "- performance: Threading and optimization settings"
-echo ""
-echo "Documentation: https://github.com/codegreen/codegreen"
