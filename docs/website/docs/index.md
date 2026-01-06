@@ -38,10 +38,10 @@
 
 ## Demo
 
-<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; height: auto;">
-    <!-- Replace src with your actual video URL or embed link -->
-    <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" frameborder="0" allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe>
-</div>
+<video width="100%" controls autoplay loop muted>
+  <source src="assets/demo.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
 *Watch CodeGreen in action: measuring energy consumption of a Python script.*
 
 ## What is CodeGreen?

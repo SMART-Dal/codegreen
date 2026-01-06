@@ -1,7 +1,7 @@
 site_name: CodeGreen Documentation
 site_description: Energy-aware software development tool for measuring and optimizing code energy consumption
 site_author: CodeGreen Team
-site_url: https://codegreen.github.io/codegreen
+site_url: https://smart-dal.github.io/codegreen/
 
 repo_name: codegreen/codegreen
 repo_url: https://github.com/codegreen/codegreen
