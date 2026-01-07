@@ -56,12 +56,12 @@ if os.path.exists("/usr/local/cuda"):
 setup(
     name="codegreen",
     version=get_version(),
-    author="CodeGreen Team",
-    author_email="team@codegreen.dev",
+    author="Saurabhsingh Rajput",
+    author_email="saurabh@dal.ca",
     description="Energy-aware software development tool",
     long_description=get_long_description(),
     long_description_content_type="text/markdown",
-    url="https://github.com/codegreen/codegreen",
+    url="https://github.com/SMART-Dal/codegreen",
     packages=find_packages(),
     py_modules=['codegreen_runtime'],
     python_requires=">=3.8",
@@ -83,7 +83,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "codegreen=src.cli.cli:main_cli",
+            "codegreen=src.cli.entrypoint:main_cli_wrapper",
         ],
     },
     # Include language configurations and runtime files
@@ -123,8 +123,8 @@ setup(
     ],
     keywords="energy monitoring, performance, sustainability, green computing",
     project_urls={
-        "Bug Reports": "https://github.com/codegreen/codegreen/issues",
-        "Source": "https://github.com/codegreen/codegreen",
-        "Documentation": "https://codegreen.readthedocs.io/",
+        "Bug Reports": "https://github.com/SMART-Dal/codegreen/issues",
+        "Source": "https://github.com/SMART-Dal/codegreen",
+        "Documentation": "https://smart-dal.github.io/codegreen/",
     },
 )

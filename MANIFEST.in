@@ -1,0 +1,17 @@
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+include CMakeLists.txt
+
+recursive-include src *.py *.cpp *.h *.hpp
+recursive-include src/instrumentation/configs *.json
+recursive-include config *.json
+recursive-include bin *.py
+
+include src/instrumentation/language_runtimes/python/codegreen_runtime.py
+
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude *.so
+global-exclude .DS_Store

@@ -1940,34 +1940,107 @@ def init_sensors():
     • Check hardware compatibility if no sensors detected
     • Verify kernel modules are loaded for hardware sensors
     """
-    console.print("[bold blue]🔧 Initializing sensor configuration...[/bold blue]")
-    
-    binary_path = get_binary_path()
-    if not binary_path:
-        console.print("[red]❌ CodeGreen binary not found[/red]")
+    import os
+    import pwd
+    import grp
+    from pathlib import Path
+
+    # First check if sensors are already accessible (no sudo needed)
+    rapl_test_paths = list(Path("/sys/class/powercap").glob("intel-rapl*/energy_uj"))
+    if rapl_test_paths:
+        try:
+            rapl_test_paths[0].read_text()
+            console.print("[green]✅ Sensors already initialized and accessible![/green]")
+            console.print("")
+            console.print("Current user has permission to read RAPL sensors.")
+            console.print("You can now use CodeGreen commands without sudo:")
+            console.print("  codegreen info")
+            console.print("  codegreen benchmark cpu_stress --duration 3")
+            return
+        except PermissionError:
+            pass
+
+    # Check if running as root
+    if os.geteuid() != 0:
+        console.print("[red]❌ This command must be run with sudo[/red]")
+        console.print("[yellow]Usage: sudo codegreen init-sensors[/yellow]")
         raise typer.Exit(1)
-    
+
+    # Get actual user
+    actual_user = os.environ.get('SUDO_USER', os.environ.get('USER'))
+    if not actual_user or actual_user == 'root':
+        console.print("[red]❌ Could not determine actual user[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold blue]🔧 Setting up CodeGreen for user: {actual_user}[/bold blue]")
+    console.print("")
+
     try:
-        result = subprocess.run(
-            [binary_path, "--init-sensors"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        if result.returncode == 0:
-            console.print("[green]✅ Sensor initialization completed successfully[/green]")
-            console.print(result.stdout)
+        # 1. Create codegreen group
+        console.print("[cyan]Creating 'codegreen' group...[/cyan]")
+        try:
+            grp.getgrnam('codegreen')
+            console.print("  ✓ Group already exists")
+        except KeyError:
+            subprocess.run(['groupadd', 'codegreen'], check=True)
+            console.print("  ✓ Group created")
+
+        # 2. Add user to group
+        console.print(f"[cyan]Adding {actual_user} to 'codegreen' group...[/cyan]")
+        user_groups = [g.gr_name for g in grp.getgrall() if actual_user in g.gr_mem]
+        if 'codegreen' not in user_groups:
+            subprocess.run(['usermod', '-aG', 'codegreen', actual_user], check=True)
+            console.print("  ✓ User added to group")
         else:
-            console.print("[red]❌ Sensor initialization failed[/red]")
-            console.print(result.stderr)
-            raise typer.Exit(1)
-            
-    except subprocess.TimeoutExpired:
-        console.print("[red]❌ Sensor initialization timed out[/red]")
-        raise typer.Exit(1)
+            console.print("  ✓ User already in group")
+
+        # 3. Set RAPL permissions
+        console.print("[cyan]Setting RAPL permissions...[/cyan]")
+        rapl_paths = Path("/sys/class/powercap").glob("intel-rapl*/energy_uj")
+        count = 0
+        for rapl_file in rapl_paths:
+            subprocess.run(['chgrp', 'codegreen', str(rapl_file)], check=False)
+            subprocess.run(['chmod', 'g+r', str(rapl_file)], check=False)
+            count += 1
+
+        max_paths = Path("/sys/class/powercap").glob("intel-rapl*/max_energy_range_uj")
+        for rapl_file in max_paths:
+            subprocess.run(['chgrp', 'codegreen', str(rapl_file)], check=False)
+            subprocess.run(['chmod', 'g+r', str(rapl_file)], check=False)
+
+        if count > 0:
+            console.print(f"  ✓ Set permissions on {count} RAPL domains")
+        else:
+            console.print("  ⚠ No RAPL files found (CPU may not support it)")
+
+        # 4. Create udev rule
+        console.print("[cyan]Creating udev rule for persistent permissions...[/cyan]")
+        udev_rule = """# CodeGreen - Persistent RAPL permissions
+SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"
+"""
+        udev_file = Path("/etc/udev/rules.d/99-codegreen-rapl.rules")
+        udev_file.write_text(udev_rule)
+        console.print(f"  ✓ Created {udev_file}")
+
+        # 5. Reload udev
+        console.print("[cyan]Reloading udev rules...[/cyan]")
+        subprocess.run(['udevadm', 'control', '--reload-rules'], check=False)
+        subprocess.run(['udevadm', 'trigger'], check=False)
+        console.print("  ✓ Udev rules reloaded")
+
+        console.print("")
+        console.print("[green]✅ Sensor setup complete![/green]")
+        console.print("")
+        console.print("[yellow]IMPORTANT: Log out and log back in for group changes to take effect[/yellow]")
+        console.print("")
+        console.print("After relogin, test with:")
+        console.print("  codegreen info")
+        console.print("  codegreen benchmark cpu_stress --duration 3")
+        console.print("")
+        console.print("[green]No sudo needed after this![/green]")
+
     except Exception as e:
-        console.print(f"[red]❌ Error during sensor initialization: {e}[/red]")
+        console.print(f"[red]❌ Setup failed: {e}[/red]")
         raise typer.Exit(1)
 
 @app.command("measure-workload")

@@ -72,6 +72,7 @@ class LanguageConfigManager:
         """Get global configuration values that apply across all languages."""
         return {
             "supported_languages": list(self._configs.keys()),
+            "strict_mode": False,
             "default_encoding": "utf-8",
             "default_timeout_ms": 30000,
             "default_file_size_mb": 100,

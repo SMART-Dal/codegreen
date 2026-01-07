@@ -70,14 +70,13 @@ viz = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/codegreen/codegreen"
-Documentation = "https://codegreen.readthedocs.io"
-Repository = "https://github.com/codegreen/codegreen"
-"Bug Tracker" = "https://github.com/codegreen/codegreen/issues"
-Changelog = "https://github.com/codegreen/codegreen/blob/main/CHANGELOG.md"
+Homepage = "https://smart-dal.github.io/codegreen/"
+Documentation = "https://smart-dal.github.io/codegreen/"
+Repository = "https://github.com/SMART-Dal/codegreen"
+"Bug Tracker" = "https://github.com/SMART-Dal/codegreen/issues"
 
 [project.scripts]
-codegreen = "src.cli.cli:main_cli"
+codegreen = "src.cli.entrypoint:main_cli_wrapper"
 
 # Setuptools configuration
 [tool.setuptools.packages.find]

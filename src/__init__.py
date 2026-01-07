@@ -10,6 +10,22 @@ __author__ = "Saurabhsingh Rajput"
 __email__ = "saurabh@dal.ca"
 __description__ = "Energy-aware software development tool"
 
+# Path independence: Setup paths when src package is first imported
+# This runs BEFORE entrypoint.py imports, allowing sudo to work
+import sys as _sys
+import os as _os
+from pathlib import Path as _Path
+
+_init_file = _Path(__file__).resolve()
+_install_dir = _init_file.parent.parent
+_install_str = str(_install_dir)
+
+if _install_str not in _sys.path:
+    _sys.path.insert(0, _install_str)
+
+if _os.getcwd() != _install_str:
+    _os.chdir(_install_str)
+
 # Import main components for easy access
 try:
     from .cli import main as cli_main
