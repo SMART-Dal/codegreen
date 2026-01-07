@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="docs/website/docs/assets/codegreen_logo.svg#gh-light-mode-only" width="200" alt="CodeGreen Logo">
+  <img src="docs/website/docs/assets/codegreen_logo_white.svg#gh-dark-mode-only" width="200" alt="CodeGreen Logo">
+</p>
+
 # CodeGreen - Energy Monitoring and Code Optimization Tool
 
 CodeGreen is a comprehensive tool for fine-grained energy profiling and optimization of code. It provides real-time energy measurement during code execution, identifies energy hotspots, and offers optimization suggestions to reduce energy consumption.
@@ -15,47 +20,36 @@ CodeGreen is a comprehensive tool for fine-grained energy profiling and optimiza
 #### Easy Installation (Recommended)
 
 ```bash
-# Clone the repository
-git clone https://github.com/codegreen-dev/codegreen.git
+git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
-
-# Initialize submodules (Required for Tree-sitter grammars)
-git submodule update --init --recursive
-
-# Install dependencies (Ubuntu/Debian)
-sudo apt-get update
-sudo apt-get install cmake build-essential pkg-config libjsoncpp-dev libcurl4-openssl-dev libsqlite3-dev python3-dev
-
-# Run the orchestrated installation
 ./install.sh
+
+# Add to PATH
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# One-time sensor setup (sets permanent permissions)
+sudo codegreen init-sensors
+
+# Log out and log back in once
+# After that, no sudo needed!
 ```
 
-#### Manual Installation
+The installer automatically:
+- Checks system requirements
+- Installs Python dependencies and CLI tool
+- Builds C++ measurement engine
 
-```bash
-# Initialize submodules
-git submodule update --init --recursive
+#### System Requirements
 
-# Install Python dependencies
-pip3 install -r requirements.txt
+- Linux (Ubuntu 20.04+, Debian 11+, Fedora 35+) or macOS
+- Python 3.8+
+- CMake 3.15+
+- C++ compiler (gcc 9+ or clang 10+)
+- Make
+- Intel CPU with RAPL support (for energy measurement)
 
-# Build C++ components
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-
-# Install Python CLI package
-cd ..
-pip3 install -e .
-```
-
-### ⚡ Sensor Permissions (Critical)
-
-To measure CPU energy (via Intel RAPL), the tool needs read access to hardware registers. Run the following command if you encounter permission errors:
-
-```bash
-sudo chmod -R a+r /sys/class/powercap/intel-rapl
-```
+See [INSTALL.md](INSTALL.md) for detailed installation instructions and troubleshooting.
 
 ## 📊 Basic Usage
 

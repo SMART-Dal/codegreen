@@ -37,7 +37,7 @@ sudo apt-get install build-essential cmake pkg-config
 sudo apt-get install libjsoncpp-dev libcurl4-openssl-dev libsqlite3-dev
 
 # Install CodeGreen
-git clone https://github.com/codegreen/codegreen.git
+git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 ./install.sh
 

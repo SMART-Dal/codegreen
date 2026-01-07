@@ -868,7 +868,7 @@ std::filesystem::path get_user_home_directory() {
 
 ```bash
 # Clone the repository
-git clone https://github.com/codegreen/codegreen.git
+git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 
 # Install dependencies (Ubuntu/Debian)
@@ -1822,7 +1822,7 @@ BENCHMARK_MAIN();
 
 1. **Fork and Branch**:
 ```bash
-git fork https://github.com/codegreen/codegreen.git
+git fork https://github.com/SMART-Dal/codegreen.git
 git checkout -b feature/new-language-adapter
 ```
 
@@ -2300,7 +2300,7 @@ If you use CodeGreen in your research, please cite:
   title={CodeGreen: A Comprehensive Energy Measurement and Code Optimization Tool},
   author={CodeGreen Development Team},
   year={2024},
-  url={https://github.com/codegreen/codegreen},
+  url={https://github.com/SMART-Dal/codegreen},
   version={0.1.0}
 }
 ```
@@ -2326,8 +2326,8 @@ If you use CodeGreen in your research, please cite:
 - Research Collaboration: research@codegreen.org
 
 **Community**:
-- GitHub Issues: https://github.com/codegreen/codegreen/issues
-- Discussions: https://github.com/codegreen/codegreen/discussions
+- GitHub Issues: https://github.com/SMART-Dal/codegreen/issues
+- Discussions: https://github.com/SMART-Dal/codegreen/discussions
 - Mailing List: users@codegreen.org
 - Slack Community: [Invite Link]
 

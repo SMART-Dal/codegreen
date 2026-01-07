@@ -34,7 +34,7 @@ jobs:
 
       - name: Install CodeGreen
         run: |
-          git clone https://github.com/codegreen/codegreen.git /tmp/codegreen
+          git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
           cd /tmp/codegreen
           ./install.sh
           echo "/tmp/codegreen/bin" >> $GITHUB_PATH
@@ -181,7 +181,7 @@ stages:
 install_codegreen:
   stage: setup
   script:
-    - git clone https://github.com/codegreen/codegreen.git /tmp/codegreen
+    - git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
     - cd /tmp/codegreen && ./install.sh
   artifacts:
     paths:
@@ -253,7 +253,7 @@ pipeline {
         stage('Install CodeGreen') {
             steps {
                 sh '''
-                    git clone https://github.com/codegreen/codegreen.git /tmp/codegreen
+                    git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
                     cd /tmp/codegreen
                     ./install.sh
                 '''
@@ -334,7 +334,7 @@ RUN apt-get update && apt-get install -y \
     git
 
 # Install CodeGreen
-RUN git clone https://github.com/codegreen/codegreen.git /opt/codegreen && \
+RUN git clone https://github.com/SMART-Dal/codegreen.git /opt/codegreen && \
     cd /opt/codegreen && \
     ./install.sh
 
@@ -387,7 +387,7 @@ python:
   - "3.9"
 
 before_install:
-  - git clone https://github.com/codegreen/codegreen.git /tmp/codegreen
+  - git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
   - cd /tmp/codegreen && ./install.sh
   - export PATH="/tmp/codegreen/bin:$PATH"
 
@@ -425,7 +425,7 @@ jobs:
           command: |
             apt-get update
             apt-get install -y git build-essential cmake python3
-            git clone https://github.com/codegreen/codegreen.git /tmp/codegreen
+            git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
             cd /tmp/codegreen && ./install.sh
             echo 'export PATH="/tmp/codegreen/bin:$PATH"' >> $BASH_ENV
 
@@ -602,7 +602,7 @@ jobs:
 
       - name: Install CodeGreen
         run: |
-          git clone https://github.com/codegreen/codegreen.git /tmp/codegreen
+          git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
           cd /tmp/codegreen && ./install.sh
           echo "/tmp/codegreen/bin" >> $GITHUB_PATH
 

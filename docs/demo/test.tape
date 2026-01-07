@@ -22,23 +22,9 @@ Set WindowBar Colorful
 
 
 
-
-
-
-# Type@20ms "git clone https://github.com/codegreen/codegreen.git" Enter
-# Sleep 2s
-Type@20ms "cd ~/codegreen" Enter
-Sleep 1.5s
-Type@20ms "./install.sh" Enter
-# Wait+Screen@240s /"Docs:"/
-Sleep 20s
-
-Type "" Enter
-Sleep 1.5s
-
-Type@20ms "# After installation, run initialize sensors command with sudo permissions" Enter
-Sleep 3s
-Type@20ms "codegreen init-sensors" Enter
-Sleep 1s
-# Wait /"codegreen info"/
-Sleep 10s
+# Start with a clean slate and show the banner instantly
+Hide
+Type "clear && ./print_banner.sh"
+Enter
+Show
+Sleep 2s

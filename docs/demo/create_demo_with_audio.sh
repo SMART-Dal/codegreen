@@ -46,8 +46,8 @@ echo "✓ Original GIF: demo.gif"
 echo ""
 
 # Copy to website/docs/assets/demo.mp4
-cp demo_with_audio.mp4 docs/website/docs/assets/demo.mp4
-cp demo.gif docs/website/docs/assets/demo.gif
+cp demo_with_audio.mp4 ~/codegreen/docs/website/docs/assets/demo.mp4
+cp demo.gif ~/codegreen/docs/website/docs/assets/demo.gif
 
 echo "=========================================="
 echo "Demo creation complete!"

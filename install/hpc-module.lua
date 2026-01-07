@@ -5,7 +5,7 @@ help([[
 CodeGreen - Energy-aware software development tool
 Measures energy consumption of code with fine-grained analysis
 
-For more information: https://github.com/codegreen/codegreen
+For more information: https://github.com/SMART-Dal/codegreen
 ]])
 
 whatis("Name: CodeGreen")

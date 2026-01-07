@@ -25,11 +25,11 @@ Set WindowBar Colorful
 # OPENING: Introduction
 # ==============================================================================
 
+# Start with a clean slate and show the banner instantly
 Hide
-Type "clear"
+Type "clear && ./print_banner.sh"
 Enter
 Show
-
 Sleep 2s
 
 Type@1ms "# ============================================================================" Enter
@@ -42,7 +42,7 @@ Sleep 1s
 
 Type@20ms "# Measure energy consumption with hardware-level precision" Enter
 Sleep 3s
-Type@20ms "# Instrument code to find hotspots and optimize performance" Enter
+Type@20ms "# Find hotspots and optimize performance of your software" Enter
 Sleep 4s
 
 Type "" Enter
@@ -67,13 +67,13 @@ Sleep 3s
 Type "" Enter
 Sleep 1s
 
-Type@20ms "# Clone the repository (https://github.com/codegreen/codegreen.git) and run the installer shell script" Enter
+Type@20ms "# Clone the repository (https://github.com/SMART-Dal/codegreen.git) and run the installer shell script" Enter
 Sleep 3s
 
 Type "" Enter
 # Sleep 1.5s
 
-# Type@20ms "git clone https://github.com/codegreen/codegreen.git" Enter
+# Type@20ms "git clone https://github.com/SMART-Dal/codegreen.git" Enter
 # Sleep 2s
 Type@20ms "cd ~/codegreen" Enter
 Sleep 1.5s

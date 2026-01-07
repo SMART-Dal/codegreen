@@ -242,4 +242,4 @@ echo "   • If no energy readings: check hardware support (ls /sys/class/powerc
 echo "   • For containers: may need --privileged or specific capabilities"
 echo "   • For VMs: ensure energy counters are exposed to guest"
 echo ""
-echo "📚 Documentation: https://github.com/codegreen/codegreen/docs/setup"
+echo "📚 Documentation: https://github.com/SMART-Dal/codegreen/docs/setup"

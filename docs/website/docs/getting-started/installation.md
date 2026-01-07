@@ -8,7 +8,7 @@ The easiest way to install CodeGreen on Linux/macOS is using the automated scrip
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/codegreen/codegreen.git
+git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 
 # 2. Run the automated installer
@@ -44,7 +44,7 @@ If you prefer to build manually or have specific requirements:
 
 1. **Clone and Initialize:**
    ```bash
-   git clone https://github.com/codegreen/codegreen.git
+   git clone https://github.com/SMART-Dal/codegreen.git
    cd codegreen
    git submodule update --init --recursive
    ```
@@ -68,7 +68,7 @@ For contributors or those who want to modify the CodeGreen source code:
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/codegreen/codegreen.git
+    git clone https://github.com/SMART-Dal/codegreen.git
     cd codegreen
     ```
 
@@ -102,8 +102,8 @@ CodeGreen's **NEMB** (Native Energy Measurement Backend) supports a variety of h
 For containerized environments, use the official image. Note that you must run with `--privileged` to allow access to hardware energy counters.
 
 ```bash
-docker pull codegreen/codegreen:latest
-docker run --privileged -it --rm codegreen/codegreen:latest
+docker pull SMART-Dal/codegreen:latest
+docker run --privileged -it --rm SMART-Dal/codegreen:latest
 ```
 
 ## Troubleshooting
@@ -134,4 +134,4 @@ If you encounter persistent issues:
 
 1.  Check the [CLI Reference](../user-guide/cli-reference.md) for correct usage.
 2.  Run `codegreen doctor --verbose` for detailed diagnostics.
-3.  Open an issue on [GitHub](https://github.com/codegreen/codegreen/issues).
+3.  Open an issue on [GitHub](https://github.com/SMART-Dal/codegreen/issues).

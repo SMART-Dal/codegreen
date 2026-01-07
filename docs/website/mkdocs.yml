@@ -3,8 +3,8 @@ site_description: Energy-aware software development tool for measuring and optim
 site_author: CodeGreen Team
 site_url: https://smart-dal.github.io/codegreen/
 
-repo_name: codegreen/codegreen
-repo_url: https://github.com/codegreen/codegreen
+repo_name: SMART-Dal/codegreen
+repo_url: https://github.com/SMART-Dal/codegreen
 edit_uri: edit/main/docs/website/docs/
 
 theme:
@@ -54,7 +54,20 @@ theme:
     edit: material/pencil
     view: material/eye
 
+  logo: assets/codegreen_logo_white.svg
+  favicon: assets/favicon.ico
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_head:
+  - <link rel="apple-touch-icon" sizes="180x180" href="/codegreen/assets/apple-touch-icon.png">
+  - <link rel="manifest" href="/codegreen/assets/manifest.webmanifest">
+
+copyright: Copyright &copy; 2024 CodeGreen Team
+
 plugins:
+  - social
   - search:
       lang: en
   - mkdocstrings:
@@ -158,7 +171,7 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/codegreen/codegreen
+      link: https://github.com/SMART-Dal/codegreen
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/codegreen/
   version:

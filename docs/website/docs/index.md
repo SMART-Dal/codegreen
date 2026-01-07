@@ -75,7 +75,7 @@ Get started with CodeGreen in just a few steps:
 === "Installation"
 
     ```bash
-    git clone https://github.com/codegreen/codegreen.git
+    git clone https://github.com/SMART-Dal/codegreen.git
     cd codegreen
     ./install.sh
     ```
@@ -126,8 +126,8 @@ Get started with CodeGreen in just a few steps:
 
 Join our community to get help, share ideas, and contribute to CodeGreen:
 
-- [:material-github: GitHub](https://github.com/codegreen/codegreen) - Source code and issues
-- [:material-chat: Discussions](https://github.com/codegreen/codegreen/discussions) - Community discussions
+- [:material-github: GitHub](https://github.com/SMART-Dal/codegreen) - Source code and issues
+- [:material-chat: Discussions](https://github.com/SMART-Dal/codegreen/discussions) - Community discussions
 
 ## License
 

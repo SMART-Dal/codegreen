@@ -14,7 +14,7 @@ cd "$(dirname "$0")"
 # Check if mkdocs is installed
 if ! command -v mkdocs &> /dev/null; then
     echo "❌ MkDocs not found. Installing..."
-    pip install mkdocs mkdocs-material mkdocstrings[python]
+    pip install mkdocs mkdocs-material mkdocstrings[python] "mkdocs-material[imaging]"
 fi
 
 # Start the development server

@@ -8,7 +8,7 @@ The fastest way to install CodeGreen and its dependencies is using the installat
 
 ```bash
 # Clone the repository
-git clone https://github.com/codegreen/codegreen.git
+git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 
 # Run installer

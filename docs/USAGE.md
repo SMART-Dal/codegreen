@@ -29,7 +29,7 @@ sudo apt-get install libjsoncpp-dev libcurl4-openssl-dev libsqlite3-dev
 
 ### Install CodeGreen
 ```bash
-git clone https://github.com/codegreen/codegreen.git
+git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 ./install.sh
 ```

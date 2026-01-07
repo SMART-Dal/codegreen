@@ -49,7 +49,7 @@ app = typer.Typer(
     rich_markup_mode="rich",  # Enable Rich markup in help
     no_args_is_help=False,  # Allow version option without command
     context_settings={"help_option_names": ["-h", "--help"]},
-    epilog="[dim]For more information, visit: https://github.com/codegreen/codegreen[/dim]"
+    epilog="[dim]For more information, visit: https://github.com/SMART-Dal/codegreen[/dim]"
 )
 
 class Language(str, Enum):
@@ -1658,7 +1658,7 @@ def diagnose(
         console.print("1. Try reinstalling CodeGreen: [cyan]pip install --force-reinstall codegreen[/cyan]")
         console.print("2. Check system requirements in the documentation")
         console.print("3. Run [cyan]codegreen init[/cyan] to initialize sensors")
-        console.print("4. Report issues at: https://github.com/codegreen/codegreen/issues")
+        console.print("4. Report issues at: https://github.com/SMART-Dal/codegreen/issues")
 
 class WorkloadType(str, Enum):
     """Available workload types for energy measurement."""
