@@ -166,7 +166,7 @@ nav:
     - Java Examples: examples/java.md
   - About:
     - Changelog: about/changelog.md
-    - License: about/license.md
+    - License: about/LICENSE
 
 extra:
   social:

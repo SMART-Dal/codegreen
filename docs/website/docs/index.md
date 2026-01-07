@@ -131,4 +131,4 @@ Join our community to get help, share ideas, and contribute to CodeGreen:
 
 ## License
 
-CodeGreen is released under the MIT License. See the [License](about/license.md) page for details.
+CodeGreen is released under the MPL 2.0 License. See the [License](about/LICENSE) page for details.
