@@ -96,3 +96,6 @@ energy_data.db
 archive/*
 !archive/.gitkeep
 bin/*
+bin
+bin/src/*
+bin/runtime/*

@@ -40,8 +40,6 @@ echo ""
 echo "Installing Python dependencies..."
 
 # Handle PEP 668 externally-managed environments (Homebrew, Ubuntu 23.04+)
-# Using environment variable instead of --break-system-packages flag for compatibility
-# Combined with --user flag to install to user directory, not system-wide
 export PIP_BREAK_SYSTEM_PACKAGES=1
 
 python3 -m pip install --user --upgrade pip setuptools wheel
@@ -73,16 +71,11 @@ echo ""
 echo "Installing CodeGreen..."
 
 export PIP_BREAK_SYSTEM_PACKAGES=1
-python3 -m pip uninstall -y codegreen 2>/dev/null || true
-python3 -m pip install --user -e .
+sudo python3 -m pip uninstall -y codegreen 2>/dev/null || true
+sudo python3 -m pip install -e .
 unset PIP_BREAK_SYSTEM_PACKAGES
 
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    INSTALL_BIN="$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin"
-else
-    INSTALL_BIN="$HOME/.local/bin"
-fi
-
+INSTALL_BIN="$(python3 -c 'import sys; print(sys.prefix)')/bin"
 export PATH="$INSTALL_BIN:$PATH"
 
 echo ""
@@ -112,12 +105,9 @@ else
     echo "     Then: source ~/.bashrc"
 fi
 echo ""
-echo "  2. Install sudo support (one-time):"
-echo "     sudo ln -sf $INSTALL_BIN/codegreen /usr/local/bin/codegreen"
-echo ""
-echo "  3. Initialize sensors (one-time, needs sudo):"
+echo "  2. Initialize sensors (one-time):"
 echo "     sudo codegreen init-sensors"
 echo "     Then log out/in once"
 echo ""
-echo "  4. After that, no sudo needed: codegreen --help"
-echo "  5. Docs: https://smart-dal.github.io/codegreen/"
+echo "  3. After that, no sudo needed: codegreen --help"
+echo "  4. Docs: https://smart-dal.github.io/codegreen/"

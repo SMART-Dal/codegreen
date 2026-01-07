@@ -1,0 +1,21 @@
+Starting validation on 9 scripts. Logs in tests/validation/logs
+Script                    | CG Avg (J)   | Perf Avg (J) | Delta (%) 
+----------------------------------------------------------------------
+Testing c_complex_02_io.c... CG1.P1 CG2.P2 CG3.P3 Done.
+c_complex_02_io.c         | 0.2163       | 0.4967       | -56.46    %
+Testing c_complex_03_memory.c... CG1.P1 CG2.P2 CG3.P3 Done.
+c_complex_03_memory.c     | 1.5942       | 0.2233       | +613.84   %
+Testing c_complex_04_math.c... CG1.P1 CG2.P2 CG3.P3 Done.
+c_complex_04_math.c       | Error        | Error        | N/A
+Testing cpp_complex_05_oop.cpp... CG1.P1 CG2.P2 CG3.P3 Done.
+cpp_complex_05_oop.cpp    | 2.7711       | 1.0200       | +171.68   %
+Testing cpp_complex_06_stl.cpp... CG1.P1 CG2.P2 CG3.P3 Done.
+cpp_complex_06_stl.cpp    | 0.6083       | 1.5633       | -61.09    %
+Testing java_complex_07_collections.java... CG1.P1 CG2.P2 CG3.P3 Done.
+java_complex_07_collections.java | 1.7479       | 7.2033       | -75.74    %
+Testing java_complex_08_exception.java... CG1.P1 CG2.P2 CG3.P3 Done.
+java_complex_08_exception.java | 2.5068       | 6.4033       | -60.85    %
+Testing python_complex_09_data.py... CG1.P1 CG2.P2 CG3.P3 Done.
+python_complex_09_data.py | 0.8765       | 3.3200       | -73.60    %
+Testing python_complex_10_async.py... CG1.P1 CG2.P2 CG3.P3 Done.
+python_complex_10_async.py | 0.4854       | 6.1467       | -92.10    %

@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-01-06T14:30:48.958468",
+  "analysis": {
+    "language": "python",
+    "success": true,
+    "instrumentation_points": 7,
+    "optimization_suggestions": [],
+    "metadata": {
+      "analysis_method": "tree_sitter",
+      "parser_available": true,
+      "queries_available": 5,
+      "analysis_time_ms": 1.44,
+      "source_lines": 22,
+      "tree_sitter_available": true
+    }
+  },
+  "measurement": {
+    "success": false,
+    "output": "\ud83d\udd0d Detecting available energy providers...\n\ud83d\udd0b Initializing Intel RAPL provider...\n\ud83d\udd0d Detecting RAPL domains...\n  \u2713 Found domain: package\n  \u2713 Found domain: pp0\n\ud83d\udd0d Querying RAPL energy units...\n  RAPL name: package-0\n  \u2713 Using sysfs energy unit: 1 \u03bcJ\n  Energy unit: 1 \u03bcJ\n\ud83d\udd0d Initializing RAPL counters...\n\ud83d\udd22 Counter REGISTER: package\n  \u2713 Initialized counter for domain: package\n\ud83d\udd22 Counter REGISTER: pp0\n  \u2713 Initialized counter for domain: pp0\n\ud83d\udd27 Initializing non-blocking file readers...\n\u2713 File reader initialized for domain: package\n\u2713 File reader initialized for domain: pp0\n\ud83d\udd0d Taking initial baseline readings...\n  \u2713 Initial reading for package: 25563474303 \u03bcJ\n  \u2713 Initial reading for pp0: 52799253695 \u03bcJ\n\ud83d\udd22 Counter INITIALIZE: package\n\ud83d\udd22 Counter INITIALIZE: pp0\n\u2713 Intel RAPL provider initialized\n    Energy unit: 1e-06 J\n    Available domains: package, pp0\n  \u2705 Intel RAPL initialized\n  \u2705 Successfully initialized 1 energy provider(s)\n\ud83d\udd0c Adding energy provider: Intel RAPL\n\ud83d\udd0b Initializing Intel RAPL provider...\n\ud83d\udd0d Detecting RAPL domains...\n  \u2713 Found domain: package\n  \u2713 Found domain: pp0\n\ud83d\udd0d Querying RAPL energy units...\n  RAPL name: package-0\n  \u2713 Using sysfs energy unit: 1 \u03bcJ\n  Energy unit: 1 \u03bcJ\n\ud83d\udd0d Initializing RAPL counters...\n\ud83d\udd22 Counter REGISTER: package\n  \u2713 Initialized counter for domain: package\n\ud83d\udd22 Counter REGISTER: pp0\n  \u2713 Initialized counter for domain: pp0\n\ud83d\udd27 Initializing non-blocking file readers...\n\u2713 File reader initialized for domain: package\n\u2713 File reader initialized for domain: pp0\n\ud83d\udd0d Taking initial baseline readings...\n  \u2713 Initial reading for package: 25563474303 \u03bcJ\n  \u2713 Initial reading for pp0: 52799253695 \u03bcJ\n\ud83d\udd22 Counter INITIALIZE: package\n\ud83d\udd22 Counter INITIALIZE: pp0\n\u2713 Intel RAPL provider initialized\n    Energy unit: 1e-06 J\n    Available domains: package, pp0\n  \u2705 Provider added successfully: Intel RAPL\n\u25b6\ufe0f  Starting coordinated measurements...\n  \u2705 Measurements started\n\n--- CODEGREEN_RESULT_START ---\n{\"measurements\": [{\"checkpoint_id\": \"enter:main:function_enter_main_14_1#inv_1_t14433025413019492754\", \"timestamp\": 10849295725760788, \"joules\": 11.2312, \"watts\": 280.109}, {\"checkpoint_id\": \"enter:fibonacci:function_enter_fibonacci_2_1#inv_1_t14433025413019492754\", \"timestamp\": 10849295725786078, \"joules\": 11.2338, \"watts\": 279.686}, {\"checkpoint_id\": \"exit:fibonacci:function_exit_fibonacci_7_5#inv_1_t14433025413019492754\", \"timestamp\": 10849295800597461, \"joules\": 19.7381, \"watts\": 113.08}]}\n--- CODEGREEN_RESULT_END ---\n\u23f9\ufe0f  Stopping coordinated measurements...\n  \u2705 Measurements stopped\n\ud83d\udd0c Shutting down Intel RAPL provider...\n",
+    "error": "Failed to initialize NVML: NVML not available\nTraceback (most recent call last):\n  File \"/home/srajput/codegreen/fibonacci_instrumented.py\", line 31, in <module>\n    main()\n    ~~~~^^\n  File \"/home/srajput/codegreen/fibonacci_instrumented.py\", line 23, in main\n    print(f'Fibonacci: {result1}')\n                       ^^^^^^^^^\nValueError: Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit\n",
+    "returncode": 1,
+    "checkpoints": [
+      {
+        "checkpoint_id": "enter:main:function_enter_main_14_1#inv_1_t14433025413019492754",
+        "timestamp": 10849295725760788,
+        "joules": 11.2312,
+        "watts": 280.109
+      },
+      {
+        "checkpoint_id": "enter:fibonacci:function_enter_fibonacci_2_1#inv_1_t14433025413019492754",
+        "timestamp": 10849295725786078,
+        "joules": 11.2338,
+        "watts": 279.686
+      },
+      {
+        "checkpoint_id": "exit:fibonacci:function_exit_fibonacci_7_5#inv_1_t14433025413019492754",
+        "timestamp": 10849295800597461,
+        "joules": 19.7381,
+        "watts": 113.08
+      }
+    ]
+  }
+}
