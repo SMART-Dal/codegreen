@@ -101,7 +101,7 @@ We welcome contributions!
 
 ## 📝 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MPL-2.0 License - see [LICENSE](LICENSE) file for details.
 
 ---
 
