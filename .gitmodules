@@ -22,3 +22,9 @@
 [submodule "third_party/nvim-treesitter"]
 	path = third_party/nvim-treesitter
 	url = https://github.com/nvim-treesitter/nvim-treesitter.git
+[submodule "third_party/benchmarksgame"]
+	path = third_party/benchmarksgame
+	url = https://salsa.debian.org/benchmarksgame-team/benchmarksgame.git
+[submodule "third_party/Programming-Language-Benchmarks"]
+	path = third_party/Programming-Language-Benchmarks
+	url = git@github.com:hanabi1224/Programming-Language-Benchmarks.git
