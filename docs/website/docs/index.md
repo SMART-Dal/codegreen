@@ -48,17 +48,6 @@
 
 CodeGreen is a comprehensive energy monitoring and optimization tool designed to help developers understand and reduce the energy consumption of their software. By providing real-time energy measurements, detailed analytics, and optimization suggestions, CodeGreen enables energy-aware software development.
 
-### Architecture
-
-CodeGreen uses the **Native Energy Measurement Backend (NEMB)**, a high-performance C++ measurement engine that:
-
-- **Signal-Generator Model**: Lightweight timestamp markers (~100-200ns overhead) instead of synchronous hardware reads (~5-20μs)
-- **Background Polling**: Independent C++ thread samples hardware sensors at configurable intervals (1-100ms)
-- **Time-Series Correlation**: Binary search + linear interpolation matches checkpoints to energy readings
-- **Thread-Safe Invocation Tracking**: Handles recursive functions and multi-threaded code with zero-lock performance
-
-This achieves **25-100x lower overhead** than traditional profiling while maintaining **±2% accuracy**.
-
 ### Key Features
 
 - **🔋 Energy Monitoring**: Real-time monitoring of CPU, GPU, and system energy consumption
