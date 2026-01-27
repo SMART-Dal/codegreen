@@ -1,0 +1,79 @@
+---
+config:
+  theme: neo
+  themeVariables:
+    primaryColor: '#ffffff'
+    primaryBorderColor: '#000000'
+    lineColor: '#333333'
+    tertiaryColor: '#f0f0f0'
+  look: neo
+  layout: elk
+---
+flowchart TD
+    %% User Interface
+    CLI["CLI (Typer)<br>codegreen measure/analyze/benchmark"]:::ui
+
+    %% Python Layer
+    subgraph PythonLayer["Python Layer - Language Processing"]
+        direction TB
+        LanguageEngine["Language Engine<br>Multi-language coordinator"]:::core
+        TreeSitter["Tree-sitter Parser<br>AST analysis via SCM queries"]:::core
+        BridgeAnalyze["Bridge Analyze<br>Identify instrumentation points"]:::core
+        BridgeInstrument["Bridge Instrument<br>Inject checkpoint calls"]:::core
+    end
+
+    %% C++ NEMB Layer
+    subgraph NEMBLayer["C++ NEMB - Native Energy Measurement Backend"]
+        direction TB
+        EnergyMeter["EnergyMeter<br>Public checkpoint API"]:::nemb
+        MeasurementCoordinator["MeasurementCoordinator<br>Multi-provider orchestration"]:::nemb
+        BackgroundThread["Background Polling Thread<br>10ms/1ms sampling loop"]:::nemb
+        CorrelationEngine["Correlation Engine<br>Binary search + interpolation"]:::nemb
+    end
+
+    %% Hardware Providers
+    subgraph HardwareProviders["Energy Providers"]
+        direction LR
+        RAPL["Intel/AMD RAPL<br>/sys/class/powercap"]:::hw
+        NVML["NVIDIA NVML<br>GPU energy"]:::hw
+        ROCm["AMD ROCm<br>GPU energy"]:::hw
+    end
+
+    %% Language Support
+    subgraph LanguageSupport["Language Support"]
+        direction LR
+        TSPython["tree-sitter-python"]:::lang
+        TSCPP["tree-sitter-cpp"]:::lang
+        TSC["tree-sitter-c"]:::lang
+        TSJava["tree-sitter-java"]:::lang
+    end
+
+    %% Data Flow
+    CLI -->|"1. codegreen measure script.py"| LanguageEngine
+    LanguageEngine -->|"2. Parse source code"| TreeSitter
+    TreeSitter -->|"3. Identify functions"| BridgeAnalyze
+    BridgeAnalyze -->|"4. Instrumentation points"| BridgeInstrument
+    BridgeInstrument -->|"5. Instrumented code"| EnergyMeter
+    EnergyMeter -->|"6. mark_checkpoint(name)"| MeasurementCoordinator
+    MeasurementCoordinator -->|"7. Start polling"| BackgroundThread
+    BackgroundThread -->|"8. Read energy"| HardwareProviders
+    RAPL -->|"Energy readings"| BackgroundThread
+    NVML -->|"Energy readings"| BackgroundThread
+    ROCm -->|"Energy readings"| BackgroundThread
+    BackgroundThread -->|"9. Buffer readings"| CorrelationEngine
+    EnergyMeter -->|"10. Timestamp markers"| CorrelationEngine
+    CorrelationEngine -->|"11. Correlated checkpoints"| CLI
+    CLI -->|"12. Terminal/JSON output"| User["User"]:::ui
+
+    %% Language grammar support
+    TSPython -.->|"Grammar"| TreeSitter
+    TSCPP -.->|"Grammar"| TreeSitter
+    TSC -.->|"Grammar"| TreeSitter
+    TSJava -.->|"Grammar"| TreeSitter
+
+    %% Styling
+    classDef ui fill:#9C27B0,stroke:#7B1FA2,color:white,stroke-width:2px
+    classDef core fill:#4CAF50,stroke:#388E3C,color:white,stroke-width:2px
+    classDef nemb fill:#2196F3,stroke:#1976D2,color:white,stroke-width:2px
+    classDef hw fill:#FF5722,stroke:#D84315,color:white,stroke-width:2px
+    classDef lang fill:#FFC107,stroke:#FFA000,color:black,stroke-width:2px

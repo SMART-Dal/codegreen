@@ -140,7 +140,7 @@ void MeasurementCoordinator::measurement_loop() {
         // Collect from all providers (RAPL, NVML, ROCm)
         collect_provider_readings();
 
-        // Sleep for configured interval (default: 1ms)
+        // Sleep for configured interval (default: 10ms, high-accuracy mode: 1ms)
         auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed < config_.measurement_interval) {
             std::this_thread::sleep_for(config_.measurement_interval - elapsed);
@@ -375,10 +375,9 @@ From `config/codegreen.json`:
 }
 ```
 
-**Precision Levels**:
-- `low`: 100ms interval, ~0.01% overhead, ±10% accuracy
-- `medium`: 10ms interval, ~0.1% overhead, ±5% accuracy
-- `high`: 1ms interval, ~1% overhead, ±2% accuracy
+**Precision Modes**:
+- **Default mode**: 10ms sampling interval, ~0.1% overhead, suitable for most workloads
+- **High-accuracy mode** (`prefer_accuracy_over_speed=true`): 1ms sampling interval, ~1% overhead, ±2% accuracy for fine-grained profiling
 
 ---
 

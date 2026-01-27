@@ -27,4 +27,13 @@ Hide
 Type "clear && ./print_banner.sh"
 Enter
 Show
+Screenshot screenshots/banner.png
 Sleep 2s
+
+Type@20ms "# Clone and install CodeGreen" Enter
+Sleep 2s
+Type@20ms "cd ~/codegreen" Enter
+Sleep 1.5s
+Type@20ms "./install.sh" Enter
+Sleep 20s
+Screenshot screenshots/install.png

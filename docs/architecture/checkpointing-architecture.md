@@ -193,7 +193,7 @@ E_marker = E1 + ratio × (E2 - E1)
 
 **Assumptions:**
 - Power draw is approximately linear between samples
-- Valid for 1ms sampling intervals (Nyquist-Shannon theorem)
+- Valid for 10ms default sampling (1ms in high-accuracy mode) per Nyquist-Shannon theorem
 - Hardware counters are cumulative (energy, not power)
 
 ## Performance Characteristics
