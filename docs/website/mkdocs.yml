@@ -1,4 +1,4 @@
-site_name: CodeGreen Documentation
+site_name: CodeGreen
 site_description: Energy-aware software development tool for measuring and optimizing code energy consumption
 site_author: CodeGreen Team
 site_url: https://smart-dal.github.io/codegreen/
@@ -35,12 +35,16 @@ theme:
         name: Switch to system preference
 
   features:
+    - navigation.tracking
     - navigation.tabs
     - navigation.tabs.sticky
     - navigation.sections
     - navigation.expand
     - navigation.path
     - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
     - search.highlight
     - search.share
     - search.suggest
@@ -60,7 +64,7 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
-copyright: Copyright &copy; 2024 CodeGreen Team
+copyright: Copyright &copy; 2024-2026 CodeGreen Team
 
 plugins:
   - glightbox
@@ -111,9 +115,7 @@ markdown_extensions:
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
           case: lower
-  - pymdownx.snippets:
-      auto_append:
-        - includes/mkdocs.md
+  - pymdownx.snippets
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
