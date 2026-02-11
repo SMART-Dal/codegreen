@@ -4,7 +4,7 @@ CodeGreen uses a JSON configuration file to customize behavior and sensor settin
 
 ## Configuration File Location
 
-- **Default**: `~/.config/codegreen/codegreen.json`
+- **Default**: `~/.codegreen/codegreen.json`
 - **Custom**: Use `--config` flag: `codegreen --config /path/to/codegreen.json`
 
 ## Basic Configuration
@@ -64,7 +64,7 @@ CodeGreen uses a JSON configuration file to customize behavior and sensor settin
 
 - **nvidia_nvml**: NVIDIA GPU monitoring via NVML
   - Requires: NVIDIA drivers and CUDA toolkit
-  - Platforms: Linux, Windows (limited)
+  - Platforms: Linux
 
 - **amd_rocm**: AMD GPU via ROCm
   - Requires: ROCm drivers and libraries
@@ -138,7 +138,7 @@ CodeGreen uses a JSON configuration file to customize behavior and sensor settin
     "format": "json",       // json, table, csv
     "verbose": false,       // detailed output
     "save_to_file": true,   // save results to file
-    "output_dir": "~/.config/codegreen/results"
+    "output_dir": "~/.codegreen/results"
   }
 }
 ```
@@ -159,7 +159,7 @@ codegreen config --show
 codegreen config --edit
 
 # Validate configuration syntax
-codegreen config --validate
+python3 -m json.tool config/codegreen.json
 
 # Reset to default configuration
 codegreen config --reset

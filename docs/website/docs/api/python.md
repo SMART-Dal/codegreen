@@ -1,80 +1,90 @@
 # Python API
 
-CodeGreen provides a comprehensive Python API for energy monitoring and analysis.
+CodeGreen is primarily used via CLI. The Python runtime module handles checkpoint communication with the NEMB C++ backend.
 
-## Core Modules
+## Runtime Module
 
-### `codegreen.core.engine`
+`src/instrumentation/language_runtimes/python/codegreen_runtime.py`
 
-Main measurement engine for energy monitoring.
+This module is injected into instrumented code automatically. It uses ctypes to call `libcodegreen-nemb.so`.
+
+### checkpoint()
 
 ```python
-from codegreen.core import engine
-
-# Create engine instance
-engine = engine.MeasurementEngine()
-
-# Measure a function
-@engine.measure
-def my_function():
-    # Your code here
-    pass
-
-# Get measurement results
-result = engine.get_last_measurement()
+def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str):
+    """Mark a checkpoint in the energy measurement stream."""
 ```
 
-### `codegreen.core.config`
-
-Configuration management.
+Called by instrumented code at function boundaries:
 
 ```python
-from codegreen.core import config
+from codegreen_runtime import checkpoint
 
-# Load configuration
-config = config.load_config()
-
-# Update settings
-config.set_precision("high")
-config.set_timeout(60)
+checkpoint(checkpoint_id="1", name="my_function", checkpoint_type="enter")
+# ... function body ...
+checkpoint(checkpoint_id="2", name="my_function", checkpoint_type="exit")
 ```
 
-### `codegreen.utils`
+Each call records a ~100ns timestamp signal. The NEMB backend tracks invocations automatically (`#inv_N` suffix).
 
-Utility functions for platform detection and binary management.
+### measure_checkpoint()
 
 ```python
-from codegreen.utils import platform, binary
-
-# Check platform
-if platform.is_linux():
-    print("Running on Linux")
-
-# Find CodeGreen binary
-binary_path = binary.find_codegreen_binary()
+def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
+                       name: str, line_number: int, context: str):
+    """Record a checkpoint marker with full metadata."""
 ```
 
-## Example Usage
+Lower-level function with additional context. `checkpoint()` delegates to this.
 
-```python
-import codegreen
-from codegreen.core import engine, config
+## Output Format
 
-# Initialize
-config.load_config()
-engine = engine.MeasurementEngine()
+At process exit (`atexit`), the runtime prints checkpoint data to stdout:
 
-# Measure energy consumption
-@engine.measure
-def compute_fibonacci(n):
-    if n <= 1:
-        return n
-    return compute_fibonacci(n-1) + compute_fibonacci(n-2)
+```
+--- CODEGREEN_RESULT_START ---
+{"measurements": [
+  {"checkpoint_id": "enter:main:1#inv_1_t...", "timestamp": 13973..., "joules": 6.80, "watts": 0.76},
+  {"checkpoint_id": "exit:main:2#inv_1_t...", "timestamp": 13973..., "joules": 8.91, "watts": 71.94}
+]}
+--- CODEGREEN_RESULT_END ---
+```
 
-# Run measurement
-result = compute_fibonacci(30)
+The CLI parses this output to extract measurement results.
 
-# Get energy data
-print(f"Energy consumed: {engine.get_last_measurement().total_joules} J")
-print(f"Average power: {engine.get_last_measurement().average_watts} W")
+## CLI Usage
+
+CodeGreen does not expose a Python decorator or programmatic API. All measurement is done via the CLI:
+
+```bash
+# Basic measurement
+codegreen measure python script.py
+
+# Fine granularity with visualization
+codegreen measure python script.py -g fine --export-plot energy.html
+
+# JSON output
+codegreen measure python script.py --json
+
+# Save instrumented code for inspection
+codegreen analyze python script.py --save-instrumented --output-dir ./out
+```
+
+## Package Structure
+
+```
+src/
+  cli/cli.py                    # Typer CLI (11 commands)
+  instrumentation/
+    engine.py                   # MeasurementEngine (orchestrates instrumentation)
+    language_engine.py          # Tree-sitter parsing + query matching
+    ast_processor.py            # Checkpoint injection into AST
+    configs/*.json              # Language-specific instrumentation configs
+    language_runtimes/
+      python/codegreen_runtime.py   # Python ctypes bridge to NEMB
+      java/CodeGreenRuntime.java    # Java JNI bridge to NEMB
+  analyzer/
+    plot.py                     # Plotly/matplotlib visualization
+  measurement/src/nemb/
+    codegreen_energy.cpp        # C API + EnergyMeter implementation
 ```

@@ -1,13 +1,19 @@
 """Post-measurement energy timeline visualization.
 
 Checkpoint format from C++ NEMB backend:
-  {"checkpoint_id": "function_enter:main:1", "timestamp": <ns>, "joules": <float>, "watts": <float>}
+  {"checkpoint_id": "enter:main:1", "timestamp": <ns>, "joules": <float>, "watts": <float>}
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
+CG = "#4dae50"
+RED = "#e55353"
+BG = "#1a1a1a"
+CARD = "#242424"
+GRID = "#333"
+TXT = "#aaa"
 
 
 def parse_checkpoints(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -36,6 +42,29 @@ def parse_checkpoints(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return points
 
 
+def _compute_stats(points: list[dict[str, Any]]) -> dict[str, Any]:
+    total_j = points[-1]["joules"] - points[0]["joules"]
+    wall_s = points[-1]["time_s"] - points[0]["time_s"]
+    avg_w = total_j / wall_s if wall_s > 0 else 0
+    peak_w = max(p["watts"] for p in points)
+    func_energy: dict[str, float] = {}
+    for p in points:
+        if "exit" in p["type"]:
+            func_energy[p["func"]] = func_energy.get(p["func"], 0) + p["delta_j"]
+    func_sorted = sorted(func_energy.items(), key=lambda x: -x[1])
+    hotspots = []
+    if func_energy:
+        vals = sorted(func_energy.values())
+        p90 = vals[int(len(vals) * 0.9)] if len(vals) > 1 else vals[0]
+        hotspots = [f for f, e in func_energy.items() if e >= p90]
+    return {
+        "total_j": round(total_j, 6), "wall_s": round(wall_s, 6),
+        "avg_w": round(avg_w, 3), "peak_w": round(peak_w, 3),
+        "func_energy": {f: round(e, 6) for f, e in func_sorted},
+        "hotspots": hotspots,
+    }
+
+
 def export_plot(checkpoints: list[dict[str, Any]], path: Path) -> None:
     """Export energy timeline visualization. Format based on file extension."""
     points = parse_checkpoints(checkpoints)
@@ -45,167 +74,178 @@ def export_plot(checkpoints: list[dict[str, Any]], path: Path) -> None:
     if not path.suffix:
         path = path.with_suffix(".html")
     if path.suffix == ".html":
-        _render_html(points, path)
+        _render_plotly(points, path)
     elif path.suffix in (".png", ".pdf"):
         _render_matplotlib(points, path)
     else:
-        _render_html(points, path.with_suffix(".html"))
+        _render_plotly(points, path.with_suffix(".html"))
+
+
+def _render_plotly(points: list[dict[str, Any]], path: Path) -> None:
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        raise ValueError("plotly required for HTML export: pip install plotly")
+
+    stats = _compute_stats(points)
+    fe = stats["func_energy"]
+    has_funcs = len(fe) > 1
+
+    # For large checkpoint counts: keep hotspot functions + uniform sample of rest
+    display_pts = points
+    hotspot_set = set(stats["hotspots"])
+    if len(points) > 5000:
+        hot = [p for p in points if p["func"] in hotspot_set]
+        cold = [p for p in points if p["func"] not in hotspot_set]
+        # Keep all hotspot points (up to 3000), uniform sample the rest
+        if len(hot) > 3000:
+            step = len(hot) // 3000
+            hot = hot[::step]
+        remain = max(500, 5000 - len(hot))
+        if len(cold) > remain:
+            step = len(cold) // remain
+            cold = cold[::step]
+        display_pts = sorted(hot + cold, key=lambda p: p["time_s"])
+        if display_pts[-1] is not points[-1]:
+            display_pts.append(points[-1])
+
+    rows = 2 if has_funcs else 1
+    specs = [[{"type": "bar"}], [{"type": "scatter"}]] if has_funcs else [[{"type": "scatter"}]]
+    heights = [0.3, 0.7] if has_funcs else [1.0]
+    fig = make_subplots(
+        rows=rows, cols=1, row_heights=heights, specs=specs,
+        subplot_titles=["Function Energy (J)", "Energy Timeline"] if has_funcs else ["Energy Timeline"],
+        vertical_spacing=0.12 if has_funcs else 0,
+    )
+
+    # Bar chart
+    if has_funcs:
+        names = list(fe.keys())
+        vals = list(fe.values())
+        colors = [RED if n in stats["hotspots"] else CG for n in names]
+        fig.add_trace(go.Bar(
+            y=names, x=vals, orientation="h",
+            marker_color=colors, text=[f"{v:.4f} J" for v in vals],
+            textposition="outside", textfont_size=11,
+            hovertemplate="%{y}: %{x:.6f} J<extra></extra>",
+        ), row=1, col=1)
+        fig.update_yaxes(autorange="reversed", row=1, col=1)
+
+    # Timeline scatter
+    tl_row = rows
+    times = [p["time_s"] for p in display_pts]
+    joules = [p["joules"] for p in display_pts]
+    marker_colors = [CG if "enter" in p["type"] else RED for p in display_pts]
+    hover_text = [
+        f"<b>{p['func']}</b> ({p['type']})<br>"
+        f"Time: {p['time_s']:.6f}s<br>"
+        f"Energy: {p['joules']:.6f} J<br>"
+        f"Power: {p['watts']:.3f} W<br>"
+        f"Delta: {p['delta_j']:.6f} J"
+        for p in display_pts
+    ]
+    fig.add_trace(go.Scatter(
+        x=times, y=joules, mode="lines", line=dict(color=GRID, width=1),
+        showlegend=False, hoverinfo="skip",
+    ), row=tl_row, col=1)
+    fig.add_trace(go.Scatter(
+        x=times, y=joules, mode="markers",
+        marker=dict(color=marker_colors, size=7, line=dict(color=BG, width=1)),
+        text=hover_text, hoverinfo="text",
+        showlegend=False,
+    ), row=tl_row, col=1)
+    fig.update_xaxes(title_text="Time (s)", row=tl_row, col=1)
+    fig.update_yaxes(title_text="Energy (J)", row=tl_row, col=1)
+
+    # Summary annotation
+    wall_fmt = f"{stats['wall_s']*1000:.2f} ms" if stats["wall_s"] < 1 else f"{stats['wall_s']:.4f} s"
+    summary = (
+        f"Total: {stats['total_j']:.4f} J | Wall: {wall_fmt} | "
+        f"Avg: {stats['avg_w']:.2f} W | Peak: {stats['peak_w']:.2f} W | "
+        f"Checkpoints: {len(points)}"
+    )
+    if len(points) != len(display_pts):
+        summary += f" (showing {len(display_pts)})"
+
+    fig.update_layout(
+        title=dict(text=f"CodeGreen Energy Timeline<br><sub>{summary}</sub>", font_color=CG),
+        template="plotly_dark",
+        paper_bgcolor=BG, plot_bgcolor=CARD,
+        font=dict(family="system-ui, -apple-system, sans-serif", color=TXT),
+        height=700 if has_funcs else 450,
+        margin=dict(l=60, r=30, t=80, b=40),
+        dragmode="zoom",
+    )
+    fig.update_xaxes(gridcolor=GRID, zerolinecolor=GRID)
+    fig.update_yaxes(gridcolor=GRID, zerolinecolor=GRID)
+
+    fig.write_html(str(path), include_plotlyjs=True, full_html=True)
 
 
 def _render_matplotlib(points: list[dict[str, Any]], path: Path) -> None:
     try:
         import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.rcParams.update({
+            "figure.facecolor": BG, "axes.facecolor": CARD,
+            "axes.edgecolor": GRID, "axes.labelcolor": TXT,
+            "xtick.color": TXT, "ytick.color": TXT,
+            "text.color": TXT, "grid.color": GRID,
+        })
     except ImportError:
         raise ValueError("matplotlib required for PNG/PDF export: pip install matplotlib")
+    stats = _compute_stats(points)
+    fe = stats["func_energy"]
+    has_funcs = len(fe) > 1
+    fig, axes = plt.subplots(2 if has_funcs else 1, 1,
+                             figsize=(10, 8 if has_funcs else 5),
+                             gridspec_kw={"height_ratios": [1, 1.5]} if has_funcs else None)
+    if not has_funcs:
+        axes = [axes]
+    if has_funcs:
+        ax = axes[0]
+        names = list(fe.keys())
+        vals = list(fe.values())
+        colors = [(RED if n in stats["hotspots"] else CG) for n in names]
+        ax.barh(names, vals, color=colors, height=0.6)
+        ax.set_xlabel("Energy (J)")
+        ax.set_title("Per-Function Energy", fontsize=11, color=CG)
+        ax.invert_yaxis()
+        ax.grid(axis="x", alpha=0.2)
+    ax2 = axes[-1]
     times = [p["time_s"] for p in points]
     joules = [p["joules"] for p in points]
-    colors = ["#22c55e" if "enter" in p["type"] else "#ef4444" for p in points]
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(times, joules, "-", color="#6366f1", linewidth=1.5)
-    ax.scatter(times, joules, c=colors, s=40, zorder=5)
-    for p in points:
-        if len(points) <= 20:
-            ax.annotate(p["func"], (p["time_s"], p["joules"]), fontsize=7,
-                        textcoords="offset points", xytext=(4, 6))
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Energy (J)")
-    ax.set_title("CodeGreen Energy Timeline")
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    cols = [CG if "enter" in p["type"] else RED for p in points]
+    ax2.plot(times, joules, "-", color=GRID, linewidth=1, alpha=0.7)
+    ax2.scatter(times, joules, c=cols, s=50, zorder=5, edgecolors=BG, linewidths=0.5)
+    if len(points) <= 30:
+        labeled: set[str] = set()
+        idx = 0
+        for p in points:
+            if p["func"] in labeled:
+                continue
+            labeled.add(p["func"])
+            late = p["time_s"] > (times[-1] * 0.7)
+            dx = -80 if late else 15
+            dy = -12 * idx if late else 15 + 12 * idx
+            ax2.annotate(
+                p["func"], (p["time_s"], p["joules"]),
+                fontsize=7, textcoords="offset points", xytext=(dx, dy),
+                color=CG if "enter" in p["type"] else RED,
+                arrowprops=dict(arrowstyle="-", color=GRID, lw=0.5),
+            )
+            idx += 1
+    ax2.set_xlabel("Time (s)")
+    ax2.set_ylabel("Energy (J)")
+    ax2.set_title("Energy Timeline", fontsize=11, color=CG)
+    ax2.grid(alpha=0.15)
+    wall_fmt = f"{stats['wall_s']*1000:.1f}ms" if stats["wall_s"] < 1 else f"{stats['wall_s']:.3f}s"
+    fig.suptitle(
+        f"CodeGreen  |  {stats['total_j']:.2f} J  |  {wall_fmt}  |  "
+        f"Peak {stats['peak_w']:.1f} W  |  {len(points)} checkpoints",
+        fontsize=10, color=CG, y=0.98,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=BG)
     plt.close(fig)
-
-
-def _render_html(points: list[dict[str, Any]], path: Path) -> None:
-    total_j = points[-1]["joules"] - points[0]["joules"]
-    wall_s = points[-1]["time_s"] - points[0]["time_s"]
-    avg_w = total_j / wall_s if wall_s > 0 else 0
-    peak_w = max(p["watts"] for p in points)
-    # per-function energy
-    func_energy: dict[str, float] = {}
-    for p in points:
-        if p["type"] in ("function_exit", "exit"):
-            func_energy[p["func"]] = func_energy.get(p["func"], 0) + p["delta_j"]
-    func_sorted = sorted(func_energy.items(), key=lambda x: -x[1])
-    # peak detection: >90th percentile
-    if func_energy:
-        vals = sorted(func_energy.values())
-        p90 = vals[int(len(vals) * 0.9)] if len(vals) > 1 else vals[0]
-        hotspots = [f for f, e in func_energy.items() if e >= p90]
-    else:
-        hotspots = []
-
-    data_json = json.dumps(points)
-    stats_json = json.dumps({
-        "total_j": round(total_j, 6), "wall_s": round(wall_s, 6),
-        "avg_w": round(avg_w, 3), "peak_w": round(peak_w, 3),
-        "func_energy": {f: round(e, 6) for f, e in func_sorted},
-        "hotspots": hotspots,
-    })
-
-    html = f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>CodeGreen Energy Timeline</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;padding:20px}}
-.grid{{display:grid;grid-template-columns:1fr 280px;gap:20px;max-width:1200px;margin:0 auto}}
-.card{{background:#1e293b;border-radius:8px;padding:16px}}
-h1{{font-size:1.3rem;margin-bottom:12px;color:#a5b4fc}}
-.stat{{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #334155}}
-.stat-val{{color:#22d3ee;font-weight:600}}
-.hotspot{{color:#f87171;font-weight:600}}
-svg{{width:100%;height:400px}}
-.tooltip{{position:absolute;background:#1e293b;border:1px solid #475569;border-radius:6px;padding:8px 12px;
-  font-size:0.8rem;pointer-events:none;display:none;z-index:10}}
-#func-table{{width:100%;font-size:0.8rem;margin-top:8px}}
-#func-table td{{padding:3px 6px}}
-#func-table tr:nth-child(even){{background:#253044}}
-.enter{{fill:#22c55e}} .exit{{fill:#ef4444}}
-@media(max-width:768px){{.grid{{grid-template-columns:1fr}}}}
-</style></head><body>
-<h1>CodeGreen Energy Timeline</h1>
-<div class="grid">
-<div class="card" id="chart-card"><svg id="svg"></svg></div>
-<div class="card" id="stats-card"></div>
-</div>
-<div class="tooltip" id="tip"></div>
-<script>
-const pts={data_json};
-const stats={stats_json};
-const svg=document.getElementById("svg");
-const tip=document.getElementById("tip");
-const sc=document.getElementById("stats-card");
-// Stats panel
-let sh='<h1>Summary</h1>';
-sh+='<div class="stat"><span>Total Energy</span><span class="stat-val">'+stats.total_j.toFixed(4)+' J</span></div>';
-sh+='<div class="stat"><span>Wall Time</span><span class="stat-val">'+stats.wall_s.toFixed(4)+' s</span></div>';
-sh+='<div class="stat"><span>Avg Power</span><span class="stat-val">'+stats.avg_w.toFixed(3)+' W</span></div>';
-sh+='<div class="stat"><span>Peak Power</span><span class="stat-val">'+stats.peak_w.toFixed(3)+' W</span></div>';
-if(Object.keys(stats.func_energy).length>0){{
-  sh+='<h1 style="margin-top:12px">Functions</h1><table id="func-table">';
-  for(const[f,e]of Object.entries(stats.func_energy)){{
-    const cls=stats.hotspots.includes(f)?'hotspot':'';
-    sh+='<tr><td class="'+cls+'">'+f+'</td><td class="stat-val">'+e.toFixed(6)+' J</td></tr>';
-  }}
-  sh+='</table>';
-}}
-sc.innerHTML=sh;
-// Chart
-const W=svg.clientWidth||800,H=svg.clientHeight||400;
-const pad={{t:20,r:20,b:40,l:60}};
-const cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
-const xs=pts.map(p=>p.time_s),ys=pts.map(p=>p.joules);
-let xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=Math.min(...ys),ymax=Math.max(...ys);
-if(xmax===xmin){{xmin-=0.5;xmax+=0.5}}
-if(ymax===ymin){{ymin-=0.1;ymax+=0.1}}
-const xr=xmax-xmin,yr=ymax-ymin;
-xmin-=xr*0.05;xmax+=xr*0.05;ymin-=yr*0.05;ymax+=yr*0.05;
-function sx(v){{return pad.l+(v-xmin)/(xmax-xmin)*cw}}
-function sy(v){{return pad.t+(1-(v-ymin)/(ymax-ymin))*ch}}
-svg.setAttribute("viewBox","0 0 "+W+" "+H);
-// Grid lines
-let g='<g stroke="#334155" stroke-width="0.5">';
-for(let i=0;i<=5;i++){{
-  const y=pad.t+ch*i/5;const v=(ymax-(ymax-ymin)*i/5).toFixed(3);
-  g+='<line x1="'+pad.l+'" y1="'+y+'" x2="'+(W-pad.r)+'" y2="'+y+'"/>';
-  g+='<text x="'+(pad.l-6)+'" y="'+(y+4)+'" fill="#94a3b8" font-size="11" text-anchor="end">'+v+'</text>';
-}}
-for(let i=0;i<=5;i++){{
-  const x=pad.l+cw*i/5;const v=(xmin+(xmax-xmin)*i/5).toFixed(3);
-  g+='<line x1="'+x+'" y1="'+pad.t+'" x2="'+x+'" y2="'+(H-pad.b)+'"/>';
-  g+='<text x="'+x+'" y="'+(H-pad.b+16)+'" fill="#94a3b8" font-size="11" text-anchor="middle">'+v+'</text>';
-}}
-g+='</g>';
-// Axes labels
-g+='<text x="'+(W/2)+'" y="'+(H-4)+'" fill="#94a3b8" font-size="12" text-anchor="middle">Time (s)</text>';
-g+='<text x="14" y="'+(H/2)+'" fill="#94a3b8" font-size="12" text-anchor="middle" transform="rotate(-90,14,'+(H/2)+')">Energy (J)</text>';
-// Polyline
-const lp=pts.map(p=>sx(p.time_s)+","+sy(p.joules)).join(" ");
-g+='<polyline points="'+lp+'" fill="none" stroke="#818cf8" stroke-width="2"/>';
-// Markers
-pts.forEach((p,i)=>{{
-  const cx=sx(p.time_s),cy=sy(p.joules);
-  const cls=p.type.includes("enter")?"enter":"exit";
-  g+='<circle cx="'+cx+'" cy="'+cy+'" r="5" class="'+cls+'" data-i="'+i+'" style="cursor:pointer"/>';
-}});
-svg.innerHTML=g;
-// Tooltip
-svg.addEventListener("mousemove",e=>{{
-  const t=e.target;
-  if(t.tagName==="circle"){{
-    const p=pts[+t.dataset.i];
-    tip.innerHTML='<b>'+p.func+'</b> ('+p.type+')<br>Time: '+p.time_s.toFixed(6)+'s<br>Energy: '+p.joules.toFixed(6)+' J<br>Power: '+p.watts.toFixed(3)+' W<br>Delta: '+p.delta_j.toFixed(6)+' J';
-    tip.style.display="block";tip.style.left=(e.pageX+12)+"px";tip.style.top=(e.pageY-10)+"px";
-  }}else{{tip.style.display="none"}}
-}});
-// Click to highlight function pair
-svg.addEventListener("click",e=>{{
-  const t=e.target;
-  if(t.tagName!=="circle")return;
-  const p=pts[+t.dataset.i];
-  document.querySelectorAll("circle").forEach(c=>c.setAttribute("r","5"));
-  // Highlight all circles for same function
-  pts.forEach((q,j)=>{{if(q.func===p.func)document.querySelectorAll('circle[data-i="'+j+'"]').forEach(c=>c.setAttribute("r","8"))}});
-}});
-</script></body></html>"""
-    path.write_text(html)

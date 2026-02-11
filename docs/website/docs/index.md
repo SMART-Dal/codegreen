@@ -2,11 +2,11 @@
 
 <div class="grid cards" markdown>
 
--   :material-lightning-bolt:{ .lg .middle } **Fast Energy Monitoring**
+-   :material-lightning-bolt:{ .lg .middle } **Precise Energy Measurement**
 
     ---
 
-    Real-time monitoring of CPU, GPU, and system energy consumption with minimal overhead.
+    Hardware-level energy monitoring via Intel RAPL, NVIDIA NVML, and AMD ROCm with sub-millisecond resolution.
 
     [:octicons-arrow-right-24: Getting Started](getting-started/quickstart.md)
 
@@ -14,23 +14,23 @@
 
     ---
 
-    Support for Python, C, C++, Java, and more with language-specific optimizations.
+    Python, C, C++, and Java instrumentation via Tree-sitter with config-driven extensibility.
 
     [:octicons-arrow-right-24: Examples](examples/python.md)
 
--   :material-chart-line:{ .lg .middle } **Advanced Analytics**
+-   :material-chart-line:{ .lg .middle } **Interactive Visualization**
 
     ---
 
-    Detailed energy reports, visualizations, and optimization suggestions.
+    Energy timeline plots with per-function breakdown, hotspot detection, and zoom/pan via Plotly.
 
-    [:octicons-arrow-right-24: CLI Reference](user-guide/cli-reference.md)
+    [:octicons-arrow-right-24: Reports & Visualization](user-guide/reports.md)
 
 -   :material-cog:{ .lg .middle } **Easy Integration**
 
     ---
 
-    CLI tools, Python API, and IDE plugins for seamless development workflow.
+    CLI tool with JSON output, CI/CD workflows, and granularity control (coarse/fine).
 
     [:octicons-arrow-right-24: Installation](getting-started/installation.md)
 
@@ -46,16 +46,15 @@
 
 ## What is CodeGreen?
 
-CodeGreen is a comprehensive energy monitoring and optimization tool designed to help developers understand and reduce the energy consumption of their software. By providing real-time energy measurements, detailed analytics, and optimization suggestions, CodeGreen enables energy-aware software development.
+CodeGreen is an energy measurement tool that helps developers understand the energy consumption of their software at the function level. It uses Tree-sitter AST parsing for automatic code instrumentation and a C++ backend (NEMB) for hardware-level energy readings with minimal overhead.
 
 ### Key Features
 
-- **🔋 Energy Monitoring**: Real-time monitoring of CPU, GPU, and system energy consumption
-- **📊 Code Analysis**: Language-agnostic code analysis for energy optimization opportunities  
-<!-- - **🛠️ IDE Integration**: Support for VSCode, IntelliJ, and other popular IDEs -->
-- **🔌 Hardware Plugins**: Extensible plugin system for different hardware platforms
-<!-- - **📈 Visualization**: Charts and reports for energy consumption analysis -->
-- **⚡ Code Instrumentation**: Automatic code instrumentation for energy profiling
+- **Energy Measurement**: Per-function energy attribution via Intel RAPL, NVIDIA NVML, AMD ROCm
+- **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
+- **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
+- **Granularity Control**: Coarse mode (main only) or fine mode (all functions)
+- **Benchmarking**: Built-in benchmark suite comparing CodeGreen vs perf RAPL
 
 ## Quick Start
 
@@ -81,10 +80,10 @@ Get started with CodeGreen in just a few steps:
     codegreen measure python my_script.py
     ```
 
-=== "Analyze"
+=== "Visualize"
 
     ```bash
-    codegreen info
+    codegreen measure python my_script.py -g fine --export-plot energy.html
     ```
 
 ## Supported Platforms
@@ -95,25 +94,21 @@ Get started with CodeGreen in just a few steps:
 
     ---
 
-    Full support for Intel RAPL, NVIDIA NVML, and AMD hardware monitoring.
-
--   :material-apple:{ .lg .middle } **macOS**
-
-    ---
-
-    Support for Intel and Apple Silicon energy monitoring.
-
--   :material-microsoft-windows:{ .lg .middle } **Windows**
-
-    ---
-
-    Windows-specific energy monitoring and optimization tools.
+    Full support for Intel RAPL, NVIDIA NVML, and AMD ROCm/RAPL energy monitoring.
 
 </div>
 
-## Community
+**Note:** CodeGreen supports Linux, macOS, and Windows. Hardware sensor availability varies by platform.
 
-Join our community to get help, share ideas, and contribute to CodeGreen:
+## Citing CodeGreen
+
+If you use CodeGreen in your research, please cite:
+
+> Rajput, S., Widmayer, T., Shang, Z., Kechagia, M., Sarro, F., & Sharma, T. (2024). Enhancing energy-awareness in deep learning through fine-grained energy measurement. *ACM Transactions on Software Engineering and Methodology*, 33(8), 1-34.
+
+[:octicons-arrow-right-24: Full citation & BibTeX](about/citing.md)
+
+## Community
 
 - [:material-github: GitHub](https://github.com/SMART-Dal/codegreen) - Source code and issues
 - [:material-chat: Discussions](https://github.com/SMART-Dal/codegreen/discussions) - Community discussions

@@ -19,34 +19,19 @@ Complete guide to configuring CodeGreen for optimal performance and accuracy.
 
 CodeGreen searches for configuration files in this priority order:
 
-1. **Local Project Override**: `./config/codegreen.json`
-2. **Current Directory**: `./codegreen.json`
-3. **User Configuration**: `~/.codegreen/codegreen.json`
-4. **System-wide**: `/etc/codegreen/codegreen.json`
+1. `<install_dir>/config/codegreen.json` (project root)
+2. `<install_dir>/build/bin/config/codegreen.json`
+3. `~/.codegreen/codegreen.json` (user home)
 
-The first file found is used. All others are ignored.
+The first file found is used. The default config ships at `config/codegreen.json` in the project root.
 
-### Recommended Setup
+### Custom Config
 
-**Development:**
 ```bash
-# Project-specific config
-cp config/codegreen.json ./codegreen.json
-# Edit for your project needs
-```
-
-**Personal Use:**
-```bash
-# User-level config
+# User-level override
 mkdir -p ~/.codegreen
 cp config/codegreen.json ~/.codegreen/codegreen.json
-```
-
-**System-wide (requires sudo):**
-```bash
-# All users on system
-sudo mkdir -p /etc/codegreen
-sudo cp config/codegreen.json /etc/codegreen/
+# Edit as needed
 ```
 
 ---
@@ -358,7 +343,7 @@ sudo cp config/codegreen.json /etc/codegreen/
 }
 ```
 
-**Important:** Use `-O0` (no optimization) for accurate measurements. Optimizations can eliminate code, making measurements unreliable.
+**Note:** CodeGreen defaults to `-O2` for realistic energy measurement. Use `-O0` only if you need to measure unoptimized code.
 
 ---
 
@@ -367,44 +352,44 @@ sudo cp config/codegreen.json /etc/codegreen/
 ### Validate Configuration
 
 ```bash
-# Check syntax and values
-codegreen config --validate --verbose
+# Check JSON syntax
+python3 -m json.tool config/codegreen.json
 
 # Show current active configuration
 codegreen config --show
 
 # Test with minimal workload
-codegreen benchmark cpu_stress --duration 5
+codegreen measure-workload --duration 3
 ```
 
 ### Common Validation Errors
 
 **Error: Invalid precision value**
 ```json
-// ❌ Wrong
+// WRONG
 "precision": "maximum"
 
-// ✅ Correct
+// CORRECT
 "precision": "high"
 ```
 
 **Error: Provider name mismatch**
 ```json
-// ❌ Wrong
+// WRONG
 "nvidia_gpu": { "enabled": true }
 
-// ✅ Correct
+// CORRECT
 "nvidia_nvml": { "enabled": true }
 ```
 
 **Error: Missing required fields**
 ```json
-// ❌ Incomplete
+// INCOMPLETE
 "nemb": {
   "enabled": true
 }
 
-// ✅ Complete
+// COMPLETE
 "nemb": {
   "enabled": true,
   "coordinator": {
@@ -477,7 +462,7 @@ codegreen info --verbose
 
 ```bash
 # Validate JSON syntax
-codegreen config --validate
+python3 -m json.tool config/codegreen.json
 
 # Use a JSON validator
 python3 -m json.tool config/codegreen.json
@@ -486,11 +471,9 @@ python3 -m json.tool config/codegreen.json
 ### Permission Issues
 
 ```bash
-# RAPL access requires permissions
+# Set up RAPL access (creates codegreen group + udev rule)
 sudo codegreen init-sensors
-
-# Or manual setup
-sudo chmod 644 /sys/class/powercap/intel-rapl:*/energy_uj
+# Then log out/in for group changes
 ```
 
 ### Performance Issues
@@ -536,7 +519,7 @@ CodeGreen supports environment variables in config values:
 ## Best Practices
 
 1. **Start with Defaults**: Use the provided `config/codegreen.json` template
-2. **Validate Early**: Run `codegreen config --validate` after changes
+2. **Validate Early**: Run `python3 -m json.tool config/codegreen.json` after changes
 3. **Test Incrementally**: Change one setting at a time
 4. **Monitor Overhead**: Use `codegreen doctor` to check measurement impact
 5. **Version Control**: Commit project-specific configs to git
@@ -553,14 +536,11 @@ codegreen config --show
 # Edit configuration
 codegreen config --edit
 
-# Validate configuration
-codegreen config --validate
-
 # Reset to defaults
 codegreen config --reset
 
-# Show config search path
-codegreen info --verbose
+# Validate JSON syntax
+python3 -m json.tool config/codegreen.json
 ```
 
 ---

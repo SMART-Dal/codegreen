@@ -8,13 +8,13 @@ Complete reference for CodeGreen command-line interface.
 codegreen [OPTIONS] COMMAND [ARGS]...
 ```
 
-### Options
-
-- `--debug`: Enable debug output
-- `--config PATH`: Path to configuration file
-- `--version, -v`: Show version and exit
-- `--log-level [DEBUG|INFO|WARNING|ERROR]`: Set logging level
-- `--help, -h`: Show help message
+| Option | Description |
+|--------|-------------|
+| `--debug` | Enable debug output |
+| `--config PATH` | Path to configuration file |
+| `--version, -v` | Show version and exit |
+| `--log-level [DEBUG\|INFO\|WARNING\|ERROR]` | Set logging level (default: INFO) |
+| `--help, -h` | Show help message |
 
 ## Commands
 
@@ -23,62 +23,79 @@ codegreen [OPTIONS] COMMAND [ARGS]...
 Instruments code, executes it, and measures energy consumption using hardware sensors.
 
 ```bash
-codegreen measure [OPTIONS] LANGUAGE SCRIPT [ARGS]...
+codegreen measure [OPTIONS] LANGUAGE:{python|cpp|java|c} SCRIPT [-- ARGS...]
 ```
 
 **Options:**
-- `-o, --output PATH`: Save results to file (JSON format)
-- `-s, --sensors SENSOR`: Sensors to use (rapl, nvidia, amd_gpu, amd_cpu)
-- `-p, --precision [low|medium|high]`: Measurement precision
-- `-t, --timeout SECONDS`: Execution timeout
-- `--verbose`: Show detailed output
-- `--json`: Output results in JSON format
-- `--no-cleanup`: Keep temporary instrumented files
-- `--instrumented`: Script is already instrumented (skip instrumentation)
 
-**Precision Levels:**
+| Option | Description |
+|--------|-------------|
+| `-o, --output PATH` | Save results to file (JSON format) |
+| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors to use |
+| `-p, --precision [low\|medium\|high]` | Measurement precision (default: high) |
+| `-g, --granularity [coarse\|fine]` | Instrumentation level (default: coarse) |
+| `--export-plot PATH` | Export energy timeline (HTML via Plotly, or PNG/PDF via matplotlib) |
+| `-t, --timeout SECONDS` | Execution timeout |
+| `--verbose` | Show detailed output |
+| `--json` | Output results in JSON format |
+| `--no-cleanup` | Keep temporary instrumented files |
+| `--instrumented` | Script is already instrumented (skip instrumentation) |
 
-| Level | Interval | Overhead | Accuracy | Use Case |
-|-------|----------|----------|----------|----------|
-| `low` | 100ms | ~0.01% | ±10% | Production monitoring |
-| `medium` | 10ms | ~0.1% | ±5% | Development (default) |
-| `high` | 1ms | ~1% | ±2% | Detailed profiling |
+**Granularity:**
 
-**Technical Details:**
-- Background thread polls hardware sensors at specified interval
-- Higher precision = more frequent polling = better correlation accuracy
-- Checkpoint overhead is constant (~100-200ns), independent of precision
-- Precision affects time-series granularity, not checkpoint cost
+- **coarse** (default): Instruments only main entry/exit. Minimal overhead, gives total program energy.
+- **fine**: Instruments all functions per language config. Per-function energy breakdown.
 
 **Examples:**
 ```bash
-# Basic measurement (medium precision by default)
+# Basic measurement (coarse granularity)
 codegreen measure python script.py
 
-# High precision with multiple sensors
-codegreen measure python ml_train.py --precision high --sensors rapl nvidia
+# Fine-grained with per-function breakdown
+codegreen measure python script.py -g fine
 
-# Low overhead for production
-codegreen measure python server.py --precision low
+# Export interactive HTML energy timeline
+codegreen measure python script.py -g fine --export-plot energy.html
 
-# C++ program measurement
-codegreen measure cpp main.cpp
+# Export static PNG plot (requires matplotlib)
+codegreen measure python script.py -g fine --export-plot energy.png
+
+# Multiple sensors with JSON output
+codegreen measure python ml_train.py --sensors rapl nvidia --json
+
+# C++ program with arguments
+codegreen measure cpp main.cpp -- 5000
+
+# Save results
+codegreen measure python main.py -o results.json
 ```
 
 ### `analyze`
 
-Performs static analysis using Tree-sitter AST parsing to identify instrumentation points.
+Static analysis via Tree-sitter AST parsing. Identifies instrumentation points without executing code.
 
 ```bash
-codegreen analyze [OPTIONS] LANGUAGE SCRIPT
+codegreen analyze [OPTIONS] LANGUAGE:{python|cpp|java|c} SCRIPT
 ```
 
 **Options:**
-- `-o, --output PATH`: Save analysis to file
-- `--verbose`: Show detailed instrumentation points
-- `--suggestions`: Show optimization suggestions (default: true)
-- `--save-instrumented`: Save instrumented code to current directory
-- `--output-dir PATH`: Directory for instrumented code
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output PATH` | Save analysis to file |
+| `--verbose` | Show detailed instrumentation points |
+| `--json` | Output in JSON format |
+| `--suggestions` | Show optimization suggestions (default: true) |
+| `--save-instrumented` | Save instrumented code to current directory |
+| `--output-dir PATH` | Directory for instrumented code |
+| `--no-cleanup` | Keep temporary files |
+
+**Examples:**
+```bash
+codegreen analyze python script.py --verbose
+codegreen analyze cpp main.cpp --json
+codegreen analyze python app.py --save-instrumented --output-dir ./instrumented
+```
 
 ### `init`
 
@@ -88,27 +105,29 @@ Comprehensive system initialization: detects hardware, configures sensors, sets 
 codegreen init [OPTIONS]
 ```
 
-**Options:**
-- `--interactive`: Interactive setup with prompts
-- `--auto-detect-only`: Auto-detect only, no prompts
-- `--sensors SENSOR`: Specify sensors to initialize
-- `--force`: Overwrite existing configuration
+| Option | Description |
+|--------|-------------|
+| `--interactive` | Interactive setup with prompts |
+| `--auto-detect-only` | Auto-detect only, no prompts |
+| `--sensors SENSOR` | Specify sensors to initialize |
+| `--force` | Overwrite existing configuration |
 
 ### `init-sensors`
 
-Initialize and cache sensor configuration for NEMB measurement system. **Requires root for permission setup.**
+Initialize and cache sensor configuration for NEMB measurement system. **Requires root.**
 
 ```bash
 sudo codegreen init-sensors
 ```
 
-Performs comprehensive initialization including:
+Performs:
+
 - Discovers available energy measurement hardware (RAPL, NVML, ROCm)
 - Validates sensor accessibility and permissions
 - Sets up `/sys/class/powercap` read permissions
 - Caches sensor configuration for fast startup
 
-**Note:** This command must be run before any energy measurements can be performed. Run with `sudo` to ensure proper sensor permissions are configured.
+**This must be run before any energy measurements.**
 
 ### `info`
 
@@ -118,9 +137,10 @@ Display CodeGreen installation, hardware sensors, and system information.
 codegreen info [OPTIONS]
 ```
 
-**Options:**
-- `--verbose`: Show detailed information
-- `--json`: Output in JSON format
+| Option | Description |
+|--------|-------------|
+| `--verbose` | Show detailed information |
+| `--json` | Output in JSON format |
 
 ### `doctor`
 
@@ -130,39 +150,89 @@ Diagnose CodeGreen installation and configuration issues.
 codegreen doctor [OPTIONS]
 ```
 
-**Options:**
-- `--verbose`: Show detailed diagnostic output
-- `--fix`: Attempt to fix issues automatically
+| Option | Description |
+|--------|-------------|
+| `--verbose` | Show detailed diagnostic output |
+| `--fix` | Attempt to fix issues automatically |
 
 ### `benchmark`
 
-Measure energy consumption using built-in synthetic workloads.
+Run benchmarks from the benchmarksgame suite comparing CodeGreen energy measurement vs perf RAPL.
 
 ```bash
-codegreen benchmark [OPTIONS] WORKLOAD
+codegreen benchmark [OPTIONS]
 ```
 
-**Workloads:** cpu_stress, memory_stress, mixed, gpu_compute
+| Option | Description |
+|--------|-------------|
+| `-p, --problem TEXT` | Problems to run (e.g., nbody, binarytrees) |
+| `-l, --lang TEXT` | Languages to test |
+| `-s, --size TEXT` | Problem sizes |
+| `--profiler TEXT` | Profilers: codegreen, perf |
+| `-r, --reps INTEGER` | Repetitions per test (default: 5) |
+| `-o, --output-dir PATH` | Output directory (default: benchmark/results) |
 
-**Options:**
-- `--duration SECONDS`: Duration of benchmark (default: 10)
-- `--intensity [low|medium|high]`: Workload intensity
-- `--output PATH`: Save results to file
+**Examples:**
+```bash
+# Run all benchmarks
+codegreen benchmark
 
-**Note:** May require `sudo` if sensor permissions haven't been configured via `sudo codegreen init-sensors`.
+# Specific problem and language
+codegreen benchmark -p nbody -l python -s 5000
+
+# Compare profilers
+codegreen benchmark -p nbody --profiler codegreen --profiler perf
+```
+
+### `measure-workload`
+
+Measure energy consumption of synthetic workloads for sensor calibration and testing.
+
+```bash
+codegreen measure-workload [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--duration INTEGER` | Duration in seconds (default: 3) |
+| `--workload TEXT` | Workload type: cpu_stress, memory_stress, mixed |
+
+**Examples:**
+```bash
+codegreen measure-workload --duration 10 --workload cpu_stress
+codegreen measure-workload --workload memory_stress
+```
 
 ### `validate`
 
-Validate measurement accuracy against native tools. **Requires root.**
+Validate measurement accuracy against native hardware tools. **Requires root.**
 
 ```bash
-codegreen validate [OPTIONS]
+sudo codegreen validate [OPTIONS]
 ```
 
-**Options:**
-- `--quick`: Quick validation (30 seconds)
-- `--full`: Full validation suite
-- `--tolerance PERCENT`: Acceptable error tolerance
+| Option | Description |
+|--------|-------------|
+| `--quick` | Quick validation (30 seconds) |
+| `--full` | Full validation suite |
+| `--tolerance PERCENT` | Acceptable error tolerance |
+
+### `validate-accuracy`
+
+Run validation experiments for paper submission.
+
+```bash
+codegreen validate-accuracy [OPTIONS] [EXPERIMENT]
+```
+
+**Experiments:** overhead, accuracy, scalability, crosslang, linearity, all
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output-dir PATH` | Output directory (default: validation_results) |
+| `--latex` | Generate LaTeX tables |
+| `--plots` | Generate plots |
+| `-r, --reps INTEGER` | Repetitions per test (default: 30) |
 
 ### `config`
 
@@ -172,8 +242,8 @@ Manage CodeGreen configuration.
 codegreen config [OPTIONS]
 ```
 
-**Options:**
-- `--show`: Display current configuration
-- `--edit`: Open configuration in editor
-- `--reset`: Reset to default configuration
-- `--validate`: Validate configuration syntax
+| Option | Description |
+|--------|-------------|
+| `--show` | Display current configuration |
+| `--edit` | Open configuration in editor |
+| `--reset` | Reset to default configuration |

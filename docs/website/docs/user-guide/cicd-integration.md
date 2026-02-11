@@ -45,7 +45,7 @@ jobs:
       - name: Measure Energy
         run: |
           codegreen measure python tests/benchmark.py \
-            --precision high \
+            -g fine \
             --output results/energy.json \
             --json
 
@@ -100,30 +100,23 @@ jobs:
 
 **Energy Comparison Script** (`scripts/compare_energy.py`):
 ```python
-import json
-import sys
+import json, sys
 
-def compare_energy(main_file, pr_file, threshold_percent):
-    with open(main_file) as f:
-        main_data = json.load(f)
-    with open(pr_file) as f:
-        pr_data = json.load(f)
+def get_energy(path):
+    data = json.load(open(path))
+    cps = data.get("measurement", {}).get("checkpoints", [])
+    if len(cps) >= 2:
+        return cps[-1]["joules"] - cps[0]["joules"]
+    return 0.0
 
-    main_energy = main_data['total_energy_joules']
-    pr_energy = pr_data['total_energy_joules']
-
-    increase = ((pr_energy - main_energy) / main_energy) * 100
-
-    print(f"Main branch energy: {main_energy:.2f} J")
-    print(f"PR energy: {pr_energy:.2f} J")
-    print(f"Change: {increase:+.1f}%")
-
-    if increase > threshold_percent:
-        print(f"❌ Energy regression detected: {increase:.1f}% > {threshold_percent}%")
+def compare_energy(main_file, pr_file, threshold):
+    main_e = get_energy(main_file)
+    pr_e = get_energy(pr_file)
+    change = ((pr_e - main_e) / main_e * 100) if main_e > 0 else 0
+    print(f"Main: {main_e:.2f} J | PR: {pr_e:.2f} J | Change: {change:+.1f}%")
+    if change > threshold:
+        print(f"Energy regression: {change:.1f}% > {threshold}%")
         sys.exit(1)
-    else:
-        print(f"✅ Energy within acceptable range")
-        sys.exit(0)
 
 if __name__ == "__main__":
     compare_energy(sys.argv[1], sys.argv[2], float(sys.argv[3]))
@@ -142,7 +135,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, ubuntu-22.04]
-        precision: [low, medium, high]
+        granularity: [coarse, fine]
 
     steps:
       - uses: actions/checkout@v3
@@ -153,14 +146,14 @@ jobs:
       - name: Run Energy Tests
         run: |
           codegreen measure python tests/suite.py \
-            --precision ${{ matrix.precision }} \
-            --output energy-${{ matrix.os }}-${{ matrix.precision }}.json \
+            -g ${{ matrix.granularity }} \
+            -o energy-${{ matrix.os }}-${{ matrix.granularity }}.json \
             --json
 
       - name: Upload Results
         uses: actions/upload-artifact@v3
         with:
-          name: energy-results-${{ matrix.os }}-${{ matrix.precision }}
+          name: energy-results-${{ matrix.os }}-${{ matrix.granularity }}
           path: energy-*.json
 ```
 
@@ -271,7 +264,7 @@ pipeline {
                 sh '''
                     export PATH="/tmp/codegreen/bin:$PATH"
                     codegreen measure python src/application.py \
-                        --precision high \
+                        -g fine \
                         --output energy-${BUILD_NUMBER}.json \
                         --json
                 '''
@@ -286,20 +279,16 @@ pipeline {
 
         stage('Trend Analysis') {
             steps {
-                script {
-                    def currentEnergy = readJSON file: "energy-${BUILD_NUMBER}.json"
-                    echo "Total Energy: ${currentEnergy.total_energy_joules} J"
-
-                    // Compare with previous build
-                    if (currentBuild.previousBuild != null) {
-                        def previousEnergy = readJSON file: "energy-${currentBuild.previousBuild.number}.json"
-                        def change = ((currentEnergy.total_energy_joules - previousEnergy.total_energy_joules) / previousEnergy.total_energy_joules) * 100
-
-                        if (change > 10) {
-                            unstable(message: "Energy increased by ${change}%")
-                        }
-                    }
-                }
+                sh '''
+                    python3 -c "
+import json
+data = json.load(open('energy-${BUILD_NUMBER}.json'))
+cps = data.get('measurement', {}).get('checkpoints', [])
+if len(cps) >= 2:
+    energy = cps[-1]['joules'] - cps[0]['joules']
+    print(f'Total Energy: {energy:.2f} J')
+"
+                '''
             }
         }
     }
@@ -461,7 +450,7 @@ Always initialize sensors before measurements:
 ```bash
 sudo codegreen init-sensors
 # OR
-codegreen init --interactive
+sudo codegreen init-sensors
 ```
 
 ### 2. Consistent Hardware
@@ -616,7 +605,7 @@ jobs:
         run: |
           mkdir -p results
           codegreen measure python tests/benchmark.py \
-            --precision high \
+            -g fine \
             --output results/energy.json \
             --json
 

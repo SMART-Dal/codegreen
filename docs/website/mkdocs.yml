@@ -67,6 +67,7 @@ extra_head:
 copyright: Copyright &copy; 2024 CodeGreen Team
 
 plugins:
+  - glightbox
   - social
   - search:
       lang: en

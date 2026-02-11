@@ -1909,32 +1909,14 @@ def config_management(
 @app.command("init-sensors")
 def init_sensors():
     """
-    [bold]Initialize and cache sensor configuration[/bold].
+    [bold]Initialize energy sensor permissions[/bold].
 
-    Performs comprehensive initialization of the NEMB energy measurement system,
-    including sensor discovery, validation, and configuration caching. This command
-    must be run before any energy measurements can be performed.
-
-    [bold]What this command does:[/bold]
-    - Discovers available energy measurement hardware (RAPL, NVML, etc.)
-    - Validates sensor accessibility and permissions
-    - Runs system self-tests to ensure measurement accuracy
-    - Caches sensor configuration for faster subsequent measurements
-    - Reports available energy providers and their capabilities
-
-    [bold]Requirements:[/bold]
-    - Hardware energy sensors (Intel RAPL, NVIDIA GPUs, etc.)
-    - Appropriate system permissions (may require sudo)
-    - Compatible operating system (Linux, Windows)
+    Creates a 'codegreen' group, adds the current user, and sets read
+    permissions on RAPL sysfs files. A udev rule ensures permissions
+    persist across reboots. Must be run once with sudo.
 
     [bold]Examples:[/bold]
-    - [cyan]codegreen init-sensors[/cyan] - Initialize all available sensors
-    - [cyan]sudo codegreen init-sensors[/cyan] - Initialize with elevated permissions
-
-    [bold]Troubleshooting:[/bold]
-    - Run with sudo if permission errors occur
-    - Check hardware compatibility if no sensors detected
-    - Verify kernel modules are loaded for hardware sensors
+    - [cyan]sudo codegreen init-sensors[/cyan] - Set up RAPL access
     """
     import os
     import pwd
@@ -2118,7 +2100,7 @@ def run_benchmark(
     sizes: Annotated[Optional[List[str]], typer.Option("--size", "-s", help="Problem sizes")] = None,
     profilers: Annotated[Optional[List[str]], typer.Option("--profiler", help="Profilers: codegreen, perf")] = None,
     repetitions: Annotated[int, typer.Option("--reps", "-r", help="Repetitions per test")] = 5,
-    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path("benchmark_results"),
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path("benchmark/results"),
 ):
     """Run benchmarks from benchmarksgame suite comparing codegreen vs perf RAPL."""
     from benchmark.harness import BenchmarkHarness

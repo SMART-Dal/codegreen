@@ -26,22 +26,9 @@ if _install_str not in _sys.path:
 if _os.getcwd() != _install_str:
     _os.chdir(_install_str)
 
-# Import main components for easy access
-try:
-    from .cli import main as cli_main
-    from .core.engine import MeasurementEngine
-    from .core.config import Config
-except ImportError:
-    # Handle import errors gracefully during installation
-    pass
-
-# Package metadata
 __all__ = [
     "__version__",
     "__author__",
     "__email__",
     "__description__",
-    "cli_main",
-    "MeasurementEngine",
-    "Config",
 ]

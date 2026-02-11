@@ -1,37 +1,33 @@
 # Installation
 
-CodeGreen can be installed via the automated script, built manually from source, or installed for development.
+CodeGreen can be installed via the automated script or built manually from source.
 
 ## Quick Install (Recommended)
 
-The easiest way to install CodeGreen on Linux/macOS is using the automated script. This handles system dependencies, C++ compilation (NEMB), and Python bindings.
-
 ```bash
-# 1. Clone the repository
 git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
-
-# 2. Run the automated installer
-./install.sh
+sudo ./install.sh
 ```
 
 **What this does:**
-*   Installs required system packages (requires `sudo`).
-*   Builds the Native Energy Measurement Backend (NEMB) using CMake.
-*   Installs the `codegreen` CLI tool to your system.
 
-### Post-Install Setup
+- Checks system requirements (Python 3.8+, CMake, g++)
+- Initializes git submodules (Tree-sitter grammars)
+- Installs Python dependencies
+- Builds the NEMB C++ backend (`libcodegreen-nemb.so`)
+- Installs the `codegreen` CLI via pip
+- Sets up RAPL sensor permissions (creates `codegreen` group, udev rule)
 
-After installation, it is **critical** to initialize the hardware sensors. This step detects your CPU/GPU capabilities and sets up the necessary permissions (e.g., for reading RAPL energy counters).
+Running with `sudo` handles RAPL permissions automatically. After install, log out and back in for group changes to take effect. No `sudo` needed after that.
 
+If installed without sudo, set up sensors separately:
 ```bash
-# Initialize sensors (may require sudo for first-time permission setup)
 sudo codegreen init-sensors
+# then log out/in
 ```
 
 ## Manual Build
-
-If you prefer to build manually or have specific requirements:
 
 ### Prerequisites
 
@@ -62,76 +58,70 @@ If you prefer to build manually or have specific requirements:
    pip install -e .
    ```
 
+### Optional: Visualization Support
+
+For `--export-plot` HTML export:
+```bash
+pip install plotly
+```
+
+For PNG/PDF static export:
+```bash
+pip install matplotlib
+```
+
+Or install all visualization dependencies:
+```bash
+pip install -e ".[viz]"
+```
+
 ## Development Installation
 
-For contributors or those who want to modify the CodeGreen source code:
+For contributors:
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/SMART-Dal/codegreen.git
-    cd codegreen
-    ```
-
-2.  **Install development dependencies:**
-    ```bash
-    pip install -e ".[dev]"
-    ```
-
-3.  **Install pre-commit hooks:**
-    ```bash
-    pre-commit install
-    ```
+```bash
+git clone https://github.com/SMART-Dal/codegreen.git
+cd codegreen
+pip install -e ".[dev]"
+pre-commit install
+```
 
 ## Hardware Requirements
 
-CodeGreen's **NEMB** (Native Energy Measurement Backend) supports a variety of hardware sensors.
+CodeGreen's NEMB (Native Energy Measurement Backend) supports the following hardware sensors on **Linux**:
 
-| Sensor | Requirements | Linux | macOS | Windows |
-|--------|--------------|-------|-------|---------|
-| **RAPL** | Intel/AMD CPU | ✅ | ✅ | ✅ |
-| **NVML** | NVIDIA GPU | ✅ | ✅ | ❌ |
-| **ROCm** | AMD GPU | ✅ | ❌ | ❌ |
+| Sensor | Requirements | Description |
+|--------|--------------|-------------|
+| **Intel RAPL** | Intel/AMD CPU | CPU package, core, DRAM energy via `/sys/class/powercap` |
+| **NVIDIA NVML** | NVIDIA GPU + drivers 450.80+ | GPU power via NVML library |
+| **AMD ROCm** | AMD GPU + ROCm | GPU power via ROCm SMI |
+| **AMD RAPL** | AMD CPU | CPU energy via RAPL interface |
 
-### Hardware-Specific Notes
-
-*   **NVIDIA GPUs**: Requires NVIDIA drivers 450.80.02 or later. Optional CUDA Toolkit 11.0+ for advanced features.
-*   **Intel/AMD CPUs**: Requires access to `/sys/class/powercap` on Linux (handled by `codegreen init`).
-
-## Docker Installation
-
-For containerized environments, use the official image. Note that you must run with `--privileged` to allow access to hardware energy counters.
-
-```bash
-docker pull SMART-Dal/codegreen:latest
-docker run --privileged -it --rm SMART-Dal/codegreen:latest
-```
+**Note:** CodeGreen supports Linux, macOS, and Windows. Hardware sensor availability varies by platform.
 
 ## Troubleshooting
 
-### Common Issues
-
-**Command not found**
-Ensure your installation directory is in your `PATH`. If you installed via `pip --user`:
+**Command not found:**
+Ensure your installation directory is in your `PATH`:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-**Permission denied (RAPL)**
-If you see errors accessing `/sys/class/powercap`, run the initialization command:
+**Permission denied (RAPL):**
 ```bash
 sudo codegreen init-sensors
+# then log out/in for group changes
 ```
 
-**Missing dependencies**
-Use the built-in diagnostic tool to identify missing libraries or configuration issues:
+This creates a `codegreen` group with read-only access to `/sys/class/powercap/` energy counters and a udev rule for persistence across reboots. Verify with `groups | grep codegreen` after relogin.
+
+**Missing dependencies:**
 ```bash
 codegreen doctor
 ```
 
 ### Getting Help
 
-If you encounter persistent issues:
-
-1.  Check the [CLI Reference](../user-guide/cli-reference.md) for correct usage.
-2.  Run `codegreen doctor --verbose` for detailed diagnostics.
-3.  Open an issue on [GitHub](https://github.com/SMART-Dal/codegreen/issues).
+1. Check the [CLI Reference](../user-guide/cli-reference.md)
+2. Run `codegreen doctor --verbose`
+3. Open an issue on [GitHub](https://github.com/SMART-Dal/codegreen/issues)
