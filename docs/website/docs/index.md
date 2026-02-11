@@ -94,11 +94,23 @@ Get started with CodeGreen in just a few steps:
 
     ---
 
-    Full support for Intel RAPL, NVIDIA NVML, and AMD ROCm/RAPL energy monitoring.
+    Intel RAPL, NVIDIA NVML, and AMD ROCm/RAPL energy monitoring.
+
+-   :material-apple:{ .lg .middle } **macOS**
+
+    ---
+
+    Apple Silicon and Intel Mac energy monitoring support.
+
+-   :material-microsoft-windows:{ .lg .middle } **Windows**
+
+    ---
+
+    Windows energy monitoring via supported hardware interfaces.
 
 </div>
 
-**Note:** CodeGreen supports Linux, macOS, and Windows. Hardware sensor availability varies by platform.
+Hardware sensor availability varies by platform.
 
 ## Citing CodeGreen
 
