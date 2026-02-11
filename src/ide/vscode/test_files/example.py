@@ -101,7 +101,7 @@ def main():
     nested_result = nested_loops()
     print(f"   Nested loops result: {nested_result}")
     
-    print("\n✅ All tests completed!")
+    print("\nAll tests completed!")
     return {
         'fibonacci': fib_result,
         'matrix': matrix_result,
@@ -113,7 +113,7 @@ def main():
 
 if __name__ == "__main__":
     results = main()
-    print(f"\n📊 Final results summary:")
+    print(f"\nFinal results summary:")
     print(f"   - Fibonacci: {results['fibonacci']}")
     print(f"   - Matrix: {len(results['matrix'])}x{len(results['matrix'][0])}")
     print(f"   - CPU: {results['cpu']:.2f}")

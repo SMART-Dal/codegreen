@@ -76,16 +76,25 @@ class ResultCollector:
         return summaries
 
     def to_json(self, path: Path):
+        runs = []
+        for r in self.results:
+            d = asdict(r)
+            d["timestamp"] = d["timestamp"].isoformat()
+            # Strip full checkpoint array (can be 100K+ entries), keep summary only
+            ckpts = d.pop("checkpoints", [])
+            if ckpts:
+                d["checkpoint_summary"] = {
+                    "count": len(ckpts),
+                    "first_joules": ckpts[0].get("joules", 0) if ckpts else 0,
+                    "last_joules": ckpts[-1].get("joules", 0) if ckpts else 0,
+                    "energy_delta": (ckpts[-1].get("joules", 0) - ckpts[0].get("joules", 0)) if len(ckpts) >= 2 else 0.0,
+                }
+            runs.append(d)
         data = {
-            "metadata": {
-                "timestamp": datetime.now().isoformat(),
-                "total_runs": len(self.results)
-            },
-            "runs": [asdict(r) for r in self.results],
-            "summary": self._serialize_summary(self.summarize_all())
+            "metadata": {"timestamp": datetime.now().isoformat(), "total_runs": len(self.results)},
+            "runs": runs,
+            "summary": self._serialize_summary(self.summarize_all()),
         }
-        for run in data["runs"]:
-            run["timestamp"] = run["timestamp"].isoformat()
         with open(path, "w") as f:
             json.dump(data, f, indent=2, default=str)
 

@@ -8,28 +8,28 @@ NEMB is CodeGreen's native energy measurement system designed to replace externa
 
 ```
 NEMB Core Structure
-├── core/                    # Core measurement infrastructure
-│   ├── energy_provider.hpp  # Abstract energy provider interface
-│   ├── measurement_coordinator.hpp # Multi-source coordination
-│   └── ...
-├── drivers/                 # Hardware-specific implementations
-│   ├── intel_rapl_provider.hpp    # Intel CPU energy (RAPL)
-│   ├── nvidia_gpu_provider.hpp    # NVIDIA GPU energy (NVML)
-│   ├── amd_rapl_provider.hpp      # AMD CPU energy
-│   ├── amd_gpu_provider.hpp       # AMD GPU energy (ROCm SMI)
-│   └── arm_energy_provider.hpp    # ARM SoC energy models
-├── hal/                     # Hardware abstraction layer
-│   ├── precision_timer.hpp  # High-resolution timestamping
-│   ├── counter_manager.hpp  # Wraparound-safe counters
-│   └── thermal_manager.hpp  # Temperature compensation
-├── analytics/               # Statistical processing
-│   ├── noise_filter.hpp     # Real-time noise reduction
-│   ├── outlier_detector.hpp # Measurement validation
-│   └── calibration.hpp      # Self-calibration routines
-└── utils/                   # Utility functions
-    ├── cpu_topology.hpp     # CPU/GPU topology detection
-    ├── numa_allocator.hpp   # NUMA-aware memory management
-    └── lock_free_buffer.hpp # High-performance data structures
+├── core/ # Core measurement infrastructure
+│ ├── energy_provider.hpp # Abstract energy provider interface
+│ ├── measurement_coordinator.hpp # Multi-source coordination
+│ └── ...
+├── drivers/ # Hardware-specific implementations
+│ ├── intel_rapl_provider.hpp # Intel CPU energy (RAPL)
+│ ├── nvidia_gpu_provider.hpp # NVIDIA GPU energy (NVML)
+│ ├── amd_rapl_provider.hpp # AMD CPU energy
+│ ├── amd_gpu_provider.hpp # AMD GPU energy (ROCm SMI)
+│ └── arm_energy_provider.hpp # ARM SoC energy models
+├── hal/ # Hardware abstraction layer
+│ ├── precision_timer.hpp # High-resolution timestamping
+│ ├── counter_manager.hpp # Wraparound-safe counters
+│ └── thermal_manager.hpp # Temperature compensation
+├── analytics/ # Statistical processing
+│ ├── noise_filter.hpp # Real-time noise reduction
+│ ├── outlier_detector.hpp # Measurement validation
+│ └── calibration.hpp # Self-calibration routines
+└── utils/ # Utility functions
+ ├── cpu_topology.hpp # CPU/GPU topology detection
+ ├── numa_allocator.hpp # NUMA-aware memory management
+ └── lock_free_buffer.hpp # High-performance data structures
 ```
 
 ## Key Features
@@ -48,7 +48,7 @@ NEMB Core Structure
 
 ### Comprehensive Hardware Support
 - **Intel CPUs**: RAPL energy domains (package, core, uncore, DRAM)
-- **AMD CPUs**: RAPL-equivalent with Zen architecture optimizations  
+- **AMD CPUs**: RAPL-equivalent with Zen architecture optimizations 
 - **NVIDIA GPUs**: NVML-based power monitoring with multi-GPU support
 - **AMD GPUs**: ROCm SMI integration with RDNA/CDNA optimizations
 - **ARM SoCs**: Energy Aware Scheduling (EAS) model integration
@@ -101,7 +101,7 @@ auto coordinator = std::make_unique<MeasurementCoordinator>();
 
 // Add Intel RAPL provider
 if (auto intel_provider = create_intel_rapl_provider()) {
-    coordinator->add_provider(std::move(intel_provider));
+ coordinator->add_provider(std::move(intel_provider));
 }
 
 // Start measurements
@@ -112,39 +112,39 @@ auto reading = coordinator->get_synchronized_reading();
 std::cout << "Total system power: " << reading.total_system_power_watts << " W" << std::endl;
 std::cout << "Total system energy: " << reading.total_system_energy_joules << " J" << std::endl;
 
-// Stop measurements  
+// Stop measurements 
 coordinator->stop_measurements();
 ```
 
 ## Implementation Status
 
-### Phase 1: Core Infrastructure ✅ 
+### Phase 1: Core Infrastructure 
 - [x] Base interfaces and abstract classes
 - [x] Precision timing subsystem design
 - [x] Lock-free data structure specifications
 - [x] Measurement coordination framework
 - [x] Comprehensive documentation
 
-### Phase 2: Intel RAPL Implementation 🚧
+### Phase 2: Intel RAPL Implementation 
 - [ ] MSR and sysfs access methods
 - [ ] Multi-domain energy measurement
 - [ ] Counter wraparound handling
 - [ ] Temperature/frequency compensation
 - [ ] Validation and self-test routines
 
-### Phase 3: GPU Providers 📋
+### Phase 3: GPU Providers 
 - [ ] NVIDIA NVML integration
 - [ ] AMD ROCm SMI integration
 - [ ] Multi-GPU synchronization
 - [ ] Workload-aware power modeling
 
-### Phase 4: Advanced Features 📋
+### Phase 4: Advanced Features 
 - [ ] Statistical processing engine
-- [ ] Cross-validation framework  
+- [ ] Cross-validation framework 
 - [ ] Self-calibration system
 - [ ] Performance optimization
 
-### Phase 5: Integration 📋
+### Phase 5: Integration 
 - [ ] CodeGreen integration layer
 - [ ] Backward compatibility
 - [ ] Migration from PMT
@@ -176,7 +176,7 @@ coordinator->stop_measurements();
 
 ### Accuracy Validation Results
 - **Mean Absolute Error**: <1.5% (target: <2%)
-- **Maximum Error**: <4.8% (target: <5%)  
+- **Maximum Error**: <4.8% (target: <5%) 
 - **Correlation with Reference**: >0.98 (target: >0.95)
 - **Measurement Latency**: <50μs (target: <100μs)
 
@@ -211,7 +211,7 @@ This project is part of CodeGreen and follows the same licensing terms.
 
 ### Measurement Overhead
 - **Single Provider**: 0.01% CPU utilization
-- **Multi-Provider**: 0.08% CPU utilization  
+- **Multi-Provider**: 0.08% CPU utilization 
 - **Memory Usage**: <5MB resident
 - **Latency**: <10μs per measurement
 
@@ -225,7 +225,7 @@ This project is part of CodeGreen and follows the same licensing terms.
 
 For technical support, implementation questions, or to report issues:
 1. Check the comprehensive documentation first
-2. Review the hardware-specific guides  
+2. Review the hardware-specific guides 
 3. Run the built-in validation and calibration tools
 4. Create detailed issue reports with system specifications
 

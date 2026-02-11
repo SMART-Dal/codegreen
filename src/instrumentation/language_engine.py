@@ -264,7 +264,7 @@ class LanguageAgnosticInstrumentationGenerator:
         config = self.config_manager.get_instrumentation_config(language)
         if not config:
             # Fallback for unsupported languages
-            logger.warning(f"⚠️  FALLBACK: No instrumentation config found for {language}, using generic comment instead of language-specific instrumentation")
+            logger.warning(f"  FALLBACK: No instrumentation config found for {language}, using generic comment instead of language-specific instrumentation")
             return f'{self._get_comment_prefix(language)} CodeGreen checkpoint: {point.id}'
         
         # Get templates from configuration
@@ -276,7 +276,7 @@ class LanguageAgnosticInstrumentationGenerator:
         
         if not template:
             # Fallback to generic comment
-            logger.warning(f"⚠️  FALLBACK: No template found for {point.type} in {language}, using generic comment instead of specific template")
+            logger.warning(f"  FALLBACK: No template found for {point.type} in {language}, using generic comment instead of specific template")
             comment_prefix = config.get('comment_prefix', '//')
             return f'{comment_prefix} CodeGreen {point.type}: {point.name}'
         
@@ -370,9 +370,9 @@ class LanguageEngine:
         if not TREE_SITTER_AVAILABLE:
             msg = "Tree-sitter library not available."
             if strict_mode:
-                logger.error(f"❌ CRITICAL: {msg} Aborting initialization.")
+                logger.error(f" CRITICAL: {msg} Aborting initialization.")
                 raise ImportError(msg + " Install tree-sitter or disable strict mode.")
-            logger.warning(f"⚠️  FALLBACK: {msg}, using regex analysis instead of AST-based analysis")
+            logger.warning(f"  FALLBACK: {msg}, using regex analysis instead of AST-based analysis")
             return
         
         # Get supported languages from config manager
@@ -400,7 +400,7 @@ class LanguageEngine:
                         # Compile the full .scm query
                         query = Query(language, external_queries['full_query'])
                         self._queries[lang_id]['instrumentation'] = query
-                        logger.info(f"✅ Compiled comprehensive nvim-treesitter query for {lang_id}")
+                        logger.info(f" Compiled comprehensive nvim-treesitter query for {lang_id}")
                     except (ValueError, TypeError) as e:
                         logger.error(f"Full query compilation failed for {lang_id}: {e}")
                     except Exception as e:
@@ -412,13 +412,13 @@ class LanguageEngine:
                     for q_name, q_text in config_obj.custom_queries.items():
                         try:
                             self._queries[lang_id][q_name] = Query(language, q_text)
-                            logger.info(f"✅ Compiled custom query '{q_name}' for {lang_id}")
+                            logger.info(f" Compiled custom query '{q_name}' for {lang_id}")
                         except Exception as e:
                             logger.error(f"Failed to compile custom query '{q_name}' for {lang_id}: {e}")
                 
                 if not self._queries[lang_id]:
                     msg = f"No valid queries compiled for {lang_id}"
-                    logger.error(f"❌ {msg}")
+                    logger.error(f" {msg}")
                     if strict_mode:
                         raise RuntimeError(msg)
                 
@@ -429,7 +429,7 @@ class LanguageEngine:
                     raise ImportError(msg)
             except Exception as e:
                 msg = f"Could not initialize parser for {lang_id}: {e}"
-                logger.error(f"⚠️ {msg}")
+                logger.error(f" {msg}")
                 if strict_mode:
                     raise RuntimeError(msg)
     
@@ -581,9 +581,9 @@ class LanguageEngine:
             points = []
             
             # Execute queries using the new capture-based approach
-            logger.info(f"🔍 Executing {len(queries)} queries for {language} instrumentation")
+            logger.info(f" Executing {len(queries)} queries for {language} instrumentation")
             for query_name, query in queries.items():
-                logger.debug(f"🔧 Processing query '{query_name}' for {language}")
+                logger.debug(f" Processing query '{query_name}' for {language}")
                 try:
                     # Use QueryCursor.captures() for direct capture access
                     logger.debug(f"   Creating QueryCursor for query '{query_name}'")
@@ -593,11 +593,11 @@ class LanguageEngine:
                     captures = cursor.captures(tree.root_node)
                     
                     # captures is a dictionary of {capture_name: [nodes]}
-                    logger.info(f"✅ Query '{query_name}' found {len(captures)} capture types with total {sum(len(nodes) for nodes in captures.values())} nodes")
+                    logger.info(f" Query '{query_name}' found {len(captures)} capture types with total {sum(len(nodes) for nodes in captures.values())} nodes")
                     
                     # Log capture details
                     for capture_name, node_list in captures.items():
-                        logger.debug(f"   📋 Capture '{capture_name}': {len(node_list)} nodes")
+                        logger.debug(f"    Capture '{capture_name}': {len(node_list)} nodes")
                     
                     # Limit total captures to prevent memory exhaustion
                     limits = self._config_manager.get_processing_limits(language)
@@ -606,7 +606,7 @@ class LanguageEngine:
                     logger.debug(f"   Total captures before processing: {total_captures} (limit: {max_captures_per_query})")
                     
                     if total_captures > max_captures_per_query:
-                        logger.warning(f"⚠️  TRUNCATION: Query '{query_name}' exceeded capture limit ({total_captures} > {max_captures_per_query})")
+                        logger.warning(f"  TRUNCATION: Query '{query_name}' exceeded capture limit ({total_captures} > {max_captures_per_query})")
                         logger.warning(f"   This may result in missing instrumentation points. Consider increasing max_captures_per_query.")
                         
                         # Truncate captures by limiting each capture type
@@ -616,14 +616,14 @@ class LanguageEngine:
                             if current_count + len(node_list) <= max_captures_per_query:
                                 truncated_captures[capture_name] = node_list
                                 current_count += len(node_list)
-                                logger.debug(f"   ✅ Kept all {len(node_list)} nodes for '{capture_name}'")
+                                logger.debug(f"    Kept all {len(node_list)} nodes for '{capture_name}'")
                             else:
                                 remaining = max_captures_per_query - current_count
                                 if remaining > 0:
                                     truncated_captures[capture_name] = node_list[:remaining]
-                                    logger.warning(f"   ⚠️  Truncated '{capture_name}': kept {remaining}/{len(node_list)} nodes")
+                                    logger.warning(f"     Truncated '{capture_name}': kept {remaining}/{len(node_list)} nodes")
                                 else:
-                                    logger.warning(f"   ❌ Dropped all {len(node_list)} nodes for '{capture_name}' (limit exceeded)")
+                                    logger.warning(f"    Dropped all {len(node_list)} nodes for '{capture_name}' (limit exceeded)")
                                 break
                         
                         original_count = total_captures  
@@ -662,10 +662,10 @@ class LanguageEngine:
                     for capture_name, node_list in captures.items():
                         
                         if capture_name in capture_map:
-                            logger.debug(f"   📍 Processing capture '{capture_name}' -> {capture_map[capture_name]} ({len(node_list)} nodes)")
+                            logger.debug(f"    Processing capture '{capture_name}' -> {capture_map[capture_name]} ({len(node_list)} nodes)")
                             
                             if not node_list:
-                                logger.debug(f"   ⚠️  Empty node list for capture '{capture_name}'")
+                                logger.debug(f"     Empty node list for capture '{capture_name}'")
                                 continue
                                 
                             # Process each node in the capture
@@ -675,12 +675,12 @@ class LanguageEngine:
                                 
                                 # Skip if we've already processed this node
                                 if node_id in processed_nodes:
-                                    logger.debug(f"   ⏭️  Skipping duplicate node {i+1}/{len(node_list)} for '{capture_name}'")
+                                    logger.debug(f"     Skipping duplicate node {i+1}/{len(node_list)} for '{capture_name}'")
                                     points_skipped += 1
                                     continue
                                 
                                 processed_nodes.add(node_id)
-                                logger.debug(f"   🔧 Creating point {i+1}/{len(node_list)} for '{capture_name}' (node: {node.type})")
+                                logger.debug(f"    Creating point {i+1}/{len(node_list)} for '{capture_name}' (node: {node.type})")
                                 
                                 # Create instrumentation point from capture
                                 point_or_points = self._create_instrumentation_point_from_capture(
@@ -692,17 +692,17 @@ class LanguageEngine:
                                     if isinstance(point_or_points, list):
                                         points.extend(point_or_points)
                                         points_created += len(point_or_points)
-                                        logger.debug(f"   ✅ Successfully created {len(point_or_points)} instrumentation points for '{capture_name}'")
+                                        logger.debug(f"    Successfully created {len(point_or_points)} instrumentation points for '{capture_name}'")
                                     else:
                                         points.append(point_or_points)
                                         points_created += 1
-                                        logger.debug(f"   ✅ Successfully created instrumentation point for '{capture_name}'")
+                                        logger.debug(f"    Successfully created instrumentation point for '{capture_name}'")
                                 else:
-                                    logger.debug(f"   ❌ Failed to create instrumentation point for '{capture_name}' (validation failed or error)")
+                                    logger.debug(f"    Failed to create instrumentation point for '{capture_name}' (validation failed or error)")
                         else:
-                            logger.debug(f"   ⏭️  Skipping unmapped capture '{capture_name}' ({len(node_list)} nodes)")
+                            logger.debug(f"     Skipping unmapped capture '{capture_name}' ({len(node_list)} nodes)")
                     
-                    logger.info(f"📊 Query '{query_name}' processing summary: {points_created} points created, {points_skipped} duplicates skipped")
+                    logger.info(f" Query '{query_name}' processing summary: {points_created} points created, {points_skipped} duplicates skipped")
                     
                     # Apply immediate deduplication to prevent accumulation of duplicates
                     if points_created > 0:
@@ -710,12 +710,12 @@ class LanguageEngine:
                         points = self._deduplicate_checkpoints(points)
                         points_after = len(points)
                         if points_before != points_after:
-                            logger.debug(f"   🔄 Immediate deduplication: {points_before} -> {points_after} points")
+                            logger.debug(f"    Immediate deduplication: {points_before} -> {points_after} points")
                             
                 except Exception as e:
                     # Enhanced error logging for query failures
                     import traceback
-                    logger.error(f"❌ CRITICAL: Query '{query_name}' execution failed for {language}")
+                    logger.error(f" CRITICAL: Query '{query_name}' execution failed for {language}")
                     logger.error(f"   Error type: {type(e).__name__}")
                     logger.error(f"   Error message: {str(e)}")
                     logger.error(f"   Query type: {type(query)}")
@@ -726,7 +726,7 @@ class LanguageEngine:
                     for line in tb_lines:
                         logger.error(f"     {line.rstrip()}")
                     
-                    logger.warning(f"⚠️  FALLBACK: Continuing with other queries despite '{query_name}' failure")
+                    logger.warning(f"  FALLBACK: Continuing with other queries despite '{query_name}' failure")
             
             # Final comprehensive deduplication
             points_before = len(points)
@@ -734,9 +734,9 @@ class LanguageEngine:
             points_after = len(points)
 
             if points_before != points_after:
-                logger.info(f"🔄 Final deduplication: {points_before} -> {points_after} points")
+                logger.info(f" Final deduplication: {points_before} -> {points_after} points")
 
-            logger.info(f"🎯 Tree-sitter analysis complete: {len(points)} instrumentation points found")
+            logger.info(f" Tree-sitter analysis complete: {len(points)} instrumentation points found")
             return points
 
     def _node_terminates_control_flow(self, node: 'Node') -> bool:
@@ -873,11 +873,11 @@ class LanguageEngine:
         tree: 'Tree' = None
     ) -> Optional[InstrumentationPoint]:
         """Create instrumentation point from a single tree-sitter capture"""
-        logger.debug(f"🔧 Creating instrumentation point for capture '{capture_name}' in {language}")
+        logger.debug(f" Creating instrumentation point for capture '{capture_name}' in {language}")
 
         # Skip nodes that are clearly inside calls (prevents false positives in C++/Java)
         if capture_config['type'] in ['function_enter', 'class_enter'] and self._is_inside_call(node):
-            logger.debug(f"   ❌ Node is inside a call, skipping")
+            logger.debug(f"    Node is inside a call, skipping")
             return None
 
         try:
@@ -937,7 +937,7 @@ class LanguageEngine:
             
             # Reject if name is still empty or invalid
             if not name or not self._is_valid_identifier(name, language):
-                logger.debug(f"   ❌ Invalid name '{name}' for capture '{capture_name}', skipping")
+                logger.debug(f"    Invalid name '{name}' for capture '{capture_name}', skipping")
                 return None
             
             logger.debug(f"   Point name determined: '{name}'")
@@ -985,7 +985,7 @@ class LanguageEngine:
                     else:
                         # No body found - likely a prototype or declaration
                         if capture_config['type'] in ['function_enter']:
-                            logger.debug(f"   ⚠️  No body found for function {name}, skipping (likely prototype)")
+                            logger.debug(f"     No body found for function {name}, skipping (likely prototype)")
                             return None
                         
                         insertion_point = def_node.start_point

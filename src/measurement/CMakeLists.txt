@@ -18,7 +18,7 @@ set(NEMB_CORE_SOURCES
 # Find JNI for Java runtime support
 find_package(JNI)
 if(JNI_FOUND)
-    message(STATUS "✓ JNI found: ${JNI_INCLUDE_DIRS}")
+    message(STATUS "[ok] JNI found: ${JNI_INCLUDE_DIRS}")
 endif()
 
 set(NEMB_HAL_SOURCES

@@ -4,10 +4,10 @@ A Visual Studio Code extension that integrates with CodeGreen to visualize energ
 
 ## Features
 
-- 🔥 **Energy Hotspot Visualization**: Fire icons appear directly in the gutter for energy-intensive code.
-- ⚡ **Interactive Optimization**: Click on hotspots to get AI-powered energy-saving recommendations.
-- 📊 **Detailed Reports**: Comprehensive energy analysis reports in Markdown and HTML.
-- 🎯 **Real-time Metrics**: Status bar energy tracking for the latest execution.
+- **Energy Hotspot Visualization**: Fire icons appear directly in the gutter for energy-intensive code.
+- **Interactive Optimization**: Click on hotspots to get AI-powered energy-saving recommendations.
+- **Detailed Reports**: Comprehensive energy analysis reports in Markdown and HTML.
+- **Real-time Metrics**: Status bar energy tracking for the latest execution.
 
 ## Installation
 
@@ -15,17 +15,17 @@ A Visual Studio Code extension that integrates with CodeGreen to visualize energ
 
 1. Clone the CodeGreen repository
 2. Navigate to the extension directory:
-   ```bash
-   cd src/ide/vscode
-   ```
+ ```bash
+ cd src/ide/vscode
+ ```
 3. Install dependencies:
-   ```bash
-   npm install
-   ```
+ ```bash
+ npm install
+ ```
 4. Compile the extension:
-   ```bash
-   npm run compile
-   ```
+ ```bash
+ npm run compile
+ ```
 5. Press **F5** to launch a new VSCode window with the extension loaded.
 
 ## Commands

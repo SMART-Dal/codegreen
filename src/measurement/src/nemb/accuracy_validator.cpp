@@ -93,9 +93,9 @@ ValidationTest AccuracyValidator::test_basic_functionality() {
         std::ostringstream details;
         details << "Reading1: " << reading1.summary() << "\n";
         details << "Reading2: " << reading2.summary() << "\n";
-        details << "Valid readings: " << (valid_readings ? "✓" : "✗") << "\n";
-        details << "Energy progression: " << (energy_progression ? "✓" : "✗") << "\n";
-        details << "Reasonable values: " << (reasonable_values ? "✓" : "✗");
+        details << "Valid readings: " << (valid_readings ? "[ok]" : "[!!]") << "\n";
+        details << "Energy progression: " << (energy_progression ? "[ok]" : "[!!]") << "\n";
+        details << "Reasonable values: " << (reasonable_values ? "[ok]" : "[!!]");
         test.details = details.str();
         
     } catch (const std::exception& e) {

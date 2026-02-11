@@ -101,7 +101,7 @@ class LanguageConfigManager:
     def _load_configs(self):
         """Load all language configurations from the config directory."""
         if not self.config_dir.exists():
-            logger.warning(f"⚠️  Config directory not found: {self.config_dir}")
+            logger.warning(f"  Config directory not found: {self.config_dir}")
             return
 
         for config_file in self.config_dir.glob("*.json"):
@@ -112,9 +112,9 @@ class LanguageConfigManager:
                 with open(config_file, "r") as f:
                     data = json.load(f)
                     self._configs[lang_id] = LanguageConfig.from_dict(data)
-                logger.debug(f"✅ Loaded configuration for {lang_id}")
+                logger.debug(f" Loaded configuration for {lang_id}")
             except Exception as e:
-                logger.error(f"❌ Failed to load configuration from {config_file}: {e}")
+                logger.error(f" Failed to load configuration from {config_file}: {e}")
     
     def get_config(self, language: str) -> Optional[LanguageConfig]:
         """Get configuration for a specific language."""

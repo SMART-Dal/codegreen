@@ -71,8 +71,11 @@ reports*/
 *.sqlite
 *.sqlite3
 
-# Instrumented code outputs
+# Instrumented code outputs and build artifacts
 *_instrumented.*
+*_coarse.*
+*.out
+*.class
 examples/*_instrumented.*
 
 # Packages directory (if build artifacts)

@@ -31,13 +31,13 @@ npm run compile
 
 1. **Open a test file:** `test_files/example.py`
 2. **Run Energy Measurement:**
-   - Press `Ctrl+Shift+P`
-   - Type "CodeGreen: Analyze Energy Consumption"
-   - Press Enter
+ - Press `Ctrl+Shift+P`
+ - Type "CodeGreen: Analyze Energy Consumption"
+ - Press Enter
 3. **View Results:**
-   - **🔥 Gutter Icons**: Fire icons appear next to energy-intensive functions.
-   - **Interactive Menu**: Click the 🔥 icon or hover over it and select **Optimize** to see energy-saving recommendations.
-   - **Status Bar**: Real-time Joule metrics in the bottom-right.
+ - ** Gutter Icons**: Fire icons appear next to energy-intensive functions.
+ - **Interactive Menu**: Click the icon or hover over it and select **Optimize** to see energy-saving recommendations.
+ - **Status Bar**: Real-time Joule metrics in the bottom-right.
 
 ## Troubleshooting
 

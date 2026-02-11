@@ -643,7 +643,7 @@ except Exception as e:
         
         if high_energy:
             recommendations.append(
-                f"⚡ {len(high_energy)} measurements show high energy consumption (>{avg_energy*1.5:.2f}J). "
+                f" {len(high_energy)} measurements show high energy consumption (>{avg_energy*1.5:.2f}J). "
                 f"Consider algorithm optimization."
             )
         
@@ -653,16 +653,16 @@ except Exception as e:
         
         if long_duration:
             recommendations.append(
-                f"⏱️ {len(long_duration)} measurements have long execution times. "
+                f" {len(long_duration)} measurements have long execution times. "
                 f"Consider performance optimization."
             )
         
         # Power efficiency
         efficient = [m for m in successful if m.total_joules / m.duration_seconds < 1.0]
         if len(efficient) / len(successful) > 0.7:
-            recommendations.append("✅ Most measurements show good energy efficiency")
+            recommendations.append(" Most measurements show good energy efficiency")
         else:
-            recommendations.append("🔋 Consider optimizing for lower power consumption")
+            recommendations.append(" Consider optimizing for lower power consumption")
         
         return recommendations
     
@@ -871,7 +871,7 @@ except Exception as e:
 """
         
         for m in report_data['measurements']:
-            status = "✅" if m['success'] else "❌"
+            status = "" if m['success'] else ""
             html += f"""
         <tr>
             <td>{m['session_id']}</td>

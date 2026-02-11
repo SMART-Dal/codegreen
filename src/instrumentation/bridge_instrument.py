@@ -51,7 +51,7 @@ def main():
         )
         
         # Output instrumented code to stdout
-        sys.stderr.write(f"✓ Instrumentation complete ({len(instrumented_code)} bytes)\n")
+        sys.stderr.write(f" Instrumentation complete ({len(instrumented_code)} bytes)\n")
         sys.stdout.write(instrumented_code)
         sys.stdout.flush()
             

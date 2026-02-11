@@ -73,7 +73,7 @@ function main() {
     const memResult = memoryIntensiveOperation();
     console.log(`   Memory operation result count: ${memResult.length}`);
     
-    console.log("\n✅ All tests completed!");
+    console.log("\nAll tests completed!");
 }
 
 if (require.main === module) {

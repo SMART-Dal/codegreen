@@ -56,7 +56,7 @@ class ASTProcessor:
         self.indent_engine = get_indentation_engine()  # TreeSitter indentation engine
         
         if not self.config:
-            logger.warning(f"⚠️  FALLBACK: No configuration found for language: {language}, using default behavior")
+            logger.warning(f"  FALLBACK: No configuration found for language: {language}, using default behavior")
             raise ValueError(f"No configuration found for language: {language}")
     
     def _find_target_with_query(self, node: Node, rule: Dict[str, Any]) -> Optional[int]:
@@ -128,7 +128,7 @@ class ASTProcessor:
         
         # If this is an identifier (function name, class name, etc.), look for parent definition
         if node.type in ["identifier", "type_identifier", "field_identifier"]:
-            logger.debug(f"🔍 Finding body for identifier node: {node.type} at {node.start_point}-{node.end_point}")
+            logger.debug(f" Finding body for identifier node: {node.type} at {node.start_point}-{node.end_point}")
             current = node.parent
             level = 0
             # Get configurable parent search levels
@@ -172,7 +172,7 @@ class ASTProcessor:
     
     def find_insertion_point(self, node: Node, insertion_mode: str) -> Optional[int]:
         """Find the insertion point for a node using language configuration."""
-        logger.debug(f"🔍 Finding insertion point for node {node.type} with mode '{insertion_mode}'")
+        logger.debug(f" Finding insertion point for node {node.type} with mode '{insertion_mode}'")
         logger.debug(f"   Node position: {node.start_point}-{node.end_point}")
         logger.debug(f"   Node bytes: {node.start_byte}-{node.end_byte}")
         
@@ -569,14 +569,14 @@ class ASTProcessor:
                 indent_info = self.indent_engine.calculate_indentation_at_position(
                     self.tree, self.source_code, insertion_offset, self.language
                 )
-                logger.debug(f"🔧 TreeSitter indentation: level={indent_info.indent_level}, "
+                logger.debug(f" TreeSitter indentation: level={indent_info.indent_level}, "
                            f"string='{indent_info.indent_string}' (len={len(indent_info.indent_string)})")
                 return indent_info.indent_level, indent_info.indent_string
             except Exception as e:
-                logger.warning(f"⚠️  TreeSitter indentation failed, falling back to legacy method: {e}")
+                logger.warning(f"  TreeSitter indentation failed, falling back to legacy method: {e}")
         
         # Fallback to legacy line-based indentation
-        logger.debug("🔧 Using fallback line-based indentation")
+        logger.debug(" Using fallback line-based indentation")
         return self._legacy_calculate_indentation(body_node, insertion_offset)
     
     def _legacy_calculate_indentation(self, body_node: Node, insertion_offset: int) -> Tuple[int, str]:
@@ -663,7 +663,7 @@ class TreeSitterIndentationEngine:
         self.default_indent_size = global_config.get('default_indent_size', 4)
         self.supported_languages = set(global_config.get('supported_languages', ['python', 'c', 'cpp', 'java', 'javascript']))
         
-        logger.info(f"🔧 TreeSitterIndentationEngine initialized with nvim-treesitter at: {self.nvim_treesitter_path}")
+        logger.info(f" TreeSitterIndentationEngine initialized with nvim-treesitter at: {self.nvim_treesitter_path}")
     
     def _get_global_config(self) -> Dict[str, Any]:
         """Get global configuration values."""
@@ -681,10 +681,10 @@ class TreeSitterIndentationEngine:
         for path_str in potential_paths:
             path = Path(path_str)
             if path.exists() and (path / "queries").exists():
-                logger.debug(f"🔍 Found nvim-treesitter at: {path.absolute()}")
+                logger.debug(f" Found nvim-treesitter at: {path.absolute()}")
                 return str(path.absolute())
         
-        logger.warning("⚠️  Could not auto-detect nvim-treesitter path")
+        logger.warning("  Could not auto-detect nvim-treesitter path")
         return None
     
     def get_parser(self, language: str) -> Optional[Parser]:
@@ -693,9 +693,9 @@ class TreeSitterIndentationEngine:
             try:
                 parser = get_parser(language)
                 self.language_parsers[language] = parser
-                logger.debug(f"✅ Created parser for {language}")
+                logger.debug(f" Created parser for {language}")
             except Exception as e:
-                logger.warning(f"❌ Failed to create parser for {language}: {e}")
+                logger.warning(f" Failed to create parser for {language}: {e}")
                 return None
         
         return self.language_parsers.get(language)
@@ -706,13 +706,13 @@ class TreeSitterIndentationEngine:
             return self.indentation_queries[language]
         
         if not self.nvim_treesitter_path:
-            logger.warning(f"⚠️  No nvim-treesitter path available for loading {language} indentation queries")
+            logger.warning(f"  No nvim-treesitter path available for loading {language} indentation queries")
             return None
         
         query_file = Path(self.nvim_treesitter_path) / "queries" / language / "indents.scm"
         
         if not query_file.exists():
-            logger.warning(f"⚠️  No indentation queries found for {language} at {query_file}")
+            logger.warning(f"  No indentation queries found for {language} at {query_file}")
             return None
         
         try:
@@ -736,7 +736,7 @@ class TreeSitterIndentationEngine:
                     if inherited_file.exists():
                         inherited_content = inherited_file.read_text(encoding=encoding)
                         combined_content.append(f";; Inherited from {inherited_lang}\n{inherited_content}")
-                        logger.debug(f"📖 Loaded inherited indentation from {inherited_lang} for {language}")
+                        logger.debug(f" Loaded inherited indentation from {inherited_lang} for {language}")
                 
                 # Add the current language's content (excluding the inherit line)
                 current_content = '\n'.join(query_content.split('\n')[1:]).strip()
@@ -750,12 +750,12 @@ class TreeSitterIndentationEngine:
             query = Query(language_obj, query_content)
             
             self.indentation_queries[language] = query
-            logger.info(f"✅ Loaded indentation queries for {language} ({query.capture_count} captures)")
+            logger.info(f" Loaded indentation queries for {language} ({query.capture_count} captures)")
             
             return query
             
         except Exception as e:
-            logger.error(f"❌ Failed to load indentation queries for {language}: {e}")
+            logger.error(f" Failed to load indentation queries for {language}: {e}")
             return None
     
     def detect_indent_style(self, source_code: str) -> Tuple[str, int]:
@@ -812,7 +812,7 @@ class TreeSitterIndentationEngine:
             else:
                 indent_size = self.default_indent_size
         
-        logger.debug(f"🔧 Detected indent style: '{indent_char}' (size: {indent_size})")
+        logger.debug(f" Detected indent style: '{indent_char}' (size: {indent_size})")
         return indent_char, indent_size
     
     def calculate_body_indentation(self, tree: Tree, source_code: str, byte_offset: int, language: str) -> IndentationInfo:
@@ -926,22 +926,22 @@ class TreeSitterIndentationEngine:
                         
                         if capture_name == "indent.begin":
                             indent_modifiers += 1
-                            logger.debug(f"🔧 Found @indent.begin at {node.type} (id={node.id}): +1 level")
+                            logger.debug(f" Found @indent.begin at {node.type} (id={node.id}): +1 level")
                         elif capture_name == "indent.dedent":
                             indent_modifiers -= 1
-                            logger.debug(f"🔧 Found @indent.dedent at {node.type} (id={node.id}): -1 level")
+                            logger.debug(f" Found @indent.dedent at {node.type} (id={node.id}): -1 level")
             
             current_node = current_node.parent
         
         final_level = max(0, base_level + indent_modifiers)
-        logger.debug(f"🔧 Calculated indent: base={base_level} + modifiers={indent_modifiers} = {final_level}")
+        logger.debug(f" Calculated indent: base={base_level} + modifiers={indent_modifiers} = {final_level}")
         
         return final_level
     
     def _fallback_line_based_indentation(self, source_code: str, byte_offset: int, 
                                        indent_char: str, indent_size: int) -> IndentationInfo:
         """Fallback indentation calculation when queries are not available."""
-        logger.debug("🔧 Using fallback line-based indentation")
+        logger.debug(" Using fallback line-based indentation")
         
         # Find the current line
         line_start = source_code.rfind('\n', 0, byte_offset) + 1
@@ -998,7 +998,7 @@ class ASTRewriter:
         Supports both AST-based insertion (with 'node' attribute) and byte-based insertion.
         """
         try:
-            logger.debug(f"🔧 Adding instrumentation for point '{point.id}'")
+            logger.debug(f" Adding instrumentation for point '{point.id}'")
             logger.debug(f"   Point type: {point.type}, mode: {point.insertion_mode}")
             logger.debug(f"   Has node: {hasattr(point, 'node') and point.node is not None}")
             logger.debug(f"   Has byte_offset: {hasattr(point, 'byte_offset') and point.byte_offset is not None}")
@@ -1008,7 +1008,7 @@ class ASTRewriter:
                 logger.debug(f"   Using AST-based insertion for point '{point.id}' with node")
                 byte_offset = self._calculate_insertion_offset(point)
                 if byte_offset is None:
-                    logger.warning(f"⚠️  Failed to calculate AST-based offset for point '{point.id}'")
+                    logger.warning(f"  Failed to calculate AST-based offset for point '{point.id}'")
                     return False
                 logger.debug(f"   Calculated byte offset: {byte_offset}")
             else:
@@ -1018,7 +1018,7 @@ class ASTRewriter:
                     byte_offset = point.byte_offset
                     logger.debug(f"   Using provided byte offset: {byte_offset}")
                 else:
-                    logger.error(f"❌ Point '{point.id}' has no node and no byte_offset - cannot insert")
+                    logger.error(f" Point '{point.id}' has no node and no byte_offset - cannot insert")
                     return False
                 
             edit_type = f"insert_{point.insertion_mode}"
@@ -1039,11 +1039,11 @@ class ASTRewriter:
             )
             
             self.edits.append(edit)
-            logger.debug(f"   ✅ Successfully added edit to queue (total edits: {len(self.edits)})")
+            logger.debug(f"    Successfully added edit to queue (total edits: {len(self.edits)})")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to add instrumentation for {point.id}: {e}")
+            logger.error(f" Failed to add instrumentation for {point.id}: {e}")
             import traceback
             logger.debug(f"   Error traceback: {traceback.format_exc()}")
             return False
@@ -1098,20 +1098,20 @@ class ASTRewriter:
     def apply_edits(self) -> str:
         """Apply edits with validation and verbose diagnostics."""
         if not self.edits:
-            logger.debug("🔧 No edits to apply")
+            logger.debug(" No edits to apply")
             return self.source_code
         
         if not self.parser or not self.tree:
-            logger.warning("⚠️  FALLBACK: No parser/tree available, using string-based editing instead of AST-based editing")
+            logger.warning("  FALLBACK: No parser/tree available, using string-based editing instead of AST-based editing")
             return self._apply_edits_string_based()
         
-        logger.info(f"🔧 Applying {len(self.edits)} edits using AST-based approach")
+        logger.info(f" Applying {len(self.edits)} edits using AST-based approach")
         
         # Try AST-based approach first, but fall back to string-based if it fails
         try:
             return self._apply_edits_ast_based()
         except Exception as e:
-            logger.warning(f"⚠️  FALLBACK: AST-based editing failed: {e}, using string-based editing instead")
+            logger.warning(f"  FALLBACK: AST-based editing failed: {e}, using string-based editing instead")
             return self._apply_edits_string_based()
     
     def _apply_edits_ast_based(self) -> str:
@@ -1133,13 +1133,13 @@ class ASTRewriter:
         # Check if the tree already has errors to be more lenient during validation
         had_errors_initially = self.tree.root_node.has_error
         if had_errors_initially:
-            logger.info("⚠️  Original tree has syntax errors (possibly due to macros). Validation will be more lenient.")
+            logger.info("  Original tree has syntax errors (possibly due to macros). Validation will be more lenient.")
         
         successful_edits = 0
         failed_edits = 0
         
         for i, edit in enumerate(sorted_edits):
-            logger.debug(f"🔧 Processing edit {i+1}/{len(sorted_edits)}: {edit.edit_type} at offset {edit.byte_offset}")
+            logger.debug(f" Processing edit {i+1}/{len(sorted_edits)}: {edit.edit_type} at offset {edit.byte_offset}")
             
             # Log context around the edit location
             limits = self.config_manager.get_processing_limits(self.language)
@@ -1157,7 +1157,7 @@ class ASTRewriter:
                 # If it had errors initially, we only fail if it causes a crash or major failure
                 # (since we can't easily detect if NEW errors were added vs old ones remaining)
                 if current_tree and current_tree.root_node.has_error and not had_errors_initially:
-                    logger.error(f"❌ Edit {i+1} caused syntax error: {edit.node_info}")
+                    logger.error(f" Edit {i+1} caused syntax error: {edit.node_info}")
                     logger.error(f"   Edit type: {edit.edit_type}")
                     logger.error(f"   Byte offset: {edit.byte_offset}")
                     # Get configurable error text length
@@ -1176,13 +1176,13 @@ class ASTRewriter:
                     encoding = global_config.get('default_encoding', 'utf-8')
                     current_tree = self.parser.parse(old_code.encode(encoding))
                     failed_edits += 1
-                    logger.warning(f"   ⚠️  Reverted edit {i+1} due to syntax error")
+                    logger.warning(f"     Reverted edit {i+1} due to syntax error")
                 else:
                     successful_edits += 1
-                    logger.debug(f"   ✅ Edit {i+1} applied successfully")
+                    logger.debug(f"    Edit {i+1} applied successfully")
                     
             except Exception as e:
-                logger.error(f"❌ Edit {i+1} failed with exception: {e}")
+                logger.error(f" Edit {i+1} failed with exception: {e}")
                 logger.error(f"   Edit type: {edit.edit_type}")
                 logger.error(f"   Byte offset: {edit.byte_offset}")
                 logger.error(f"   Exception type: {type(e).__name__}")
@@ -1194,12 +1194,12 @@ class ASTRewriter:
                 encoding = global_config.get('default_encoding', 'utf-8')
                 current_tree = self.parser.parse(old_code.encode(encoding))
                 failed_edits += 1
-                logger.warning(f"   ⚠️  Reverted edit {i+1} due to exception")
+                logger.warning(f"     Reverted edit {i+1} due to exception")
         
-        logger.info(f"📊 Edit application summary: {successful_edits} successful, {failed_edits} failed")
+        logger.info(f" Edit application summary: {successful_edits} successful, {failed_edits} failed")
         
         if failed_edits > 0:
-            logger.warning(f"⚠️  {failed_edits} edits failed, some instrumentation may be missing")
+            logger.warning(f"  {failed_edits} edits failed, some instrumentation may be missing")
         
         return result_code
     
@@ -1289,7 +1289,7 @@ class ASTRewriter:
             return new_code, new_tree
             
         except Exception as e:
-            logger.warning(f"⚠️  FALLBACK: Tree-sitter edit failed: {e}, using string-based editing instead of AST-based editing")
+            logger.warning(f"  FALLBACK: Tree-sitter edit failed: {e}, using string-based editing instead of AST-based editing")
             import traceback
             logger.debug(f"   Edit error traceback: {traceback.format_exc()}")
             return self._apply_single_edit(code, edit), tree
@@ -1310,7 +1310,7 @@ class ASTRewriter:
         """Improved: Respect modes fully with verbose diagnostics."""
         offset = max(0, min(edit.byte_offset, len(code)))
         
-        logger.debug(f"🔧 Applying single edit: {edit.edit_type} at offset {offset}")
+        logger.debug(f" Applying single edit: {edit.edit_type} at offset {offset}")
         logger.debug(f"   Original insertion text: '{edit.insertion_text}'")
         
         indented_text = self._add_proper_indentation(edit.insertion_text, code, offset, edit.edit_type)
@@ -1394,7 +1394,7 @@ class ASTRewriter:
         This replaces hardcoded indentation logic with the comprehensive
         nvim-treesitter indentation system.
         """
-        logger.debug(f"🔧 Calculating indentation for edit_type='{edit_type}' at offset={offset}")
+        logger.debug(f" Calculating indentation for edit_type='{edit_type}' at offset={offset}")
 
         # For insert_inside_end (implicit exits), use config-driven AST body indent for all languages.
         # This avoids the multi-line statement continuation indent bug.
@@ -1436,12 +1436,12 @@ class ASTRewriter:
                 return result
                 
             except Exception as e:
-                logger.warning(f"⚠️  TreeSitter indentation failed, using legacy fallback: {e}")
+                logger.warning(f"  TreeSitter indentation failed, using legacy fallback: {e}")
                 import traceback
                 logger.debug(f"   TreeSitter indentation error traceback: {traceback.format_exc()}")
         
         # Fallback to simplified line-based indentation
-        logger.debug("🔧 Using legacy line-based indentation fallback")
+        logger.debug(" Using legacy line-based indentation fallback")
         return self._legacy_add_proper_indentation(text, code, offset, edit_type)
     
     def _calculate_python_indentation(self, text: str, code: str, offset: int, edit_type: str = None) -> str:
@@ -1452,7 +1452,7 @@ class ASTRewriter:
         - If offset is at line start (column 0): Query-based insertion → match that line's indent
         - If offset is mid-line: Manual insertion → calculate indent from context
         """
-        logger.debug(f"🔧 Calculating Python indentation for edit_type='{edit_type}' at offset={offset}")
+        logger.debug(f" Calculating Python indentation for edit_type='{edit_type}' at offset={offset}")
 
         # Find the line containing the offset
         line_start = code.rfind('\n', 0, offset) + 1
@@ -1736,7 +1736,7 @@ class ASTRewriter:
                             # Get configurable text preview length
                             limits = self.config_manager.get_processing_limits(self.language)
                             text_preview_length = limits.get('debug_text_preview_length', 100)
-                            logger.debug(f"🔧 AST-based inside_start: found first statement '{self._get_node_text(first_statement)[:text_preview_length]}...', indentation '{indent_string}' (len={len(indent_string)})")
+                            logger.debug(f" AST-based inside_start: found first statement '{self._get_node_text(first_statement)[:text_preview_length]}...', indentation '{indent_string}' (len={len(indent_string)})")
                             return indent_string
             
             # Fallback: Use TreeSitter indentation engine
@@ -1745,18 +1745,18 @@ class ASTRewriter:
                     indent_info_ts = self.indent_engine.calculate_indentation_at_position(
                         self.tree, code, offset, self.language
                     )
-                    logger.debug(f"🔧 TreeSitter fallback inside_start: '{indent_info_ts.indent_string}' (len={len(indent_info_ts.indent_string)})")
+                    logger.debug(f" TreeSitter fallback inside_start: '{indent_info_ts.indent_string}' (len={len(indent_info_ts.indent_string)})")
                     return indent_info_ts.indent_string
                 except Exception as e:
-                    logger.warning(f"⚠️  TreeSitter indentation fallback failed: {e}")
+                    logger.warning(f"  TreeSitter indentation fallback failed: {e}")
             
             # Final fallback: Use standard indentation
             indent_string = '    ' if indent_info.indent_char == ' ' else '\t'
-            logger.debug(f"🔧 Final fallback inside_start: '{indent_string}' (len={len(indent_string)})")
+            logger.debug(f" Final fallback inside_start: '{indent_string}' (len={len(indent_string)})")
             return indent_string
             
         except Exception as e:
-            logger.warning(f"⚠️  AST-based indentation calculation failed: {e}")
+            logger.warning(f"  AST-based indentation calculation failed: {e}")
             # Fallback to standard indentation
             indent_string = '    ' if indent_info.indent_char == ' ' else '\t'
             return indent_string
@@ -1837,7 +1837,7 @@ class ASTRewriter:
             indent_char = '\t'
         
         indent_str = indent_char * target_indent
-        logger.debug(f"🔧 Legacy indentation: '{indent_str}' (len={len(indent_str)})")
+        logger.debug(f" Legacy indentation: '{indent_str}' (len={len(indent_str)})")
         
         lines = text.split('\n')
         indented_lines = []

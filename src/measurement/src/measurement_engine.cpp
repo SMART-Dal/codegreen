@@ -227,9 +227,9 @@ InstrumentationResult MeasurementEngine::instrument_and_execute(const Measuremen
             std::string file_path = config.source_file;
             
             if (energy_storage_->store_session(session_id, energy_measurements, code_version, file_path)) {
-                std::cout << "✓ Energy measurements stored in session: " << session_id << std::endl;
+                std::cout << "[ok] Energy measurements stored in session: " << session_id << std::endl;
             } else {
-                std::cout << "⚠️  Failed to store energy measurements" << std::endl;
+                std::cout << "Failed to store energy measurements" << std::endl;
             }
         }
         

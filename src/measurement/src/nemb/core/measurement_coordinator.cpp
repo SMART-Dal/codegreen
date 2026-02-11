@@ -31,21 +31,21 @@ bool MeasurementCoordinator::add_provider(std::unique_ptr<EnergyProvider> provid
     }
     
     std::string provider_name = provider->get_name();
-    std::cout << "🔌 Adding energy provider: " << provider_name << std::endl;
+    std::cout << "Adding energy provider: " << provider_name << std::endl;
     
     if (!provider->is_available()) {
-        std::cerr << "  ⚠️  Provider not available: " << provider_name << std::endl;
+        std::cerr << "  Provider not available: " << provider_name << std::endl;
         return false;
     }
     
     if (!provider->initialize()) {
-        std::cerr << "  ❌ Failed to initialize provider: " << provider_name << std::endl;
+        std::cerr << "  Failed to initialize provider: " << provider_name << std::endl;
         return false;
     }
     
     // Run self-test
     if (!provider->self_test()) {
-        std::cerr << "  ❌ Provider self-test failed: " << provider_name << std::endl;
+        std::cerr << "  Provider self-test failed: " << provider_name << std::endl;
         provider->shutdown();
         return false;
     }
@@ -60,7 +60,7 @@ bool MeasurementCoordinator::add_provider(std::unique_ptr<EnergyProvider> provid
     
     providers_[provider_name] = std::move(state);
     
-    std::cout << "  ✅ Provider added successfully: " << provider_name << std::endl;
+    std::cout << "  Provider added successfully: " << provider_name << std::endl;
     return true;
 }
 
@@ -78,7 +78,7 @@ bool MeasurementCoordinator::remove_provider(const std::string& provider_name) {
         return false;
     }
     
-    std::cout << "🔌 Removing energy provider: " << provider_name << std::endl;
+    std::cout << "Removing energy provider: " << provider_name << std::endl;
     it->second.provider->shutdown();
     providers_.erase(it);
     
@@ -99,7 +99,7 @@ bool MeasurementCoordinator::start_measurements() {
         }
     }
     
-    std::cout << "▶️  Starting coordinated measurements..." << std::endl;
+    std::cout << "Starting coordinated measurements..." << std::endl;
     
     // Reset statistics
     {
@@ -113,7 +113,7 @@ bool MeasurementCoordinator::start_measurements() {
     measurement_thread_ = std::thread(&MeasurementCoordinator::measurement_loop, this);
     provider_health_thread_ = std::thread(&MeasurementCoordinator::provider_health_loop, this);
     
-    std::cout << "  ✅ Measurements started" << std::endl;
+    std::cout << "  Measurements started" << std::endl;
     return true;
 }
 

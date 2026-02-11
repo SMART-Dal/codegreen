@@ -80,6 +80,11 @@ class Precision(str, Enum):
     medium = "medium"
     high = "high"
 
+class Granularity(str, Enum):
+    """Instrumentation granularity level."""
+    coarse = "coarse"  # main entry/exit only (minimal overhead)
+    fine = "fine"       # all points from language config (functions, methods, etc.)
+
 def get_binary_path() -> Optional[Path]:
     """
     Get the path to the CodeGreen binary.
@@ -742,6 +747,8 @@ def measure_energy(
     timeout: Annotated[Optional[int], typer.Option("--timeout", "-t", help="Timeout in seconds")] = None,
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup", help="Keep temporary files")] = False,
     is_instrumented: Annotated[bool, typer.Option("--instrumented", help="Script is already instrumented")] = False,
+    granularity: Annotated[Granularity, typer.Option("--granularity", "-g", help="Instrumentation level: coarse (main only) or fine (all functions)")] = Granularity.coarse,
+    export_plot: Annotated[Optional[Path], typer.Option("--export-plot", help="Export energy timeline (HTML default, or PNG/PDF)")] = None,
     args: Annotated[Optional[List[str]], typer.Argument(help="Arguments to pass to the script")] = None,
 ):
     """
@@ -749,13 +756,16 @@ def measure_energy(
 
     This command analyzes your code structure, instruments it with measurement
     points, and measures energy consumption using available hardware sensors
-    (Intel RAPL, NVIDIA NVML, AMD ROCm). Results include function-level energy
-    breakdowns and optimization suggestions.
+    (Intel RAPL, NVIDIA NVML, AMD ROCm).
+
+    [bold]Granularity:[/bold]
+    - [cyan]coarse[/cyan] (default): Instruments only main entry/exit - minimal overhead, total program energy
+    - [cyan]fine[/cyan]: Instruments all functions/methods per language config - per-function energy breakdown
 
     [bold]Examples:[/bold]
     - [cyan]codegreen measure python fibonacci.py[/cyan]
+    - [cyan]codegreen measure python script.py --granularity fine[/cyan]
     - [cyan]codegreen measure python script.py --sensors rapl nvidia[/cyan]
-    - [cyan]codegreen measure python app.py --precision high --verbose[/cyan]
     - [cyan]codegreen measure python main.py --timeout 60 --output results.json[/cyan]
     - [cyan]codegreen measure python main.py --json[/cyan]
 
@@ -792,18 +802,27 @@ def measure_energy(
             raise typer.Exit(1)
         
         if not json_output:
-            console.print(f"[green]✓ Analysis completed![/green]")
+            console.print(f"[green][ok] Analysis completed![/green]")
             console.print(f"Instrumentation points found: [cyan]{result.checkpoint_count}[/cyan]")
-        
+
+        # Apply granularity filter
+        points = result.instrumentation_points
+        if granularity == Granularity.coarse:
+            points = _filter_main_entry_points(points, language.value)
+            if not json_output:
+                console.print(f"Granularity: coarse (main entry/exit) -> [cyan]{len(points)}[/cyan] points")
+        else:
+            if not json_output:
+                console.print(f"Granularity: fine (config-driven) -> [cyan]{len(points)}[/cyan] points")
+
         # Step 2: Handle Instrumentation
         run_path = script
         temp_dir = None
-        
+
         if not is_instrumented:
-            # Unified approach: Python instrumentation engine for all languages
             if not json_output:
                 console.print(f"\n[green]Instrumenting {language.value} code...[/green]")
-            instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
+            instrumented_code = engine.instrument_code(source_code, points, language.value)
 
             # Determine correct output extension
             ext_map = {'python': '.py', 'c': '.c', 'cpp': '.cpp', 'java': '.java'}
@@ -831,7 +850,7 @@ def measure_energy(
                 if output:
                     _save_measurement_results(output, result, measurement_result)
                     if not json_output:
-                        console.print(f"[green]✓ Results saved to: {output}[/green]")
+                        console.print(f"[green][ok] Results saved to: {output}[/green]")
             else:
                 if not json_output:
                     console.print(f"\n[yellow]Note: No energy sensors available. Code analysis completed.[/yellow]")
@@ -851,7 +870,12 @@ def measure_energy(
                 print(json.dumps(combined_results, indent=2))
             else:
                 if measurement_result and measurement_result.get('success'):
-                    console.print(f"\n[green]✓ CodeGreen measurement completed successfully![/green]")
+                    console.print(f"\n[green][ok] CodeGreen measurement completed successfully![/green]")
+            if export_plot and measurement_result and measurement_result.get('checkpoints'):
+                from ..analyzer.plot import export_plot as do_export
+                do_export(measurement_result['checkpoints'], export_plot)
+                if not json_output:
+                    console.print(f"[green]Energy plot: {export_plot}[/green]")
         finally:
             # Cleanup
             if not no_cleanup and run_path != script:
@@ -876,6 +900,31 @@ def measure_energy(
         else:
             print(json.dumps({"success": False, "error": str(e)}))
         raise typer.Exit(1)
+
+
+def _filter_main_entry_points(points: List, language: str) -> List:
+    """Filter instrumentation points to keep only main entry/exit (coarse-grained).
+
+    Main detection per language:
+    - Python: function named 'main', or top-level module enter/exit
+    - C/C++: function named 'main'
+    - Java: method named 'main'
+    Falls back to first+last function enter/exit if no 'main' found.
+    """
+    main_names = {"main", "__main__"}
+    main_points = [p for p in points if p.name in main_names
+                   and p.type in ("function_enter", "function_exit")]
+    if main_points:
+        return main_points
+    # Fallback: keep only the first function_enter and last function_exit
+    enters = [p for p in points if p.type == "function_enter"]
+    exits = [p for p in points if p.type == "function_exit"]
+    fallback = []
+    if enters:
+        fallback.append(enters[0])
+    if exits:
+        fallback.append(exits[-1])
+    return fallback
 
 
 def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
@@ -1037,35 +1086,24 @@ def _run_energy_measurement(
                 return ""
 
     try:
-        if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Running energy measurement...", total=None)
-                if verbose:
-                    console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
-                output = _run_with_output_capture(cmd, timeout, env)
-                progress.update(task, completed=True)
-                measurements = _parse_runtime_measurements(output)
-                success = "--- CODEGREEN_RESULT_END ---" in output
-                if success:
-                    console.print("[green]Energy measurement completed![/green]")
-                    return {'success': True, 'output': output, 'checkpoints': measurements}
-                else:
-                    console.print(f"[yellow]Warning: Measurement may be incomplete[/yellow]")
-                    return {'success': False, 'error': 'incomplete', 'output': output}
-        else:
-            output = _run_with_output_capture(cmd, timeout, env)
-            measurements = _parse_runtime_measurements(output)
-            success = "--- CODEGREEN_RESULT_END ---" in output
+        if verbose and not json_output:
+            console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
+        # No spinner/progress bar during measurement - avoid CPU noise
+        output = _run_with_output_capture(cmd, timeout, env)
+        measurements = _parse_runtime_measurements(output)
+        success = "--- CODEGREEN_RESULT_END ---" in output
+        if json_output:
             return {
                 'success': success,
                 'output': output,
                 'error': None if success else 'incomplete',
                 'checkpoints': measurements
             }
+        if success:
+            return {'success': True, 'output': output, 'checkpoints': measurements}
+        else:
+            console.print("[yellow]Warning: Measurement may be incomplete[/yellow]")
+            return {'success': False, 'error': 'incomplete', 'output': output}
     except Exception as e:
         if not json_output:
             console.print(f"[red]Energy measurement failed: {e}[/red]")
@@ -1203,7 +1241,7 @@ def analyze_code_structure(
         
         if not json_output:
             # Display analysis results
-            console.print(f"[green]✓ Analysis completed![/green]")
+            console.print(f"[green][ok] Analysis completed![/green]")
             console.print(f"Analysis method: [cyan]{result.metadata.get('analysis_method', 'unknown')}[/cyan]")
             console.print(f"Parser available: [cyan]{result.metadata.get('parser_available', False)}[/cyan]")
             console.print(f"Instrumentation points: [cyan]{result.checkpoint_count}[/cyan]")
@@ -1229,7 +1267,7 @@ def analyze_code_structure(
                 f.write(instrumented_code)
             
             if not json_output:
-                console.print(f"[green]✓ Instrumented code saved to: {instrumented_file_path}[/green]")
+                console.print(f"[green][ok] Instrumented code saved to: {instrumented_file_path}[/green]")
         
         if verbose and result.instrumentation_points and not json_output:
             # Show detailed instrumentation points
@@ -1293,10 +1331,10 @@ def analyze_code_structure(
             with open(output, 'w', encoding='utf-8') as f:
                 json.dump(analysis_data, f, indent=2)
             if not json_output:
-                console.print(f"[green]✓ Analysis saved to: {output}[/green]")
+                console.print(f"[green][ok] Analysis saved to: {output}[/green]")
         
         if not json_output:
-            console.print(f"\n[green]✓ Code analysis completed successfully![/green]")
+            console.print(f"\n[green][ok] Code analysis completed successfully![/green]")
         
     except Exception as e:
         if not json_output:
@@ -1579,30 +1617,30 @@ def show_info(
     
     # Binary information
     if binary_path:
-        table.add_row("Binary", "✓ Found", str(binary_path))
+        table.add_row("Binary", "[ok] Found", str(binary_path))
     else:
-        table.add_row("Binary", "✗ Missing", "CodeGreen binary not found")
+        table.add_row("Binary", "[!!] Missing", "CodeGreen binary not found")
     
     # Configuration information
     if config_path:
-        table.add_row("Config", "✓ Found", str(config_path))
+        table.add_row("Config", "[ok] Found", str(config_path))
     else:
         table.add_row("Config", "- Default", "Using default configuration")
     
     # Runtime information
     if runtime_available:
-        table.add_row("Runtime", "✓ Available", "Python runtime modules found")
+        table.add_row("Runtime", "[ok] Available", "Python runtime modules found")
     else:
         table.add_row("Runtime", "- Missing", "Runtime modules not found")
     
     # System information
-    table.add_row("Platform", "✓", f"{platform.system()} {platform.machine()}")
-    table.add_row("Python", "✓", sys.version.split()[0])
+    table.add_row("Platform", "[ok]", f"{platform.system()} {platform.machine()}")
+    table.add_row("Python", "[ok]", sys.version.split()[0])
     
     # Package information
     try:
         import codegreen
-        table.add_row("Version", "✓", f"CodeGreen {codegreen.__version__}")
+        table.add_row("Version", "[ok]", f"CodeGreen {codegreen.__version__}")
     except:
         table.add_row("Version", "-", "Unknown")
     
@@ -1658,12 +1696,12 @@ def diagnose(
     if not binary_path:
         issues.append("CodeGreen binary not found")
     else:
-        console.print(f"[green]✓[/green] Binary: {binary_path}")
+        console.print(f"[green][ok][/green] Binary: {binary_path}")
     
     # Check dependencies
     try:
         import typer, rich, psutil
-        console.print("[green]✓[/green] Python dependencies available")
+        console.print("[green][ok][/green] Python dependencies available")
     except ImportError as e:
         issues.append(f"Missing Python dependency: {e}")
         if fix:
@@ -1674,14 +1712,14 @@ def diagnose(
     if not ensure_runtime_available():
         warnings.append("Runtime modules not found - some features may not work")
     else:
-        console.print("[green]✓[/green] Runtime modules available")
+        console.print("[green][ok][/green] Runtime modules available")
     
     # Check configuration
     config_path = get_config_path()
     if not config_path:
         warnings.append("Default configuration file not found")
     else:
-        console.print(f"[green]✓[/green] Configuration: {config_path}")
+        console.print(f"[green][ok][/green] Configuration: {config_path}")
     
     # Test basic functionality if binary exists
     if binary_path and test_sensors:
@@ -1690,7 +1728,7 @@ def diagnose(
             result = subprocess.run([str(binary_path), "--help"], 
                                   capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
-                console.print("[green]✓[/green] Binary executes successfully")
+                console.print("[green][ok][/green] Binary executes successfully")
             else:
                 issues.append(f"Binary execution failed (exit code: {result.returncode})")
         except subprocess.TimeoutExpired:
@@ -1704,7 +1742,7 @@ def diagnose(
     if issues:
         console.print("[red]Issues found:[/red]")
         for issue in issues:
-            console.print(f"  [red]✗[/red] {issue}")
+            console.print(f"  [red][!!][/red] {issue}")
     
     if warnings:
         console.print("[yellow]Warnings:[/yellow]")
@@ -1714,10 +1752,10 @@ def diagnose(
     if fixes_applied:
         console.print("[green]Fixes applied:[/green]")
         for fix in fixes_applied:
-            console.print(f"  [green]✓[/green] {fix}")
+            console.print(f"  [green][ok][/green] {fix}")
     
     if not issues and not warnings:
-        console.print("[green]✓ No issues found! CodeGreen appears to be properly installed.[/green]")
+        console.print("[green][ok] No issues found! CodeGreen appears to be properly installed.[/green]")
     
     if issues:
         console.print("\n[bold]Recommendations:[/bold]")
@@ -1808,9 +1846,9 @@ def validate_accuracy(
             console.print(result.stderr)
         
         if result.returncode == 0:
-            console.print("\n[green]✓ Validation completed successfully![/green]")
+            console.print("\n[green][ok] Validation completed successfully![/green]")
         else:
-            console.print(f"\n[red]✗ Validation failed with exit code {result.returncode}[/red]")
+            console.print(f"\n[red][!!] Validation failed with exit code {result.returncode}[/red]")
             raise typer.Exit(1)
             
     except subprocess.TimeoutExpired:
@@ -1938,19 +1976,19 @@ def init_sensors():
         console.print("[cyan]Creating 'codegreen' group...[/cyan]")
         try:
             grp.getgrnam('codegreen')
-            console.print("  ✓ Group already exists")
+            console.print("  [ok] Group already exists")
         except KeyError:
             subprocess.run(['groupadd', 'codegreen'], check=True)
-            console.print("  ✓ Group created")
+            console.print("  [ok] Group created")
 
         # 2. Add user to group
         console.print(f"[cyan]Adding {actual_user} to 'codegreen' group...[/cyan]")
         user_groups = [g.gr_name for g in grp.getgrall() if actual_user in g.gr_mem]
         if 'codegreen' not in user_groups:
             subprocess.run(['usermod', '-aG', 'codegreen', actual_user], check=True)
-            console.print("  ✓ User added to group")
+            console.print("  [ok] User added to group")
         else:
-            console.print("  ✓ User already in group")
+            console.print("  [ok] User already in group")
 
         # 3. Set RAPL permissions
         console.print("[cyan]Setting RAPL permissions...[/cyan]")
@@ -1967,7 +2005,7 @@ def init_sensors():
             subprocess.run(['chmod', 'g+r', str(rapl_file)], check=False)
 
         if count > 0:
-            console.print(f"  ✓ Set permissions on {count} RAPL domains")
+            console.print(f"  [ok] Set permissions on {count} RAPL domains")
         else:
             console.print("  ! No RAPL files found (CPU may not support it)")
 
@@ -1978,13 +2016,13 @@ SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"
 """
         udev_file = Path("/etc/udev/rules.d/99-codegreen-rapl.rules")
         udev_file.write_text(udev_rule)
-        console.print(f"  ✓ Created {udev_file}")
+        console.print(f"  [ok] Created {udev_file}")
 
         # 5. Reload udev
         console.print("[cyan]Reloading udev rules...[/cyan]")
         subprocess.run(['udevadm', 'control', '--reload-rules'], check=False)
         subprocess.run(['udevadm', 'trigger'], check=False)
-        console.print("  ✓ Udev rules reloaded")
+        console.print("  [ok] Udev rules reloaded")
 
         console.print("")
         console.print("[green]Sensor setup complete![/green]")
@@ -2136,13 +2174,12 @@ def run_benchmark(
 
         console.print(table)
 
-        # Save results
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_file = output_dir / f"benchmark_{timestamp}.json"
-        csv_file = output_dir / f"benchmark_{timestamp}.csv"
+        # Save results (overwrite previous)
+        json_file = output_dir / "benchmark_latest.json"
+        csv_file = output_dir / "benchmark_latest.csv"
         collector.to_json(json_file)
         collector.to_csv(csv_file)
-        console.print(f"[green]Results saved to {json_file}[/green]")
+        console.print(f"Results saved to {json_file}")
     finally:
         harness.cleanup()
 

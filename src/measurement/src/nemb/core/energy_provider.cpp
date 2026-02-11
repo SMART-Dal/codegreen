@@ -67,7 +67,7 @@ std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provid
 std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
     std::vector<std::unique_ptr<EnergyProvider>> providers;
     
-    std::cout << "🔍 Detecting available energy providers..." << std::endl;
+    std::cout << "Detecting available energy providers..." << std::endl;
     
     auto registered = EnergyProvider::get_registered_providers();
     for (const auto& name : registered) {
@@ -78,7 +78,7 @@ std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
             // Ideally we should silence stdout/stderr here or have a 'check_support' method
             
             if (provider->initialize()) {
-                std::cout << "  ✅ " << provider->get_name() << " initialized" << std::endl;
+                std::cout << "  " << provider->get_name() << " initialized" << std::endl;
                 providers.push_back(std::move(provider));
             } else {
                 // Determine if we should log failure (verbose)
@@ -88,9 +88,9 @@ std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
     }
     
     if (providers.empty()) {
-        std::cout << "  ⚠️  No energy providers available - measurements will be limited" << std::endl;
+        std::cout << "  No energy providers available - measurements will be limited" << std::endl;
     } else {
-        std::cout << "  ✅ Successfully initialized " << providers.size() << " energy provider(s)" << std::endl;
+        std::cout << "  Successfully initialized " << providers.size() << " energy provider(s)" << std::endl;
     }
     
     return providers;
