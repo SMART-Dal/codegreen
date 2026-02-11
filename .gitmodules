@@ -4,9 +4,6 @@
 [submodule "third_party/tree-sitter-python"]
 	path = third_party/tree-sitter-python
 	url = https://github.com/tree-sitter/tree-sitter-python.git
-[submodule "third_party/pmt"]
-	path = third_party/pmt
-	url = https://git.astron.nl/RD/pmt.git
 [submodule "third_party/tree-sitter-c"]
 	path = third_party/tree-sitter-c
 	url = https://github.com/tree-sitter/tree-sitter-c.git
@@ -16,9 +13,6 @@
 [submodule "third_party/tree-sitter-java"]
 	path = third_party/tree-sitter-java
 	url = https://github.com/tree-sitter/tree-sitter-java.git
-[submodule "third_party/tree-climber"]
-	path = third_party/tree-climber
-	url = git@github.com:bstee615/tree-climber.git
 [submodule "third_party/nvim-treesitter"]
 	path = third_party/nvim-treesitter
 	url = https://github.com/nvim-treesitter/nvim-treesitter.git
