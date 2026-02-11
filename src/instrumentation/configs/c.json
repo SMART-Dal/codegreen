@@ -34,9 +34,6 @@
             "function_exit": {
                 "mode": "inside_end"
             },
-            "class_exit": {
-                "mode": "inside_end"
-            },
             "function_return": {
                 "mode": "immediately_before"
             },
@@ -56,12 +53,25 @@
     "query_config": {
         "capture_mapping": {
             "function_def": "function_enter",
+            "function_name": "function_enter",
+            "function": "function_enter",
+            "local.definition.function": "function_enter",
             "return": "function_return"
         },
         "priority_order": [
             "function_def",
+            "function_name",
+            "function",
+            "local.definition.function",
             "return"
-        ]
+        ],
+        "deduplication_rules": {
+            "function_enter": {
+                "scope": "function",
+                "priority_order": ["function_def", "function_name"],
+                "max_per_function": 1
+            }
+        }
     },
     "instrumentation_config": {
         "import_statement": "#include \"codegreen_runtime.h\"",

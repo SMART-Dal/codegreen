@@ -206,6 +206,10 @@ private:
     std::vector<SynchronizedReading> readings_buffer_;
     std::atomic<size_t> buffer_write_index_{0};
     std::atomic<bool> buffer_full_{false};
+
+    // Shutdown synchronization
+    mutable std::mutex shutdown_mutex_;
+    std::condition_variable shutdown_cv_;
     
     // Statistics
     mutable std::mutex stats_mutex_;

@@ -1,16 +1,16 @@
 """
-CodeGreen Language Engine - Production Multi-Language Support
+CodeGreen Language Engine - Config-Driven Multi-Language Instrumentation
 
-Production-ready language analysis and instrumentation engine using tree-sitter
-queries with robust fallback mechanisms. Replaces the previous adapter system
-with a unified, extensible architecture.
+Tree-sitter based language analysis and instrumentation engine with config-driven
+query support. New languages can be added by:
+1. Adding tree-sitter grammar via tree-sitter-languages
+2. Creating config JSON file with custom_queries and capture_mapping
 
 This engine handles:
 - Dynamic language detection and parser loading
-- Query-based AST analysis for precise instrumentation points
-- Robust fallback to regex analysis when parsers unavailable
+- Config-driven tree-sitter queries (custom_queries in JSON configs)
+- Capture mapping from query results to instrumentation points
 - Code instrumentation with measurement injection
-- Performance optimization analysis
 """
 
 import logging
@@ -103,30 +103,6 @@ class ExternalQueryLoader:
         self.nvim_treesitter_path = nvim_treesitter_path or self._find_nvim_treesitter_path()
         self.query_cache = {}
         self._config_manager = config_manager
-        
-        # Standard capture mapping for language-agnostic instrumentation
-        # Based on actual nvim-treesitter capture names
-        # Priority order: more specific captures first to avoid duplicates
-        # Get configurable priority values
-        if self._config_manager:
-            global_config = self._config_manager.get_global_config()
-            high_priority = global_config.get('capture_priority_high', 1)
-            medium_priority = global_config.get('capture_priority_medium', 2)
-        else:
-            high_priority = 1
-            medium_priority = 2
-        
-        self.CAPTURE_MAP = {
-            'local.definition.function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start', 'priority': high_priority},
-            'local.definition.method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start', 'priority': high_priority},
-            'local.definition.type': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start', 'priority': high_priority},
-            'function': {'type': 'function_enter', 'subtype': 'function', 'insertion_mode': 'inside_start', 'priority': medium_priority},
-            'function.method': {'type': 'function_enter', 'subtype': 'method', 'insertion_mode': 'inside_start', 'priority': medium_priority},
-            'type.definition': {'type': 'class_enter', 'subtype': 'class', 'insertion_mode': 'inside_start', 'priority': medium_priority},
-            'keyword.return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before', 'priority': high_priority},
-            'return': {'type': 'function_exit', 'subtype': 'return', 'insertion_mode': 'before', 'priority': medium_priority},
-        }
-        
     def _find_nvim_treesitter_path(self) -> Optional[str]:
         """Find nvim-treesitter installation path"""
         # Try common locations
@@ -142,7 +118,7 @@ class ExternalQueryLoader:
             if full_path.exists() and (full_path / "queries").exists():
                 return str(full_path)
         
-        logger.warning("⚠️  FALLBACK: nvim-treesitter not found, using hardcoded queries instead of community-maintained queries")
+        logger.warning("nvim-treesitter not found, using custom_queries from config")
         return None
     
     def get_instrumentation_queries(self, language: str) -> Dict[str, str]:
@@ -173,7 +149,7 @@ class ExternalQueryLoader:
         query_dir = Path(self.nvim_treesitter_path) / "queries" / language
         
         if not query_dir.exists():
-            logger.warning(f"⚠️  FALLBACK: No nvim-treesitter queries found for {language}, using hardcoded queries instead of community-maintained queries")
+            logger.warning(f"No nvim-treesitter queries for {language}, using custom_queries from config")
             return {}
         
         try:
@@ -358,12 +334,11 @@ class LanguageEngine:
         self._parsers: Dict[str, Parser] = {}
         self._languages: Dict[str, Language] = {}
         self._queries: Dict[str, Dict[str, Any]] = {}
-        self._config_manager = get_language_config_manager()  # Use centralized config manager
+        self._config_manager = get_language_config_manager()
         self._parser_lock = Lock()
         self._max_file_size_bytes = max_file_size_mb * 1024 * 1024
         self._parser_timeout_ms = parser_timeout_ms
-        self._compiled_regexes = {}
-        self._external_query_loader = ExternalQueryLoader(config_manager=self._config_manager)  # Load external queries
+        self._external_query_loader = ExternalQueryLoader(config_manager=self._config_manager)
         self._language_agnostic_generator = LanguageAgnosticInstrumentationGenerator()  # Language-agnostic instrumentation
         self._initialize_parsers()
     
@@ -382,66 +357,7 @@ class LanguageEngine:
         }
     
     def _get_builtin_queries(self, language: str) -> Dict[str, str]:
-        """Get built-in queries for fallback when external queries fail."""
-        # These are minimal fallback queries - external queries are preferred
-        if language == 'python':
-            return {
-                    'functions': '''
-                        (function_definition
-                          name: (identifier) @function_name
-                          body: (block) @function_body) @function_def
-                    ''',
-                    'classes': '''
-                        (class_definition
-                          name: (identifier) @class.name
-                          body: (block) @class.body) @class.def
-                    ''',
-                    'loops': '''
-                    (for_statement) @loop.for
-                    (while_statement) @loop.while
-                ''',
-                'returns': '''
-                    (return_statement) @return
-                '''
-            }
-        elif language in ['c', 'cpp']:
-            return {
-                    'functions': '''
-                        (function_definition
-                          declarator: (function_declarator
-                            declarator: (identifier) @function_name)
-                          body: (compound_statement) @function_body) @function_def
-                    ''',
-                    'loops': '''
-                        (for_statement) @loop.for
-                        (while_statement) @loop.while
-                        (do_statement) @loop.do
-                    ''',
-                'returns': '''
-                    (return_statement) @return
-                '''
-            }
-        elif language == 'java':
-            return {
-                    'methods': '''
-                        (method_declaration
-                          name: (identifier) @method_name
-                          body: (block) @method_body) @method_def
-                    ''',
-                    'classes': '''
-                        (class_declaration
-                          name: (identifier) @class.name
-                          body: (class_body) @class.body) @class.def
-                    ''',
-                    'loops': '''
-                        (for_statement) @loop.for
-                        (while_statement) @loop.while
-                ''',
-                'returns': '''
-                    (return_statement) @return
-                '''
-            }
-        
+        """Deprecated: queries now loaded from config custom_queries. Returns empty dict."""
         return {}
     
     def _initialize_parsers(self):
@@ -490,10 +406,7 @@ class LanguageEngine:
                     except Exception as e:
                         logger.error(f"Unexpected error compiling full query for {lang_id}: {e}")
                 
-                # Always compile built-in queries as fallback/auxiliary (e.g. for return statements)
-                self._compile_builtin_queries(lang_id, language, config['queries'])
-                
-                # Load custom queries from config if available
+                # Load custom queries from config (primary query source)
                 config_obj = self._config_manager.get_config(lang_id)
                 if config_obj and hasattr(config_obj, 'custom_queries'):
                     for q_name, q_text in config_obj.custom_queries.items():
@@ -519,21 +432,6 @@ class LanguageEngine:
                 logger.error(f"⚠️ {msg}")
                 if strict_mode:
                     raise RuntimeError(msg)
-    
-    def _compile_builtin_queries(self, lang_id: str, language: Language, queries_config: Dict[str, str]):
-        """Compile built-in queries as fallback"""
-        for query_name, query_text in queries_config.items():
-            try:
-                query = Query(language, query_text)
-                self._queries[lang_id][query_name] = query
-                logger.debug(f"Compiled built-in {query_name} query for {lang_id}")
-            except (ValueError, TypeError) as e:
-                logger.error(f"Built-in query compilation failed for {query_name} in {lang_id}: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error compiling built-in {query_name} query for {lang_id}: {e}")
-        
-        if self._queries[lang_id]:
-            logger.info(f"✅ Initialized tree-sitter parser for {lang_id} with {len(self._queries[lang_id])} built-in queries")
     
     def get_supported_languages(self) -> List[str]:
         """Get list of supported language identifiers"""
@@ -596,16 +494,11 @@ class LanguageEngine:
         start_time = time.time()
         
         try:
-            # Try tree-sitter analysis first with timeout protection
-            if language in self._parsers:
-                points = self._analyze_with_treesitter_safe(source_code, language)
-                analysis_method = 'tree_sitter'
-            else:
-                # Fallback to regex analysis
-                logger.warning(f"🚨 FALLBACK WARNING: Tree-sitter not available for {language}, using regex analysis instead of AST-based analysis")
-                # print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
-                points = self._analyze_with_regex(source_code, language)
-                analysis_method = 'regex_fallback'
+            # Tree-sitter analysis (required, no fallback)
+            if language not in self._parsers:
+                raise RuntimeError(f"No tree-sitter parser available for {language}. Ensure language config exists.")
+            points = self._analyze_with_treesitter_safe(source_code, language)
+            analysis_method = 'tree_sitter'
             
             #TODO: Generate optimization suggestions
             suggestions = self._analyze_optimizations(source_code, language)
@@ -683,10 +576,7 @@ class LanguageEngine:
                 
             except (TimeoutError, MemoryError) as e:
                 logger.error(f"Tree-sitter parsing failed for {language}: {e}")
-                logger.warning(f"🚨 FALLBACK WARNING: Tree-sitter parsing failed, using regex analysis instead of AST-based analysis for {language}")
-                # print(f"🚨 WARNING: Tree-sitter parsing failed for {language}, using fallback regex analysis - some instrumentation may be less accurate")
-                # Fallback to regex analysis
-                return self._analyze_with_regex(source_code, language)
+                raise RuntimeError(f"Tree-sitter parsing failed for {language}: {e}")
             
             points = []
             
@@ -741,37 +631,33 @@ class LanguageEngine:
                         new_total = sum(len(nodes) for nodes in captures.values())
                         logger.warning(f"   Truncation result: {original_count} -> {new_total} captures")
                     
-                    # Get capture mapping for this language from configuration
+                    # Get capture mapping from language configuration (required)
                     config = self._config_manager.get_config(language)
-                    if config and hasattr(config, 'query_config') and 'capture_mapping' in config.query_config:
-                        capture_map = {}
-                        for capture_name, point_type in config.query_config['capture_mapping'].items():
-                            # Determine insertion mode based on point type
-                            if 'enter' in point_type:
-                                insertion_mode = 'inside_start'
-                            elif point_type == 'function_return':
-                                insertion_mode = 'immediately_before'
-                            else:
-                                insertion_mode = 'before'
-                                
-                            capture_map[capture_name] = {
-                                'type': point_type,
-                                'subtype': point_type.split('_')[1] if '_' in point_type else point_type,
-                                'insertion_mode': insertion_mode,
-                                'priority': 1
-                            }
-                        logger.debug(f"   Using language-specific capture mapping with {len(capture_map)} mappings")
-                    else:
-                        # Fallback to ExternalQueryLoader's CAPTURE_MAP
-                        logger.debug(f"   Using fallback CAPTURE_MAP with {len(self._external_query_loader.CAPTURE_MAP)} mappings")
-                        capture_map = self._external_query_loader.CAPTURE_MAP
+                    if not config or not hasattr(config, 'query_config') or 'capture_mapping' not in config.query_config:
+                        raise RuntimeError(f"No capture_mapping in config for {language}. Add query_config.capture_mapping to config.")
+
+                    capture_map = {}
+                    for capture_name, point_type in config.query_config['capture_mapping'].items():
+                        if 'enter' in point_type:
+                            insertion_mode = 'inside_start'
+                        elif point_type == 'function_return':
+                            insertion_mode = 'immediately_before'
+                        else:
+                            insertion_mode = 'before'
+                        capture_map[capture_name] = {
+                            'type': point_type,
+                            'subtype': point_type.split('_')[1] if '_' in point_type else point_type,
+                            'insertion_mode': insertion_mode,
+                            'priority': 1
+                        }
+                    logger.debug(f"   Using capture mapping with {len(capture_map)} mappings")
                     
                     # Process each capture, handling duplicates
                     processed_nodes = set()  # Track processed nodes to avoid duplicates
                     points_created = 0
                     points_skipped = 0
                     
-                    logger.debug(f"   🔄 Processing captures against CAPTURE_MAP...")
+                    logger.debug(f"   Processing {len(capture_map)} capture mappings")
                     
                     for capture_name, node_list in captures.items():
                         
@@ -798,8 +684,8 @@ class LanguageEngine:
                                 
                                 # Create instrumentation point from capture
                                 point_or_points = self._create_instrumentation_point_from_capture(
-                                    node, capture_name, capture_map[capture_name], 
-                                    source_code, language
+                                    node, capture_name, capture_map[capture_name],
+                                    source_code, language, tree
                                 )
                                 if point_or_points:
                                     # Handle both single point and list of points
@@ -907,48 +793,6 @@ class LanguageEngine:
             
         return False
 
-    def _analyze_with_regex(self, source_code: str, language: str) -> List[InstrumentationPoint]:
-        """Analyze code using regex fallback patterns with optimization"""
-        logger.warning(f"🚨 FALLBACK WARNING: Using regex analysis for {language} instead of AST-based analysis")
-        # print(f"🚨 WARNING: Using fallback regex analysis for {language} - some instrumentation may be less accurate")
-        patterns = self._config_manager.get_analysis_patterns(language)
-        points = []
-        
-        # Compile regexes once and cache them
-        if language not in self._compiled_regexes:
-            self._compiled_regexes[language] = {
-                pattern_name: re.compile(pattern)
-                for pattern_name, pattern in patterns.items()
-            }
-        
-        compiled_patterns = self._compiled_regexes[language]
-        lines = source_code.split('\n')
-        
-        # Limit processing for very large files
-        limits = self._config_manager.get_processing_limits(language)
-        max_lines = limits.get('max_lines_for_processing', 50000)
-        if len(lines) > max_lines:
-            logger.warning(f"File has {len(lines)} lines, processing first {max_lines} only")
-            lines = lines[:max_lines]
-        
-        # Get configurable line offset
-        global_config = self._config_manager.get_global_config()
-        line_offset = global_config.get('line_offset', 1)
-        
-        for i, line in enumerate(lines):
-            line_num = i + line_offset
-            
-            for pattern_name, compiled_pattern in compiled_patterns.items():
-                match = compiled_pattern.search(line)
-                if match:
-                    point = self._create_regex_instrumentation_point(
-                        pattern_name, match, line_num, language
-                    )
-                    if point:
-                        points.append(point)
-        
-        return points
-    
     def _find_parent_definition(self, node: 'Node', language: str) -> Optional['Node']:
         """Find the parent function or class definition node"""
         node_types = self._config_manager.get_node_types(language)
@@ -1025,7 +869,8 @@ class LanguageEngine:
         capture_name: str,
         capture_config: Dict[str, str],
         source_code: str,
-        language: str
+        language: str,
+        tree: 'Tree' = None
     ) -> Optional[InstrumentationPoint]:
         """Create instrumentation point from a single tree-sitter capture"""
         logger.debug(f"🔧 Creating instrumentation point for capture '{capture_name}' in {language}")
@@ -1126,7 +971,7 @@ class LanguageEngine:
                         insertion_point = body_node.start_point
                         
                         # Use AST processor for precise insertion (skipping docstrings etc)
-                        ast_processor = ASTProcessor(language, source_code, None)
+                        ast_processor = ASTProcessor(language, source_code, tree)
                         ast_insertion_byte = ast_processor.find_insertion_point(def_node, 'inside_start')
                         if ast_insertion_byte is not None:
                             insertion_byte = ast_insertion_byte
@@ -1191,7 +1036,7 @@ class LanguageEngine:
                         # Only create implicit exit if function doesn't end with return/raise
                         if not terminates:
                             # Use AST processor to find correct insertion point
-                            ast_processor = ASTProcessor(language, source_code, None)
+                            ast_processor = ASTProcessor(language, source_code, tree)
                             exit_byte = ast_processor.find_insertion_point(body_node, 'inside_end')
                             
                             exit_line = body_node.end_point.row + line_offset
@@ -1581,7 +1426,7 @@ class LanguageEngine:
             # Calculate insertion points based on the type of construct
             if capture_name in ['function_name', 'method_name', 'constructor_name']:
                 # For function entries, we need to find the function body start
-                entry_line, exit_line = self._calculate_function_insertion_points(node, language)
+                entry_line, exit_line = self._calculate_function_insertion_points(node, language, source_code)
             elif capture_name.startswith('loop.') or 'loop' in capture_name:
                 # For loops, use the loop construct boundaries
                 entry_line, exit_line = self._calculate_loop_insertion_points(node, language)
@@ -1661,57 +1506,6 @@ class LanguageEngine:
             points.append(loop_exit_point)
         
         return points
-    
-    def _create_regex_instrumentation_point(
-        self,
-        pattern_name: str,
-        match: 'Match',
-        line_num: int,
-        language: str
-    ) -> Optional[InstrumentationPoint]:
-        """Create instrumentation point from regex match"""
-        
-        # Map regex patterns to instrumentation types
-        pattern_map = {
-            'function_def': ('function_enter', 'function'),
-            'method_def': ('function_enter', 'method'),
-            'class_def': ('class_enter', 'class'),
-            'interface_def': ('class_enter', 'interface'),
-            'struct_def': ('class_enter', 'struct'),
-            'for_loop': ('loop_start', 'for'),
-            'while_loop': ('loop_start', 'while'),
-            'do_loop': ('loop_start', 'do'),
-            'memory_op': ('memory_operation', 'allocation'),
-            'new_op': ('memory_operation', 'new'),
-            'delete_op': ('memory_operation', 'delete'),
-            'lambda_expr': ('lambda_expression', 'definition'),
-            'stream_op': ('stream_operation', 'operation'),
-            'list_comp': ('comprehension', 'list')
-        }
-        
-        if pattern_name not in pattern_map:
-            return None
-        
-        point_type, subtype = pattern_map[pattern_name]
-        name = match.group(1) if match.groups() else pattern_name
-        
-        # Mark energy-intensive operations
-        energy_intensive = pattern_name in ['memory_op', 'new_op', 'lambda_expr', 'stream_op', 'list_comp']
-        
-        return InstrumentationPoint(
-            id=f"{point_type}_{name}_{line_num}",
-            type=point_type,
-            subtype=subtype,
-            name=name,
-            line=line_num,
-            column=match.start(),
-            context=f"{subtype.title()} {point_type}: {name} at line {line_num}",
-            metadata={
-                'analysis_method': 'regex',
-                'energy_intensive': energy_intensive,
-                'pattern_matched': pattern_name
-            }
-        )
     
     def _classify_capture(
         self, 
@@ -1890,7 +1684,7 @@ class LanguageEngine:
         
         return byte_offset
     
-    def _calculate_function_insertion_points(self, function_name_node: 'Node', language: str):
+    def _calculate_function_insertion_points(self, function_name_node: 'Node', language: str, source_code: str = "", tree: 'Tree' = None):
         """Calculate where to insert function entry and exit checkpoints"""
         # Validate input node
         if not function_name_node or not hasattr(function_name_node, 'parent'):
@@ -1920,8 +1714,7 @@ class LanguageEngine:
         entry_line = parent.start_point.row + 1
         
         # Use AST processor to find the correct insertion point
-        # TODO: Pass tree parameter for TreeSitter indentation engine
-        ast_processor = ASTProcessor(language, source_code, None)
+        ast_processor = ASTProcessor(language, source_code, tree)
         insertion_byte = ast_processor.find_insertion_point(parent, 'inside_start')
         if insertion_byte is not None:
             # Convert byte offset to line number
@@ -2078,26 +1871,24 @@ class LanguageEngine:
         global_config = self._config_manager.get_global_config()
         line_offset = global_config.get('line_offset', 1)
         
-        # Language-specific handling
-        if language in ['c', 'cpp']:
-            # For C/C++, insert after existing #include statements
+        # Config-driven import insertion
+        config = self._config_manager.get_config(language)
+        detection_patterns = config.detection_patterns if config else {}
+
+        # Determine header patterns from config
+        header_prefixes = detection_patterns.get('include_directives', []) or detection_patterns.get('package_declaration', [])
+
+        if header_prefixes:
+            # Header-based languages (C, C++, Java)
+            comment_prefix = config.instrumentation_config.get('comment_prefix', '//') if config else '//'
             for i, line in enumerate(lines):
                 stripped = line.strip()
-                
-                if stripped.startswith('#include'):
+                if any(stripped.startswith(prefix) for prefix in header_prefixes):
                     insert_line = i + line_offset
-                elif stripped and not stripped.startswith('#'):
-                    break
-        elif language == 'java':
-            # For Java, insert after package/import statements
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped.startswith('package ') or stripped.startswith('import '):
-                    insert_line = i + line_offset
-                elif stripped and not stripped.startswith('//'):
+                elif stripped and not stripped.startswith(comment_prefix):
                     break
         else:
-            # For Python and other languages, use the original logic
+            # Docstring-based languages (Python, etc.)
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 

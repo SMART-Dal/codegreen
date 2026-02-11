@@ -1,0 +1,79 @@
+{
+  "binarytrees/C": {
+    "benchmark": "binarytrees",
+    "language": "C",
+    "size": "18",
+    "native_time": 0.9791,
+    "inst_time": 1.6475,
+    "energy_mean": 122.3037,
+    "energy_std": 2.0409,
+    "overhead_pct": 68.3,
+    "checkpoints": 20
+  },
+  "binarytrees/Python": {
+    "benchmark": "binarytrees",
+    "language": "Python",
+    "size": "18",
+    "native_time": 2.519,
+    "inst_time": 57.0383,
+    "energy_mean": 3149.5587,
+    "energy_std": 27.4859,
+    "overhead_pct": 2164.3,
+    "checkpoints": 6291536
+  },
+  "fannkuchredux/C": {
+    "benchmark": "fannkuchredux",
+    "language": "C",
+    "size": "10",
+    "native_time": 0.2227,
+    "inst_time": 0.8307,
+    "energy_mean": 55.2626,
+    "energy_std": 0.7157,
+    "overhead_pct": 273.0,
+    "checkpoints": 4
+  },
+  "fannkuchredux/Python": {
+    "benchmark": "fannkuchredux",
+    "language": "Python",
+    "size": "10",
+    "native_time": 0.4564,
+    "inst_time": 5.7174,
+    "energy_mean": 441.1165,
+    "energy_std": 6.2262,
+    "overhead_pct": 1152.7,
+    "checkpoints": 4
+  },
+  "nbody/C (coarse)": {
+    "benchmark": "nbody",
+    "language": "C (coarse)",
+    "size": "500000",
+    "native_time": 0.0355,
+    "inst_time": 0.1641,
+    "energy_mean": 2.8963,
+    "energy_std": 0.082,
+    "overhead_pct": 362.5,
+    "checkpoints": 2
+  },
+  "nbody/C (fine)": {
+    "benchmark": "nbody",
+    "language": "C (fine)",
+    "size": "50000",
+    "native_time": 0.0091,
+    "inst_time": 0.3395,
+    "energy_mean": 5.9838,
+    "energy_std": 0.1448,
+    "overhead_pct": 3635.5,
+    "checkpoints": 100008
+  },
+  "nbody/Python": {
+    "benchmark": "nbody",
+    "language": "Python",
+    "size": "50000",
+    "native_time": 0.3111,
+    "inst_time": 2.2387,
+    "energy_mean": 50.5,
+    "energy_std": 1.046,
+    "overhead_pct": 619.6,
+    "checkpoints": 250011
+  }
+}

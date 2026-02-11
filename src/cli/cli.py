@@ -18,6 +18,7 @@ import os
 import sys
 import subprocess
 import platform
+import time
 import shutil
 import json
 import tempfile
@@ -128,10 +129,9 @@ def get_config_path() -> Optional[Path]:
 def _get_runtime_path() -> Optional[Path]:
     """Get path to runtime module directory"""
     runtime_paths = [
+        Path(__file__).parents[2] / "src" / "instrumentation" / "language_runtimes" / "python",
         Path(__file__).parents[2] / "bin" / "runtime",
         Path(__file__).parents[2] / "codegreen" / "bin" / "runtime",
-        Path(__file__).parents[2] / "build" / "bin" / "runtime",
-        Path(__file__).parent / "runtime",
     ]
     for path in runtime_paths:
         if path.exists() and (path / "codegreen_runtime.py").exists():
@@ -688,29 +688,29 @@ def main(
     log_level: Annotated[LogLevel, typer.Option("--log-level", help="Set logging level")] = LogLevel.INFO,
 ):
     """
-    🌱 [bold green]CodeGreen[/bold green] - Energy-aware software development and optimization tool
-    
+    [bold green]CodeGreen[/bold green] - Energy-aware software development and optimization tool
+
     Advanced energy profiling and optimization for sustainable software development.
     Measure fine-grained energy consumption, identify hotspots, and optimize code
     efficiency using hardware-level sensors and AI-powered analysis.
-    
-    [bold]🚀 Core Features:[/bold]
-    • [cyan]Hardware-level energy measurement[/cyan] via Intel RAPL, NVIDIA NVML, AMD ROCm  
-    • [cyan]Multi-language support[/cyan] with AST-based instrumentation (Python, C++, Java, C)
-    • [cyan]Function-level energy profiling[/cyan] with microsecond precision
-    • [cyan]AI-powered optimization[/cyan] suggestions and energy hotspot detection
-    • [cyan]Professional CLI interface[/cyan] with rich formatting and auto-completion
-    
-    [bold]📊 Quick Start:[/bold]
-    • [dim]codegreen init[/dim] - Initialize sensors and system configuration
-    • [dim]codegreen measure python script.py[/dim] - Measure energy consumption  
-    • [dim]codegreen analyze python module.py[/dim] - Analyze code structure
-    • [dim]codegreen benchmark cpu_stress[/dim] - Run energy benchmarks
-    
-    [bold]🔧 System Management:[/bold]
-    • [dim]codegreen info[/dim] - Show installation and system status
-    • [dim]codegreen doctor[/dim] - Diagnose installation issues  
-    • [dim]codegreen config --show[/dim] - View/edit configuration
+
+    [bold]Core Features:[/bold]
+    - [cyan]Hardware-level energy measurement[/cyan] via Intel RAPL, NVIDIA NVML, AMD ROCm
+    - [cyan]Multi-language support[/cyan] with AST-based instrumentation (Python, C++, Java, C)
+    - [cyan]Function-level energy profiling[/cyan] with microsecond precision
+    - [cyan]AI-powered optimization[/cyan] suggestions and energy hotspot detection
+    - [cyan]Professional CLI interface[/cyan] with rich formatting and auto-completion
+
+    [bold]Quick Start:[/bold]
+    - [dim]codegreen init[/dim] - Initialize sensors and system configuration
+    - [dim]codegreen measure python script.py[/dim] - Measure energy consumption
+    - [dim]codegreen analyze python module.py[/dim] - Analyze code structure
+    - [dim]codegreen benchmark cpu_stress[/dim] - Run energy benchmarks
+
+    [bold]System Management:[/bold]
+    - [dim]codegreen info[/dim] - Show installation and system status
+    - [dim]codegreen doctor[/dim] - Diagnose installation issues
+    - [dim]codegreen config --show[/dim] - View/edit configuration
     """
     if version:
         console.print("[bold green]CodeGreen version 0.1.0[/bold green]")
@@ -745,20 +745,20 @@ def measure_energy(
     args: Annotated[Optional[List[str]], typer.Argument(help="Arguments to pass to the script")] = None,
 ):
     """
-    🚀 [bold]Measure energy consumption[/bold] of a script with detailed analysis.
-    
+    [bold]Measure energy consumption[/bold] of a script with detailed analysis.
+
     This command analyzes your code structure, instruments it with measurement
     points, and measures energy consumption using available hardware sensors
     (Intel RAPL, NVIDIA NVML, AMD ROCm). Results include function-level energy
     breakdowns and optimization suggestions.
-    
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen measure python fibonacci.py[/cyan]
-    • [cyan]codegreen measure python script.py --sensors rapl nvidia[/cyan] 
-    • [cyan]codegreen measure python app.py --precision high --verbose[/cyan]
-    • [cyan]codegreen measure python main.py --timeout 60 --output results.json[/cyan]
-    • [cyan]codegreen measure python main.py --json[/cyan]
-    
+    - [cyan]codegreen measure python fibonacci.py[/cyan]
+    - [cyan]codegreen measure python script.py --sensors rapl nvidia[/cyan]
+    - [cyan]codegreen measure python app.py --precision high --verbose[/cyan]
+    - [cyan]codegreen measure python main.py --timeout 60 --output results.json[/cyan]
+    - [cyan]codegreen measure python main.py --json[/cyan]
+
     [bold]Sensor Types:[/bold] rapl, nvidia, amd_gpu, amd_cpu
     [bold]Precision Levels:[/bold] low, medium, high
     """
@@ -799,18 +799,24 @@ def measure_energy(
         run_path = script
         temp_dir = None
         
-        if language == Language.python and not is_instrumented:
-            # Python MUST be pre-instrumented because the measurement is done via runtime hooks
+        if not is_instrumented:
+            # Unified approach: Python instrumentation engine for all languages
             if not json_output:
-                console.print(f"\n[green]Instrumenting Python code...[/green]")
+                console.print(f"\n[green]Instrumenting {language.value} code...[/green]")
             instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
-            run_path = script.with_name(f'{script.stem}_instrumented{script.suffix}')
+
+            # Determine correct output extension
+            ext_map = {'python': '.py', 'c': '.c', 'cpp': '.cpp', 'java': '.java'}
+            ext = ext_map.get(language.value, script.suffix)
+            if language == Language.java:
+                # Java requires filename to match public class name
+                import tempfile
+                temp_dir = Path(tempfile.mkdtemp(prefix="codegreen_java_"))
+                run_path = temp_dir / f'{script.stem}{ext}'
+            else:
+                run_path = script.with_name(f'{script.stem}_instrumented{ext}')
             with open(run_path, 'w', encoding='utf-8') as f:
                 f.write(instrumented_code)
-        elif not is_instrumented:
-            # For C/C++/Java, we let the C++ binary handle instrumentation and execution
-            # This avoids double-instrumentation bugs and handles Java filename requirements
-            pass
             
         # Step 3: Run the measurement
         try:
@@ -849,7 +855,10 @@ def measure_energy(
         finally:
             # Cleanup
             if not no_cleanup and run_path != script:
-                if run_path.exists():
+                if temp_dir and temp_dir.exists():
+                    import shutil
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                elif run_path.exists():
                     os.remove(run_path)
         
     except FileNotFoundError as e:
@@ -899,6 +908,52 @@ def _parse_runtime_measurements(output: str) -> List[Dict[str, Any]]:
     return measurements
 
 
+def _get_c_runtime_paths(language: str = "c") -> tuple:
+    """Get include path and lib path for C/C++ runtime."""
+    project_root = Path(__file__).resolve().parent.parent.parent
+    runtime_base = project_root / "src" / "instrumentation" / "language_runtimes"
+    include_path = runtime_base / language
+    lib_path = project_root / "lib"
+    if not lib_path.exists():
+        lib_path = project_root / "build" / "lib"
+    return include_path, lib_path
+
+
+def _compile_instrumented(instrumented_path: Path, language: Language, verbose: bool) -> Optional[Path]:
+    """Compile instrumented C/C++/Java code. Returns binary path or None on failure."""
+    build_dir = instrumented_path.parent
+    stem = instrumented_path.stem
+    if language == Language.c:
+        include_path, lib_path = _get_c_runtime_paths("c")
+        binary = build_dir / f"{stem}.out"
+        cmd = ["gcc", "-O2", f"-I{include_path}", str(instrumented_path),
+               f"-L{lib_path}", "-lcodegreen-nemb", "-lm", "-lpthread", "-o", str(binary)]
+    elif language == Language.cpp:
+        include_path, lib_path = _get_c_runtime_paths("cpp")
+        binary = build_dir / f"{stem}.out"
+        cmd = ["g++", "-O2", f"-I{include_path}", str(instrumented_path),
+               f"-L{lib_path}", "-lcodegreen-nemb", "-lpthread", "-o", str(binary)]
+    elif language == Language.java:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        java_runtime = project_root / "src" / "instrumentation" / "language_runtimes" / "java"
+        cmd = ["javac", "-cp", str(java_runtime), "-d", str(build_dir), str(instrumented_path)]
+        binary = build_dir / f"{stem}.class"
+    else:
+        return None
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            if verbose:
+                console.print(f"[red]Compilation failed: {result.stderr}[/red]")
+            return None
+        return binary
+    except Exception as e:
+        if verbose:
+            console.print(f"[red]Compilation error: {e}[/red]")
+        return None
+
+
 def _run_energy_measurement(
     instrumented_path: Path,
     language: Language,
@@ -909,46 +964,78 @@ def _run_energy_measurement(
     json_output: bool = False,
     no_cleanup: bool = False
 ) -> Dict[str, Any]:
-    """Run actual energy measurement on instrumented code"""
+    """Run actual energy measurement on instrumented code.
 
+    Unified approach for all languages:
+    - Python: run directly with runtime module
+    - C/C++: compile instrumented code, run binary
+    - Java: compile with javac, run with java
+    """
     env = os.environ.copy()
+    runtime_path = _get_runtime_path()
+    binary_to_cleanup = None
+
+    if runtime_path:
+        pythonpath = str(runtime_path)
+        if 'PYTHONPATH' in env:
+            pythonpath = f"{pythonpath}:{env['PYTHONPATH']}"
+        env['PYTHONPATH'] = pythonpath
 
     if language == Language.python:
-        runtime_path = _get_runtime_path()
-        if not runtime_path and not json_output:
-            console.print("[yellow]Warning: Runtime module path not found, execution may fail[/yellow]")
-
         cmd = ['python3', str(instrumented_path)]
         if args:
             cmd.extend(args)
-
-        if runtime_path:
-            pythonpath = str(runtime_path)
-            if 'PYTHONPATH' in env:
-                pythonpath = f"{pythonpath}:{env['PYTHONPATH']}"
-            env['PYTHONPATH'] = pythonpath
-    else:
-        binary_path = get_binary_path()
-        if not binary_path:
-            if not json_output:
-                console.print("[yellow]No binary available for energy measurement[/yellow]")
-            return {}
-
-        cmd = [str(binary_path), language.value, str(instrumented_path)]
-
-        if sensors:
-            sensor_list = ",".join([s.value for s in sensors])
-            cmd.extend(['--sensors', sensor_list])
-
-        if verbose:
-            cmd.append('--verbose')
-
-        if no_cleanup:
-            cmd.append('--no-cleanup')
-
+    elif language in (Language.c, Language.cpp):
+        binary = _compile_instrumented(instrumented_path, language, verbose)
+        if not binary or not binary.exists():
+            return {'success': False, 'error': 'Compilation failed'}
+        binary_to_cleanup = binary
+        # Set LD_LIBRARY_PATH for NEMB library
+        _, lib_path = _get_c_runtime_paths(language.value)
+        ld_path = str(lib_path)
+        if 'LD_LIBRARY_PATH' in env:
+            ld_path = f"{ld_path}:{env['LD_LIBRARY_PATH']}"
+        env['LD_LIBRARY_PATH'] = ld_path
+        cmd = [str(binary)]
         if args:
             cmd.extend(args)
+    elif language == Language.java:
+        binary = _compile_instrumented(instrumented_path, language, verbose)
+        if not binary:
+            return {'success': False, 'error': 'Java compilation failed'}
+        class_name = instrumented_path.stem
+        build_dir = instrumented_path.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
+        java_runtime = project_root / "src" / "instrumentation" / "language_runtimes" / "java"
+        _, lib_path = _get_c_runtime_paths("java")
+        cp = f"{build_dir}:{java_runtime}"
+        cmd = ['java', '-cp', cp,
+               f'-Djava.library.path={lib_path}',
+               f'-Dcodegreen.lib.path={lib_path / "libcodegreen-nemb.so"}',
+               class_name]
+        if args:
+            cmd.extend(args)
+    else:
+        return {'success': False, 'error': f'Unsupported language: {language}'}
     
+    def _run_with_output_capture(cmd, timeout, env):
+        """Run subprocess and capture ALL output including atexit handlers."""
+        env = env.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        try:
+            stdout, _ = proc.communicate(timeout=timeout or 300)
+            return stdout
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                stdout, _ = proc.communicate(timeout=5)
+                return stdout
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return ""
+
     try:
         if not json_output:
             with Progress(
@@ -957,59 +1044,38 @@ def _run_energy_measurement(
                 console=console,
             ) as progress:
                 task = progress.add_task("Running energy measurement...", total=None)
-                
                 if verbose:
                     console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
-                
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    env=env
-                )
-                
+                output = _run_with_output_capture(cmd, timeout, env)
                 progress.update(task, completed=True)
-                
-                if result.returncode == 0:
-                    console.print("[green]✓ Energy measurement completed![/green]")
-                    measurements = _parse_runtime_measurements(result.stdout)
-                    return {
-                        'success': True, 
-                        'output': result.stdout,
-                        'checkpoints': measurements
-                    }
+                measurements = _parse_runtime_measurements(output)
+                success = "--- CODEGREEN_RESULT_END ---" in output
+                if success:
+                    console.print("[green]Energy measurement completed![/green]")
+                    return {'success': True, 'output': output, 'checkpoints': measurements}
                 else:
-                    console.print(f"[yellow]Warning: Measurement had issues (exit code {result.returncode})[/yellow]")
-                    if verbose and result.stderr:
-                        console.print(f"[dim]Stderr: {result.stderr}[/dim]")
-                    return {'success': False, 'error': result.stderr, 'output': result.stdout}
+                    console.print(f"[yellow]Warning: Measurement may be incomplete[/yellow]")
+                    return {'success': False, 'error': 'incomplete', 'output': output}
         else:
-            # Silent execution for JSON output
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env
-            )
-            measurements = _parse_runtime_measurements(result.stdout)
+            output = _run_with_output_capture(cmd, timeout, env)
+            measurements = _parse_runtime_measurements(output)
+            success = "--- CODEGREEN_RESULT_END ---" in output
             return {
-                'success': result.returncode == 0,
-                'output': result.stdout,
-                'error': result.stderr if result.returncode != 0 else None,
-                'returncode': result.returncode,
+                'success': success,
+                'output': output,
+                'error': None if success else 'incomplete',
                 'checkpoints': measurements
             }
-                
-    except subprocess.TimeoutExpired:
-        if not json_output:
-            console.print("[red]Energy measurement timed out[/red]")
-        return {'success': False, 'error': 'timeout'}
     except Exception as e:
         if not json_output:
             console.print(f"[red]Energy measurement failed: {e}[/red]")
         return {'success': False, 'error': str(e)}
+    finally:
+        if not no_cleanup and binary_to_cleanup and binary_to_cleanup.exists():
+            try:
+                binary_to_cleanup.unlink()
+            except OSError:
+                pass
 
 
 def _save_measurement_results(
@@ -1049,19 +1115,19 @@ def analyze_code_structure(
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup", help="Keep temporary files (default: auto-cleanup)")] = False,
 ):
     """
-    📊 [bold]Analyze code structure[/bold] without energy measurement.
-    
+    [bold]Analyze code structure[/bold] without energy measurement.
+
     This command performs static analysis of your code using Tree-sitter AST parsing
     to identify optimal instrumentation points for energy measurement. No code execution
     occurs - this is pure analysis for planning and optimization.
-    
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen analyze python script.py[/cyan]
-    • [cyan]codegreen analyze python module.py --verbose[/cyan]
-    • [cyan]codegreen analyze python app.py --output analysis.json --suggestions[/cyan]
-    • [cyan]codegreen analyze cpp main.cpp --verbose[/cyan]
-    • [cyan]codegreen analyze python main.py --json[/cyan]
-    
+    - [cyan]codegreen analyze python script.py[/cyan]
+    - [cyan]codegreen analyze python module.py --verbose[/cyan]
+    - [cyan]codegreen analyze python app.py --output analysis.json --suggestions[/cyan]
+    - [cyan]codegreen analyze cpp main.cpp --verbose[/cyan]
+    - [cyan]codegreen analyze python main.py --json[/cyan]
+
     [bold]Output formats:[/bold] JSON report with instrumentation points and suggestions
     [bold]Languages supported:[/bold] python, cpp, c, java
     """
@@ -1187,7 +1253,7 @@ def analyze_code_structure(
             console.print(table)
         
         if show_suggestions and result.optimization_suggestions and not json_output:
-            console.print(f"\n[bold yellow]💡 Optimization Suggestions:[/bold yellow]")
+            console.print(f"\n[bold yellow]Optimization Suggestions:[/bold yellow]")
             for i, suggestion in enumerate(result.optimization_suggestions, 1):
                 console.print(f"  {i}. {suggestion}")
         
@@ -1251,23 +1317,23 @@ def comprehensive_init(
     setup_permissions: Annotated[bool, typer.Option("--setup-permissions", help="Automatically run permission setup if needed")] = False,
 ):
     """
-    🔧 [bold]Comprehensive CodeGreen system initialization[/bold].
-    
+    [bold]Comprehensive CodeGreen system initialization[/bold].
+
     Performs intelligent system detection and configuration optimization:
-    • [cyan]Environment detection[/cyan]: personal/server/HPC/container/CI environments
-    • [cyan]Hardware sensor discovery[/cyan]: Intel RAPL, NVIDIA NVML, AMD ROCm
-    • [cyan]Permission validation[/cyan]: RAPL access, GPU permissions, system capabilities  
-    • [cyan]Performance tuning[/cyan]: CPU scaling, memory optimization, threading
-    • [cyan]Auto-configuration[/cyan]: generates optimized config based on your system
-    
+    - [cyan]Environment detection[/cyan]: personal/server/HPC/container/CI environments
+    - [cyan]Hardware sensor discovery[/cyan]: Intel RAPL, NVIDIA NVML, AMD ROCm
+    - [cyan]Permission validation[/cyan]: RAPL access, GPU permissions, system capabilities
+    - [cyan]Performance tuning[/cyan]: CPU scaling, memory optimization, threading
+    - [cyan]Auto-configuration[/cyan]: generates optimized config based on your system
+
     This initialization caches all system information to avoid detection overhead
     during actual energy measurements, ensuring maximum measurement accuracy.
-    
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen init[/cyan] - Interactive setup with confirmations
-    • [cyan]codegreen init --auto-detect-only[/cyan] - Quick auto-detection
-    • [cyan]codegreen init --setup-permissions[/cyan] - Auto-fix sensor permissions
-    • [cyan]codegreen init --force[/cyan] - Re-initialize even if already configured
+    - [cyan]codegreen init[/cyan] - Interactive setup with confirmations
+    - [cyan]codegreen init --auto-detect-only[/cyan] - Quick auto-detection
+    - [cyan]codegreen init --setup-permissions[/cyan] - Auto-fix sensor permissions
+    - [cyan]codegreen init --force[/cyan] - Re-initialize even if already configured
     """
     console.print(Panel.fit("[bold blue]CodeGreen Comprehensive Initialization[/bold blue]"))
     
@@ -1306,11 +1372,11 @@ def comprehensive_init(
                     capture_output=True, text=True, timeout=60
                 )
                 if result.returncode == 0:
-                    console.print("[green]✅ Permission setup completed![/green]")
+                    console.print("[green]Permission setup completed![/green]")
                     # Re-check permissions after setup
                     permission_info = check_energy_permissions()
                 else:
-                    console.print("[red]❌ Permission setup failed[/red]")
+                    console.print("[red]Permission setup failed[/red]")
                     if result.stderr:
                         console.print(result.stderr)
             except subprocess.SubprocessError as e:
@@ -1318,7 +1384,7 @@ def comprehensive_init(
             except subprocess.TimeoutExpired:
                 console.print("[red]Setup script timeout[/red]")
         else:
-            console.print("[yellow]⚠️  Permission setup requested but script not found[/yellow]")
+            console.print("[yellow]Permission setup requested but script not found[/yellow]")
     
     # Step 4: Performance Settings Detection
     console.print("\n[bold]Step 4: Performance Settings Detection[/bold]")
@@ -1345,7 +1411,7 @@ def comprehensive_init(
     hw_table.add_column("Details")
     
     for sensor, info in sensor_info.items():
-        status = "✅ Available" if info["available"] else "❌ Unavailable"
+        status = "Available" if info["available"] else "Unavailable"
         hw_table.add_row(sensor, status, info.get("details", ""))
     console.print(hw_table)
     
@@ -1356,7 +1422,7 @@ def comprehensive_init(
     perm_table.add_column("Details")
     
     for resource, info in permission_info.items():
-        status = "✅ Accessible" if info["accessible"] else "❌ Denied"
+        status = "Accessible" if info["accessible"] else "Denied"
         perm_table.add_row(resource, status, info.get("details", ""))
     console.print(perm_table)
     
@@ -1368,7 +1434,7 @@ def comprehensive_init(
         install_dir = Path(__file__).parents[2] / "install"
         
         if not permission_info.get("rapl_cpu", {}).get("accessible", False):
-            console.print("[yellow]⚠️  RAPL Permission Setup Required[/yellow]")
+            console.print("[yellow]RAPL Permission Setup Required[/yellow]")
             rapl_info = permission_info.get("rapl_cpu", {})
             if "fix_instructions" in rapl_info:
                 for instruction in rapl_info["fix_instructions"]:
@@ -1381,14 +1447,14 @@ def comprehensive_init(
                     console.print("   Run: [cyan]sudo install/setup_permissions.sh[/cyan]")
         
         if environment_info["type"] == "container":
-            console.print("[yellow]⚠️  Container Environment Detected[/yellow]")
+            console.print("[yellow]Container Environment Detected[/yellow]")
             if install_dir.exists():
                 docker_script = install_dir / "docker-setup.sh"
                 console.print(f"   See container setup: [cyan]{docker_script}[/cyan]")
             console.print("   May need --privileged or specific capabilities")
             
         elif environment_info["type"] == "hpc":
-            console.print("[yellow]⚠️  HPC Environment Detected[/yellow]")
+            console.print("[yellow]HPC Environment Detected[/yellow]")
             if install_dir.exists():
                 hpc_module = install_dir / "hpc-module.lua"
                 console.print(f"   HPC module available: [cyan]{hpc_module}[/cyan]")
@@ -1406,12 +1472,12 @@ def comprehensive_init(
                             capture_output=True, text=True, timeout=60
                         )
                         if result.returncode == 0:
-                            console.print("[green]✅ Permission setup completed![/green]")
+                            console.print("[green]Permission setup completed![/green]")
                             console.print("Re-running permission check...")
                             # Re-check permissions after setup
                             permission_info = check_energy_permissions()
                         else:
-                            console.print("[red]❌ Permission setup failed[/red]")
+                            console.print("[red]Permission setup failed[/red]")
                             console.print(result.stderr)
                     except subprocess.SubprocessError as e:
                         console.print(f"[red]Setup script error: {e}[/red]")
@@ -1443,7 +1509,7 @@ def comprehensive_init(
     test_results = test_configuration(config)
     
     if test_results["success"]:
-        console.print("[green]✅ Configuration test successful![/green]")
+        console.print("[green]Configuration test successful![/green]")
         
         # Save configuration
         config_dir = Path(config_file_path).parent
@@ -1452,7 +1518,7 @@ def comprehensive_init(
         with open(config_file_path, 'w') as f:
             json.dump(config, f, indent=2)
         
-        console.print(f"\n[green]✅ Initialization completed successfully![/green]")
+        console.print(f"\n[green]Initialization completed successfully![/green]")
         console.print(f"Configuration saved to: [cyan]{config_file_path}[/cyan]")
         
         # Display next steps
@@ -1462,7 +1528,7 @@ def comprehensive_init(
         console.print("• Customize settings with [cyan]codegreen config --edit[/cyan]")
         
     else:
-        console.print("[red]❌ Configuration test failed[/red]")
+        console.print("[red]Configuration test failed[/red]")
         for error in test_results.get("errors", []):
             console.print(f"  • {error}")
         
@@ -1482,21 +1548,21 @@ def show_info(
     detailed: Annotated[bool, typer.Option("--detailed", "-d", help="Show detailed information")] = False,
 ):
     """
-    ℹ️ [bold]Display CodeGreen installation and system information[/bold].
-    
+    [bold]Display CodeGreen installation and system information[/bold].
+
     Provides comprehensive status overview including binary locations, configuration
     files, runtime availability, sensor status, and system capabilities.
-    
+
     [bold]Information included:[/bold]
-    • Binary and runtime file locations
-    • Configuration file status and settings  
-    • Python package version and dependencies
-    • Hardware sensor availability
-    • System platform and environment details
-    
+    - Binary and runtime file locations
+    - Configuration file status and settings
+    - Python package version and dependencies
+    - Hardware sensor availability
+    - System platform and environment details
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen info[/cyan] - Basic system information
-    • [cyan]codegreen info --detailed[/cyan] - Comprehensive system details
+    - [cyan]codegreen info[/cyan] - Basic system information
+    - [cyan]codegreen info --detailed[/cyan] - Comprehensive system details
     """
     console.print(Panel.fit("[bold blue]CodeGreen Installation Information[/bold blue]"))
     
@@ -1521,13 +1587,13 @@ def show_info(
     if config_path:
         table.add_row("Config", "✓ Found", str(config_path))
     else:
-        table.add_row("Config", "⚠ Default", "Using default configuration")
+        table.add_row("Config", "- Default", "Using default configuration")
     
     # Runtime information
     if runtime_available:
         table.add_row("Runtime", "✓ Available", "Python runtime modules found")
     else:
-        table.add_row("Runtime", "⚠ Missing", "Runtime modules not found")
+        table.add_row("Runtime", "- Missing", "Runtime modules not found")
     
     # System information
     table.add_row("Platform", "✓", f"{platform.system()} {platform.machine()}")
@@ -1538,7 +1604,7 @@ def show_info(
         import codegreen
         table.add_row("Version", "✓", f"CodeGreen {codegreen.__version__}")
     except:
-        table.add_row("Version", "⚠", "Unknown")
+        table.add_row("Version", "-", "Unknown")
     
     console.print(table)
     
@@ -1562,24 +1628,24 @@ def diagnose(
     fix: Annotated[bool, typer.Option("--fix", help="Attempt to fix common issues")] = False,
 ):
     """
-    🩺 [bold]Diagnose CodeGreen installation and configuration issues[/bold].
-    
+    [bold]Diagnose CodeGreen installation and configuration issues[/bold].
+
     Performs comprehensive system diagnostics to identify and resolve common
     installation, configuration, and runtime problems. Provides actionable
     recommendations for fixing detected issues.
-    
-    [bold]Diagnostic checks include:[/bold]  
-    • Binary accessibility and execution
-    • Python dependencies and imports
-    • Configuration file validity
-    • Hardware sensor functionality
-    • Permission and access issues
-    • Runtime module availability
-    
+
+    [bold]Diagnostic checks include:[/bold]
+    - Binary accessibility and execution
+    - Python dependencies and imports
+    - Configuration file validity
+    - Hardware sensor functionality
+    - Permission and access issues
+    - Runtime module availability
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen doctor[/cyan] - Basic diagnostic checks
-    • [cyan]codegreen doctor --test-sensors[/cyan] - Include sensor functionality tests
-    • [cyan]codegreen doctor --fix[/cyan] - Attempt to auto-fix common issues
+    - [cyan]codegreen doctor[/cyan] - Basic diagnostic checks
+    - [cyan]codegreen doctor --test-sensors[/cyan] - Include sensor functionality tests
+    - [cyan]codegreen doctor --fix[/cyan] - Attempt to auto-fix common issues
     """
     console.print(Panel.fit("[bold green]CodeGreen Doctor - System Diagnosis[/bold green]"))
     
@@ -1643,7 +1709,7 @@ def diagnose(
     if warnings:
         console.print("[yellow]Warnings:[/yellow]")
         for warning in warnings:
-            console.print(f"  [yellow]⚠[/yellow] {warning}")
+            console.print(f"  [yellow]![/yellow] {warning}")
     
     if fixes_applied:
         console.print("[green]Fixes applied:[/green]")
@@ -1660,114 +1726,6 @@ def diagnose(
         console.print("3. Run [cyan]codegreen init[/cyan] to initialize sensors")
         console.print("4. Report issues at: https://github.com/SMART-Dal/codegreen/issues")
 
-class WorkloadType(str, Enum):
-    """Available workload types for energy measurement."""
-    cpu_stress = "cpu_stress"
-    memory_stress = "memory_stress"
-    mixed = "mixed"
-
-@app.command("benchmark")
-def measure_workload(
-    workload: Annotated[WorkloadType, typer.Argument(help="Type of workload to run")] = WorkloadType.cpu_stress,
-    duration: Annotated[int, typer.Option("--duration", "-d", help="Duration in seconds")] = 5,
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file for results")] = None,
-    validate: Annotated[bool, typer.Option("--validate", help="Run validation against native tools (requires root)")] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
-):
-    """
-    📈 [bold]Measure energy consumption using built-in benchmark workloads[/bold].
-    
-    Run standardized, reproducible workloads to measure energy consumption and validate
-    sensor accuracy. Perfect for system testing, sensor calibration, and performance
-    baseline establishment across different hardware configurations.
-    
-    [bold]Available workloads:[/bold]
-    • [cyan]cpu_stress[/cyan] - CPU-intensive mathematical computations
-    • [cyan]memory_stress[/cyan] - Memory allocation and processing patterns
-    • [cyan]mixed[/cyan] - Combined CPU and memory workload
-    
-    [bold]Examples:[/bold]
-    • [cyan]codegreen benchmark cpu_stress --duration 10[/cyan]
-    • [cyan]codegreen benchmark memory_stress --duration 5 --validate[/cyan] 
-    • [cyan]codegreen benchmark mixed --output results.json --verbose[/cyan]
-    • [cyan]codegreen benchmark cpu_stress --duration 30[/cyan] - Extended test
-    """
-    
-    binary_path = get_binary_path()
-    if not binary_path:
-        console.print("[red]Error: CodeGreen binary not found![/red]")
-        console.print("Please ensure CodeGreen is properly installed.")
-        raise typer.Exit(1)
-    
-    # Build command for NEMB measurement
-    cmd = [str(binary_path), "benchmark", workload.value]
-    cmd.extend([f"--duration={duration}"])
-    
-    if verbose:
-        cmd.append("--verbose")
-    
-    console.print(Panel.fit("[bold blue]CodeGreen NEMB Workload Measurement[/bold blue]"))
-    
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"Running {workload.value} workload...", total=None)
-            
-            console.print(f"[green]Configuration:[/green]")
-            console.print(f"  Workload: [cyan]{workload.value}[/cyan]")
-            console.print(f"  Duration: [cyan]{duration}s[/cyan]")
-            console.print(f"  Validation: [cyan]{'Yes' if validate else 'No'}[/cyan]")
-            
-            if verbose:
-                console.print(f"  Command: [dim]{' '.join(cmd)}[/dim]")
-            
-            # Execute NEMB measurement
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration+30)
-            progress.update(task, completed=True)
-        
-        if result.returncode == 0:
-            console.print("[green]✓ NEMB measurement completed successfully![/green]")
-            console.print("\n[bold]Results:[/bold]")
-            console.print(result.stdout)
-            
-            # Save results if output specified
-            if output:
-                with open(output, 'w') as f:
-                    f.write(result.stdout)
-                console.print(f"[green]Results saved to:[/green] {output}")
-            
-            # Run validation if requested
-            if validate:
-                console.print("\n[bold yellow]Running validation against native tools...[/bold yellow]")
-                console.print("[yellow]Note: Validation requires root access for RAPL/perf[/yellow]")
-                
-                validation_script = Path(__file__).parents[2] / "test_nemb_validation.sh"
-                if validation_script.exists():
-                    console.print("Run with sudo for full validation:")
-                    console.print(f"[cyan]sudo {validation_script}[/cyan]")
-                else:
-                    console.print("[yellow]Validation script not found[/yellow]")
-            
-        else:
-            console.print(f"[red]NEMB measurement failed:[/red]")
-            console.print(result.stderr)
-            console.print(f"[red]Exit code: {result.returncode}[/red]")
-            
-            if "root" in result.stderr.lower() or "permission" in result.stderr.lower():
-                console.print("\n[yellow]Tip: NEMB measurements may require root access for hardware sensors[/yellow]")
-                console.print("Try running: [cyan]sudo codegreen benchmark[/cyan]")
-            
-            raise typer.Exit(1)
-            
-    except subprocess.TimeoutExpired:
-        console.print("[red]Measurement timed out[/red]")
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
-        raise typer.Exit(1)
 
 @app.command("validate")
 def validate_accuracy(
@@ -1776,24 +1734,24 @@ def validate_accuracy(
     tolerance: Annotated[float, typer.Option("--tolerance", "-t", help="Acceptable error percentage")] = 5.0,
 ):
     """
-    🔬 [bold]Validate measurement accuracy against native hardware tools[/bold].
-    
-    Compares CodeGreen's NEMB energy measurements with native tools (RAPL, perf, 
+    [bold]Validate measurement accuracy against native hardware tools[/bold].
+
+    Compares CodeGreen's NEMB energy measurements with native tools (RAPL, perf,
     nvidia-smi) to ensure accuracy and detect measurement contamination. Critical
     for verifying energy measurement quality in research and production environments.
-    
-    [bold red]⚠️  Requires root access[/bold red] for direct hardware energy interfaces.
-    
+
+    [bold red]Requires root access[/bold red] for direct hardware energy interfaces.
+
     [bold]Validation methods:[/bold]
-    • Direct RAPL register comparison
-    • Cross-validation with perf energy events
-    • NVIDIA GPU power measurement verification
-    • Statistical accuracy analysis
-    
+    - Direct RAPL register comparison
+    - Cross-validation with perf energy events
+    - NVIDIA GPU power measurement verification
+    - Statistical accuracy analysis
+
     [bold]Examples:[/bold]
-    • [cyan]sudo codegreen validate[/cyan] - Full validation suite
-    • [cyan]sudo codegreen validate --reference rapl --tolerance 3.0[/cyan]
-    • [cyan]sudo codegreen validate --duration 15[/cyan] - Extended validation
+    - [cyan]sudo codegreen validate[/cyan] - Full validation suite
+    - [cyan]sudo codegreen validate --reference rapl --tolerance 3.0[/cyan]
+    - [cyan]sudo codegreen validate --duration 15[/cyan] - Extended validation
     """
     
     validation_script = Path(__file__).parents[2] / "test_nemb_validation.sh"
@@ -1869,23 +1827,23 @@ def config_management(
     reset: Annotated[bool, typer.Option("--reset", help="Reset to default configuration")] = False,
 ):
     """
-    ⚙️ [bold]Manage CodeGreen configuration and settings[/bold].
-    
+    [bold]Manage CodeGreen configuration and settings[/bold].
+
     View, modify, and manage CodeGreen's configuration including sensor preferences,
-    measurement accuracy settings, performance tuning, and environment-specific 
+    measurement accuracy settings, performance tuning, and environment-specific
     optimizations. All changes are validated before saving.
-    
+
     [bold]Configuration categories:[/bold]
-    • Sensor preferences and validation settings
-    • Measurement accuracy and precision levels  
-    • Performance optimization parameters
-    • Environment-specific adaptations
-    • Database and logging configurations
-    
+    - Sensor preferences and validation settings
+    - Measurement accuracy and precision levels
+    - Performance optimization parameters
+    - Environment-specific adaptations
+    - Database and logging configurations
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen config --show[/cyan] - Display current configuration
-    • [cyan]codegreen config --edit[/cyan] - Edit configuration interactively
-    • [cyan]codegreen config --reset[/cyan] - Reset to system defaults
+    - [cyan]codegreen config --show[/cyan] - Display current configuration
+    - [cyan]codegreen config --edit[/cyan] - Edit configuration interactively
+    - [cyan]codegreen config --reset[/cyan] - Reset to system defaults
     """
     config_path = get_config_path()
     
@@ -1913,32 +1871,32 @@ def config_management(
 @app.command("init-sensors")
 def init_sensors():
     """
-    🔧 [bold]Initialize and cache sensor configuration[/bold].
-    
+    [bold]Initialize and cache sensor configuration[/bold].
+
     Performs comprehensive initialization of the NEMB energy measurement system,
     including sensor discovery, validation, and configuration caching. This command
     must be run before any energy measurements can be performed.
-    
+
     [bold]What this command does:[/bold]
-    • Discovers available energy measurement hardware (RAPL, NVML, etc.)
-    • Validates sensor accessibility and permissions
-    • Runs system self-tests to ensure measurement accuracy
-    • Caches sensor configuration for faster subsequent measurements
-    • Reports available energy providers and their capabilities
-    
+    - Discovers available energy measurement hardware (RAPL, NVML, etc.)
+    - Validates sensor accessibility and permissions
+    - Runs system self-tests to ensure measurement accuracy
+    - Caches sensor configuration for faster subsequent measurements
+    - Reports available energy providers and their capabilities
+
     [bold]Requirements:[/bold]
-    • Hardware energy sensors (Intel RAPL, NVIDIA GPUs, etc.)
-    • Appropriate system permissions (may require sudo)
-    • Compatible operating system (Linux, Windows)
-    
+    - Hardware energy sensors (Intel RAPL, NVIDIA GPUs, etc.)
+    - Appropriate system permissions (may require sudo)
+    - Compatible operating system (Linux, Windows)
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen init-sensors[/cyan] - Initialize all available sensors
-    • [cyan]sudo codegreen init-sensors[/cyan] - Initialize with elevated permissions
-    
+    - [cyan]codegreen init-sensors[/cyan] - Initialize all available sensors
+    - [cyan]sudo codegreen init-sensors[/cyan] - Initialize with elevated permissions
+
     [bold]Troubleshooting:[/bold]
-    • Run with sudo if permission errors occur
-    • Check hardware compatibility if no sensors detected
-    • Verify kernel modules are loaded for hardware sensors
+    - Run with sudo if permission errors occur
+    - Check hardware compatibility if no sensors detected
+    - Verify kernel modules are loaded for hardware sensors
     """
     import os
     import pwd
@@ -1950,7 +1908,7 @@ def init_sensors():
     if rapl_test_paths:
         try:
             rapl_test_paths[0].read_text()
-            console.print("[green]✅ Sensors already initialized and accessible![/green]")
+            console.print("[green]Sensors already initialized and accessible![/green]")
             console.print("")
             console.print("Current user has permission to read RAPL sensors.")
             console.print("You can now use CodeGreen commands without sudo:")
@@ -1962,17 +1920,17 @@ def init_sensors():
 
     # Check if running as root
     if os.geteuid() != 0:
-        console.print("[red]❌ This command must be run with sudo[/red]")
+        console.print("[red]This command must be run with sudo[/red]")
         console.print("[yellow]Usage: sudo codegreen init-sensors[/yellow]")
         raise typer.Exit(1)
 
     # Get actual user
     actual_user = os.environ.get('SUDO_USER', os.environ.get('USER'))
     if not actual_user or actual_user == 'root':
-        console.print("[red]❌ Could not determine actual user[/red]")
+        console.print("[red]Could not determine actual user[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[bold blue]🔧 Setting up CodeGreen for user: {actual_user}[/bold blue]")
+    console.print(f"[bold blue]Setting up CodeGreen for user: {actual_user}[/bold blue]")
     console.print("")
 
     try:
@@ -2011,7 +1969,7 @@ def init_sensors():
         if count > 0:
             console.print(f"  ✓ Set permissions on {count} RAPL domains")
         else:
-            console.print("  ⚠ No RAPL files found (CPU may not support it)")
+            console.print("  ! No RAPL files found (CPU may not support it)")
 
         # 4. Create udev rule
         console.print("[cyan]Creating udev rule for persistent permissions...[/cyan]")
@@ -2029,7 +1987,7 @@ SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"
         console.print("  ✓ Udev rules reloaded")
 
         console.print("")
-        console.print("[green]✅ Sensor setup complete![/green]")
+        console.print("[green]Sensor setup complete![/green]")
         console.print("")
         console.print("[yellow]IMPORTANT: Log out and log back in for group changes to take effect[/yellow]")
         console.print("")
@@ -2040,56 +1998,56 @@ SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"
         console.print("[green]No sudo needed after this![/green]")
 
     except Exception as e:
-        console.print(f"[red]❌ Setup failed: {e}[/red]")
+        console.print(f"[red]Setup failed: {e}[/red]")
         raise typer.Exit(1)
 
 @app.command("measure-workload")
-def measure_workload(
+def run_measure_workload(
     duration: Annotated[int, typer.Option("--duration", help="Duration in seconds to run the workload")] = 3,
     workload: Annotated[str, typer.Option("--workload", help="Type of workload to measure (cpu_stress, memory_stress)")] = "cpu_stress",
 ):
     """
-    ⚡ [bold]Measure energy consumption of specified workload[/bold].
-    
+    [bold]Measure energy consumption of specified workload[/bold].
+
     Executes a controlled workload while measuring energy consumption using
     hardware sensors. This is useful for benchmarking system energy usage,
     calibrating sensors, and testing measurement accuracy.
-    
+
     [bold]Available workloads:[/bold]
-    • [cyan]cpu_stress[/cyan] - Intensive CPU computation (mathematical operations)
-    • [cyan]memory_stress[/cyan] - Memory allocation and access patterns
-    • [cyan]mixed[/cyan] - Combination of CPU and memory operations
-    
+    - [cyan]cpu_stress[/cyan] - Intensive CPU computation (mathematical operations)
+    - [cyan]memory_stress[/cyan] - Memory allocation and access patterns
+    - [cyan]mixed[/cyan] - Combination of CPU and memory operations
+
     [bold]Measurement details:[/bold]
-    • Uses Intel RAPL energy counters for CPU package power
-    • Measures total energy consumption in Joules
-    • Calculates average power consumption in Watts
-    • Reports measurement uncertainty and validity
-    • Creates timestamped measurement records
-    
+    - Uses Intel RAPL energy counters for CPU package power
+    - Measures total energy consumption in Joules
+    - Calculates average power consumption in Watts
+    - Reports measurement uncertainty and validity
+    - Creates timestamped measurement records
+
     [bold]Requirements:[/bold]
-    • Initialized sensors (run 'codegreen init-sensors' first)
-    • Hardware energy measurement support
-    • Sufficient system permissions for sensor access
-    
+    - Initialized sensors (run 'codegreen init-sensors' first)
+    - Hardware energy measurement support
+    - Sufficient system permissions for sensor access
+
     [bold]Examples:[/bold]
-    • [cyan]codegreen measure-workload[/cyan] - Default 3-second CPU stress test
-    • [cyan]codegreen measure-workload --duration 10 --workload cpu_stress[/cyan]
-    • [cyan]codegreen measure-workload --duration 5 --workload memory_stress[/cyan]
-    
+    - [cyan]codegreen measure-workload[/cyan] - Default 3-second CPU stress test
+    - [cyan]codegreen measure-workload --duration 10 --workload cpu_stress[/cyan]
+    - [cyan]codegreen measure-workload --duration 5 --workload memory_stress[/cyan]
+
     [bold]Output includes:[/bold]
-    • Total energy consumed (Joules)
-    • Average power consumption (Watts)
-    • Measurement duration and validity
-    • Uncertainty estimates and error bounds
+    - Total energy consumed (Joules)
+    - Average power consumption (Watts)
+    - Measurement duration and validity
+    - Uncertainty estimates and error bounds
     """
-    console.print(f"[bold blue]⚡ Starting workload measurement...[/bold blue]")
+    console.print(f"[bold blue]Starting workload measurement...[/bold blue]")
     console.print(f"[blue]Duration:[/blue] {duration} seconds")
     console.print(f"[blue]Workload:[/blue] {workload}")
     
     binary_path = get_binary_path()
     if not binary_path:
-        console.print("[red]❌ CodeGreen binary not found[/red]")
+        console.print("[red]CodeGreen binary not found[/red]")
         raise typer.Exit(1)
     
     try:
@@ -2101,19 +2059,192 @@ def measure_workload(
         )
         
         if result.returncode == 0:
-            console.print("[green]✅ Workload measurement completed successfully[/green]")
+            console.print("[green]Workload measurement completed successfully[/green]")
             console.print(result.stdout)
         else:
-            console.print("[red]❌ Workload measurement failed[/red]")
+            console.print("[red]Workload measurement failed[/red]")
             console.print(result.stderr)
             raise typer.Exit(1)
             
     except subprocess.TimeoutExpired:
-        console.print("[red]❌ Workload measurement timed out[/red]")
+        console.print("[red]Workload measurement timed out[/red]")
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]❌ Error during workload measurement: {e}[/red]")
+        console.print(f"[red]Error during workload measurement: {e}[/red]")
         raise typer.Exit(1)
+
+@app.command("benchmark")
+def run_benchmark(
+    problems: Annotated[Optional[List[str]], typer.Option("--problem", "-p", help="Problems to run")] = None,
+    languages: Annotated[Optional[List[str]], typer.Option("--lang", "-l", help="Languages to test")] = None,
+    sizes: Annotated[Optional[List[str]], typer.Option("--size", "-s", help="Problem sizes")] = None,
+    profilers: Annotated[Optional[List[str]], typer.Option("--profiler", help="Profilers: codegreen, perf")] = None,
+    repetitions: Annotated[int, typer.Option("--reps", "-r", help="Repetitions per test")] = 5,
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path("benchmark_results"),
+):
+    """Run benchmarks from benchmarksgame suite comparing codegreen vs perf RAPL."""
+    from benchmark.harness import BenchmarkHarness
+
+    def progress_cb(msg: str):
+        console.print(f"[dim]{msg}[/dim]")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    harness = BenchmarkHarness(progress_callback=progress_cb)
+    profs = profilers or ["perf", "codegreen"]
+
+    console.print(f"[bold]Running benchmarks[/bold]")
+    console.print(f"  Problems: {problems or 'defaults'}")
+    console.print(f"  Languages: {languages or 'all'}")
+    console.print(f"  Profilers: {profs}")
+    console.print(f"  Repetitions: {repetitions}")
+    console.print(f"  Output: {output_dir}")
+
+    try:
+        collector = harness.run_suite(problems, languages, sizes, profs, repetitions)
+        summary = collector.summarize_all()
+
+        console.print(f"\n[bold green]Benchmark complete: {len(collector.results)} runs[/bold green]")
+
+        # Print comparison table
+        table = Table(title="Energy Measurement Comparison")
+        table.add_column("Problem")
+        table.add_column("Lang")
+        table.add_column("Size")
+        table.add_column("Perf (J)")
+        table.add_column("CodeGreen (J)")
+        table.add_column("Error %")
+
+        # Group results by problem/lang/size
+        grouped = {}
+        for key, stats in summary.items():
+            parts = key.split('/')
+            if len(parts) >= 4:
+                base_key = '/'.join(parts[:3])
+                profiler = parts[3]
+                if base_key not in grouped:
+                    grouped[base_key] = {}
+                energy_s = stats.get("energy", {})
+                e_mean = energy_s.get("mean", 0) if isinstance(energy_s, dict) else (energy_s.mean if energy_s else 0)
+                grouped[base_key][profiler] = e_mean
+
+        for base_key, profs_data in grouped.items():
+            parts = base_key.split('/')
+            perf_e = profs_data.get("perf", 0)
+            cg_e = profs_data.get("codegreen", 0)
+            error = abs(perf_e - cg_e) / perf_e * 100 if perf_e > 0 else 0
+            table.add_row(parts[0], parts[1], parts[2], f"{perf_e:.2f}", f"{cg_e:.2f}", f"{error:.1f}%")
+
+        console.print(table)
+
+        # Save results
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_file = output_dir / f"benchmark_{timestamp}.json"
+        csv_file = output_dir / f"benchmark_{timestamp}.csv"
+        collector.to_json(json_file)
+        collector.to_csv(csv_file)
+        console.print(f"[green]Results saved to {json_file}[/green]")
+    finally:
+        harness.cleanup()
+
+@app.command("validate-accuracy")
+def run_validation(
+    experiment: Annotated[str, typer.Argument(help="Experiment: overhead, accuracy, scalability, crosslang, linearity, all")] = "all",
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path("validation_results"),
+    latex: Annotated[bool, typer.Option("--latex", help="Generate LaTeX tables")] = False,
+    plots: Annotated[bool, typer.Option("--plots", help="Generate plots")] = False,
+    repetitions: Annotated[int, typer.Option("--reps", "-r", help="Repetitions per test")] = 30,
+):
+    """Run validation experiments for paper submission."""
+    from benchmark.harness import BenchmarkHarness
+    from validation.experiments import (ExperimentRunner, OverheadExperiment, AccuracyExperiment,
+                                        ScalabilityExperiment, CrossLanguageExperiment, LinearityExperiment)
+    from validation.reporting import LaTeXTableGenerator, PlotGenerator
+    import json
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def progress_cb(msg: str):
+        console.print(f"[dim]{msg}[/dim]")
+
+    harness = BenchmarkHarness(progress_callback=progress_cb)
+    runner = ExperimentRunner(harness)
+
+    experiments_map = {
+        "overhead": OverheadExperiment(repetitions=repetitions),
+        "accuracy": AccuracyExperiment(repetitions=repetitions),
+        "scalability": ScalabilityExperiment(repetitions=min(repetitions, 10)),
+        "crosslang": CrossLanguageExperiment(repetitions=repetitions),
+        "linearity": LinearityExperiment(repetitions=min(repetitions, 10)),
+    }
+
+    if experiment == "all":
+        to_run = list(experiments_map.values())
+    elif experiment in experiments_map:
+        to_run = [experiments_map[experiment]]
+    else:
+        console.print(f"[red]Unknown experiment: {experiment}[/red]")
+        console.print(f"Available: {', '.join(experiments_map.keys())}, all")
+        raise typer.Exit(1)
+
+    results = {}
+    for exp in to_run:
+        console.print(f"\n[bold]Running: {exp.name}[/bold]")
+        result = runner.run_experiment(exp)
+        results[exp.name] = result
+        status = "[green]PASS[/green]" if result.passed else "[red]FAIL[/red]"
+        console.print(f"  Result: {status}")
+        for k, v in result.metrics.items():
+            console.print(f"    {k}: {v}")
+
+    results_file = output_dir / "validation_results.json"
+    with open(results_file, "w") as f:
+        from dataclasses import asdict
+        def serialize_stats(obj):
+            if hasattr(obj, '__dict__'):
+                return obj.__dict__
+            return obj
+        results_data = {}
+        for k, v in results.items():
+            raw = {}
+            for rk, rv in v.raw_data.items():
+                raw[rk] = {rkk: serialize_stats(rvv) for rkk, rvv in rv.items()} if isinstance(rv, dict) else rv
+            results_data[k] = {"passed": v.passed, "metrics": v.metrics, "raw_data": raw}
+        json.dump(results_data, f, indent=2, default=str)
+    console.print(f"\n[green]Results saved to {results_file}[/green]")
+
+    if latex:
+        latex_gen = LaTeXTableGenerator()
+        if "overhead" in results:
+            (output_dir / "overhead_table.tex").write_text(latex_gen.overhead_table(results["overhead"]))
+        if "accuracy" in results:
+            (output_dir / "accuracy_table.tex").write_text(latex_gen.accuracy_table(results["accuracy"]))
+        (output_dir / "summary_table.tex").write_text(latex_gen.summary_table(results))
+        console.print(f"[green]LaTeX tables saved to {output_dir}[/green]")
+
+    if plots:
+        plot_gen = PlotGenerator(output_dir)
+        if "accuracy" in results:
+            cg_vals = []
+            perf_vals = []
+            for data in results["accuracy"].raw_data.values():
+                cg = data.get("codegreen", {})
+                pf = data.get("perf", {})
+                if cg and pf:
+                    cg_vals.append(cg.get("mean", 0) if isinstance(cg, dict) else cg.mean)
+                    perf_vals.append(pf.get("mean", 0) if isinstance(pf, dict) else pf.mean)
+            if cg_vals and perf_vals:
+                plot_gen.accuracy_scatter(cg_vals, perf_vals)
+        if "overhead" in results:
+            overhead_data = {k: v.get("overhead_percent", 0) for k, v in results["overhead"].raw_data.items()}
+            plot_gen.overhead_bar_chart(overhead_data)
+        if "linearity" in results:
+            sizes = [int(s) for s in results["linearity"].raw_data.keys()]
+            energies = [v.get("mean_energy", 0) for v in results["linearity"].raw_data.values()]
+            if sizes and energies:
+                plot_gen.linearity_plot(sizes, energies)
+        console.print(f"[green]Plots saved to {output_dir}[/green]")
+
+    harness.cleanup()
 
 def main_cli():
     """Main entry point for the CLI."""

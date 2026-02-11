@@ -94,8 +94,10 @@ energy_data.db
 
 # Archive directory (except .gitkeep)
 archive/*
+archive
 !archive/.gitkeep
 bin/*
 bin
 bin/src/*
 bin/runtime/*
+benchmark/benchmarksgame

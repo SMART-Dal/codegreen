@@ -42,8 +42,7 @@ class ASTEdit:
     insertion_text: str
     edit_type: str  # 'insert_before', 'insert_after', 'insert_inside_start', 'insert_inside_end'
     node_info: Optional[str] = None  # Debug info about the node
-    node_end_byte: Optional[int] = None # End of the node for wrapping/replacing
-    node_end_byte: Optional[int] = None # End of the node for wrapping/replacing
+    node_end_byte: Optional[int] = None  # End of the node for wrapping/replacing
 
 class ASTProcessor:
     """Language-agnostic AST processor using configuration-driven approach."""
@@ -204,23 +203,11 @@ class ASTProcessor:
         logger.debug(f"   Mapped mode '{insertion_mode}' to rule key '{rule_key}' for node type '{node.type}'")
         
         if rule_key not in insertion_rules:
-            # Default behavior with enhanced logging
-            logger.warning(f"⚠️  FALLBACK: No insertion rule found for '{rule_key}', using default behavior")
-            logger.warning(f"   Available rules: {list(insertion_rules.keys())}")
-            logger.warning(f"   This indicates missing configuration for insertion mode '{insertion_mode}'")
-            
-            if insertion_mode == 'before':
-                fallback_byte = node.start_byte
-                logger.debug(f"   Using fallback 'before' position: {fallback_byte}")
-                return fallback_byte
-            elif insertion_mode == 'after':
-                fallback_byte = node.end_byte
-                logger.debug(f"   Using fallback 'after' position: {fallback_byte}")
-                return fallback_byte
-            else:
-                fallback_byte = node.start_byte
-                logger.debug(f"   Using fallback default position: {fallback_byte}")
-                return fallback_byte
+            raise ValueError(
+                f"No insertion rule '{rule_key}' in config for language '{self.language}'. "
+                f"Available rules: {list(insertion_rules.keys())}. "
+                f"Insertion mode: '{insertion_mode}'"
+            )
         
         rule = insertion_rules[rule_key]
         logger.debug(f"   Using rule: {rule}")
@@ -336,35 +323,24 @@ class ASTProcessor:
             # Fallback to node end
             return body_node.end_byte
                 
-        elif rule.get("mode") == "before":
+        elif mode == "immediately_before":
+            logger.debug(f"   Processing immediately_before mode for {node.type}")
+            logger.debug(f"   Immediately before insertion position: {node.start_byte}")
+            return node.start_byte
+
+        elif mode == "before":
             logger.debug(f"   Processing before mode - inserting before node")
-            # For 'before' mode, we want to insert at the beginning of the line containing the node
-            # not at the node itself
             line_start = self.source_code.rfind('\n', 0, node.start_byte) + 1
-            insertion_byte = line_start
-            logger.debug(f"   Before insertion position: {insertion_byte} (line start, not node start)")
-            return insertion_byte
-            
-        elif rule.get("mode") == "after":
+            logger.debug(f"   Before insertion position: {line_start} (line start, not node start)")
+            return line_start
+
+        elif mode == "after":
             logger.debug(f"   Processing after mode - inserting after node")
             insertion_byte = node.end_byte
             logger.debug(f"   After insertion position: {insertion_byte}")
             return insertion_byte
-        
-        # Default fallback
-        logger.warning(f"⚠️  FALLBACK: Unknown rule mode '{rule.get('mode')}' for insertion mode '{mode}'")
-        if mode == 'before':
-            fallback_byte = node.start_byte
-            logger.debug(f"   Using default before position: {fallback_byte}")
-            return fallback_byte
-        elif mode == 'after':
-            fallback_byte = node.end_byte
-            logger.debug(f"   Using default after position: {fallback_byte}")
-            return fallback_byte
-        else:
-            fallback_byte = node.start_byte
-            logger.debug(f"   Using default position: {fallback_byte}")
-            return fallback_byte
+
+        raise ValueError(f"Unknown insertion mode '{mode}' for node type '{node.type}'")
     
     def _find_first_statement(self, body_node: Node, rule: Dict[str, Any]) -> int:
         """Find the first statement in a body node."""
@@ -839,6 +815,31 @@ class TreeSitterIndentationEngine:
         logger.debug(f"🔧 Detected indent style: '{indent_char}' (size: {indent_size})")
         return indent_char, indent_size
     
+    def calculate_body_indentation(self, tree: Tree, source_code: str, byte_offset: int, language: str) -> IndentationInfo:
+        """Calculate indentation matching the enclosing function/class body using config-driven node types."""
+        indent_char, indent_size = self.detect_indent_style(source_code)
+        config_manager = get_language_config_manager()
+        config = config_manager.get_config(language)
+        function_types = config.node_types.get("function_types", [])
+        class_types = config.node_types.get("class_types", [])
+        body_types = config.node_types.get("body_types", [])
+        container_types = set(function_types + class_types)
+
+        node = tree.root_node.descendant_for_byte_range(byte_offset, byte_offset)
+        while node:
+            if node.type in body_types:
+                if node.parent and node.parent.type in container_types:
+                    # Find first non-comment child to get body indent
+                    for child in node.children:
+                        if child.type not in ('comment',) and child.start_point[1] > 0:
+                            col = child.start_point[1]
+                            indent_string = indent_char * col if indent_char == ' ' else '\t' * col
+                            return IndentationInfo(col // indent_size, indent_char, indent_size, indent_string)
+            node = node.parent
+        # Top-level: one indent level
+        indent_string = indent_char * indent_size if indent_char == ' ' else '\t'
+        return IndentationInfo(1, indent_char, indent_size, indent_string)
+
     def calculate_indentation_at_position(self, tree: Tree, source_code: str, byte_offset: int, language: str) -> IndentationInfo:
         """
         Calculate proper indentation at a specific byte position using tree-sitter indentation queries.
@@ -1366,18 +1367,11 @@ class ASTRewriter:
             result = code[:offset] + prefix + indented_text + '\n' + code[offset:]
             logger.debug(f"   insert_inside_end: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
         elif edit.edit_type == 'insert_immediately_before':
-            # Insert directly before the node, without adding newlines or matching line indentation
-            # This is used for return statements to handle one-liner if blocks
+            # Insert checkpoint before the return statement
             logger.debug(f"   Using insert_immediately_before mode")
-            
-            # For C-like languages, if we have the node end byte, wrap in braces to handle one-liners
-            if edit.node_end_byte is not None and self.language in ['c', 'cpp', 'java', 'javascript']:
-                stmt_text = code[offset:edit.node_end_byte]
-                result = code[:offset] + "{ " + edit.insertion_text + " " + stmt_text + " }" + code[edit.node_end_byte:]
-                logger.debug(f"   insert_immediately_before: wrapped in braces, result length: {len(result)}")
-            else:
-                result = code[:offset] + edit.insertion_text + code[offset:]
-                logger.debug(f"   insert_immediately_before: inserted at offset {offset}, result length: {len(result)} (was {len(code)})")
+            prefix = '\n' if offset > 0 and code[offset-1] != '\n' else ''
+            result = code[:offset] + prefix + indented_text + '\n' + code[offset:]
+            logger.debug(f"   insert_immediately_before: inserted at offset {offset}, result length: {len(result)}")
         else:
             logger.warning(f"Unknown edit type: {edit.edit_type}")
             return code
@@ -1401,12 +1395,22 @@ class ASTRewriter:
         nvim-treesitter indentation system.
         """
         logger.debug(f"🔧 Calculating indentation for edit_type='{edit_type}' at offset={offset}")
-        
-        # For Python, we need to be very careful about indentation
+
+        # For insert_inside_end (implicit exits), use config-driven AST body indent for all languages.
+        # This avoids the multi-line statement continuation indent bug.
+        if edit_type == 'insert_inside_end' and self.tree and self.indent_engine:
+            indent_info = self.indent_engine.calculate_body_indentation(
+                self.tree, code, offset, self.language
+            )
+            lines = text.split('\n')
+            indented = [indent_info.indent_string + l.strip() if l.strip() else '' for l in lines]
+            return '\n'.join(indented)
+
+        # For Python, use Python-specific indentation (whitespace-sensitive)
         if self.language == 'python':
             return self._calculate_python_indentation(text, code, offset, edit_type)
-        
-        # Try to use TreeSitter indentation engine first for other languages
+
+        # Use TreeSitter indentation engine for other languages
         if self.tree and self.indent_engine:
             try:
                 logger.debug(f"   Using TreeSitter indentation engine for {self.language}")
@@ -1470,40 +1474,13 @@ class ASTRewriter:
         if column == 0:
             # Special case for insert_inside_end: offset is at start of line AFTER function body
             # We need to look at the PREVIOUS line to get function body indentation
-            if edit_type == 'insert_inside_end':
-                # offset is at start of line (after the \n), so offset-1 is the \n itself
-                # We need to find the line BEFORE that \n
-                if offset > 0:
-                    # Find the \n before the current position
-                    newline_pos = offset - 1
-                    # Find the \n before that (end of previous line)
-                    prev_newline_pos = code.rfind('\n', 0, newline_pos)
-                    # Extract the previous line content (between prev_newline and newline_pos)
-                    if prev_newline_pos >= 0:
-                        prev_line = code[prev_newline_pos + 1:newline_pos]
-                    else:
-                        # First line in file
-                        prev_line = code[:newline_pos]
-
-                    if prev_line.strip():  # Non-empty previous line
-                        target_indent = len(prev_line) - len(prev_line.lstrip())
-                        indent_string = indent_char * target_indent
-                        logger.debug(f"   insert_inside_end: using previous line indent={target_indent}")
-                        logger.debug(f"   Previous line: '{prev_line}'")
-
-                        # Apply indentation
-                        lines = text.split('\n')
-                        indented_lines = []
-                        for i, line in enumerate(lines):
-                            if line.strip():
-                                indented_line = indent_string + line.strip()
-                                indented_lines.append(indented_line)
-                            else:
-                                indented_lines.append('')
-
-                        result = '\n'.join(indented_lines)
-                        logger.debug(f"   Final indented text: '{result}'")
-                        return result
+            if edit_type == 'insert_inside_end' and self.tree and self.indent_engine:
+                indent_info = self.indent_engine.calculate_body_indentation(
+                    self.tree, code, offset, self.language
+                )
+                lines = text.split('\n')
+                indented = [indent_info.indent_string + l.strip() if l.strip() else '' for l in lines]
+                return '\n'.join(indented)
 
             # For other cases, use current line's indentation
             if current_line.strip():
@@ -1784,73 +1761,22 @@ class ASTRewriter:
             indent_string = '    ' if indent_info.indent_char == ' ' else '\t'
             return indent_string
 
-    def _calculate_inside_end_indentation(self, indent_info, code: str, offset: int) -> str:
-        """
-        Calculate proper indentation for insert_inside_end by matching the last
-        real statement's indentation inside the target body block.
-        """
-        try:
-            if hasattr(self, 'ast_processor') and self.ast_processor and self.tree:
-                # Find the enclosing function/method/class node
-                function_node = self._find_function_node_at_offset(offset)
-                if function_node:
-                    body_node = self.ast_processor.find_body_node(function_node)
-                    if body_node:
-                        # Find the last real statement in the body
-                        last_stmt = None
-                        for child in reversed(body_node.children):
-                            text = self._get_node_text(child)
-                            if text.strip() and not self._is_docstring_or_comment(child, text):
-                                last_stmt = child
-                                break
-                        # If found, match its line indentation
-                        if last_stmt:
-                            line_start = code.rfind('\n', 0, last_stmt.start_byte) + 1
-                            line_text = code[line_start:last_stmt.start_byte]
-                            base_indent = len(line_text) - len(line_text.lstrip())
-                            if indent_info.indent_char == '\t':
-                                # Tabs: assume one tab per logical level; count leading tabs
-                                leading = 0
-                                for ch in line_text:
-                                    if ch == '\t':
-                                        leading += 1
-                                    elif ch == ' ':
-                                        # spaces before tabs shouldn't normally occur; ignore
-                                        continue
-                                    else:
-                                        break
-                                indent_string = '\t' * leading
-                            else:
-                                indent_string = ' ' * base_indent
-                            logger.debug(f"🔧 AST-based inside_end: matched indent '{indent_string}' (len={len(indent_string)})")
-                            return indent_string
-        except Exception as e:
-            logger.warning(f"⚠️  AST-based inside_end indentation failed: {e}")
-        # Fallbacks
-        if indent_info.indent_char == '\t':
-            return '\t'
-        # Get configurable indent size
-        limits = self.config_manager.get_processing_limits(self.language)
-        default_indent_size = limits.get('default_indent_size', 4)
-        return ' ' * max(default_indent_size, indent_info.indent_size if hasattr(indent_info, 'indent_size') else default_indent_size)
-    
     def _find_function_or_class_node_at_offset(self, offset: int) -> Optional['Node']:
-        """Find the function or class node containing the given byte offset."""
+        """Find the function or class node containing the given byte offset using config-driven node types."""
         if not self.tree:
             return None
-        
-        # Find the node at the offset
         target_node = self.tree.root_node.descendant_for_byte_range(offset, offset + 1)
         if not target_node:
             return None
-        
-        # Walk up the AST to find the function or class definition
+        config = self.config_manager.get_config(self.language)
+        function_types = config.node_types.get("function_types", [])
+        class_types = config.node_types.get("class_types", [])
+        container_types = set(function_types + class_types)
         current = target_node
         while current:
-            if current.type in ['function_definition', 'method_definition', 'constructor_definition', 'class_definition']:
+            if current.type in container_types:
                 return current
             current = current.parent
-        
         return None
     
     def _find_first_real_statement(self, body_node: 'Node') -> Optional['Node']:

@@ -1,0 +1,427 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-11T01:20:08.338124",
+    "total_runs": 12
+  },
+  "runs": [
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.68858,
+      "time_seconds": 0.5291822366416454,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:11:58.266754",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 7.16465,
+        "last_joules": 7.85323,
+        "energy_delta": 0.68858
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "c",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.05091000000000001,
+      "time_seconds": 0.5999198947101831,
+      "output_valid": false,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:11:59.638103",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 2008,
+        "first_joules": 7.05502,
+        "last_joules": 7.10593,
+        "energy_delta": 0.05091000000000001
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "cpp",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 5.382109999999999,
+      "time_seconds": 2.226267596706748,
+      "output_valid": false,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:12:04.597511",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 96196,
+        "first_joules": 7.36129,
+        "last_joules": 12.7434,
+        "energy_delta": 5.382109999999999
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "java",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 1.006055137142539,
+      "output_valid": false,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:12:07.051511",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 1,
+        "first_joules": 6.28377,
+        "last_joules": 6.28377,
+        "energy_delta": 0.0
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 1636.7804899999999,
+      "time_seconds": 18.692505395039916,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:12:44.616004",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 5.55951,
+        "last_joules": 1642.34,
+        "energy_delta": 1636.7804899999999
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "c",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.5180803555995226,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:12:45.892485",
+      "checkpoints": []
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "java",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.9295273311436176,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:19:59.485964",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 1,
+        "first_joules": 7.1366,
+        "last_joules": 7.1366,
+        "energy_delta": 0.0
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 17.41669,
+      "time_seconds": 0.8227935936301947,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:20:01.225188",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 1991,
+        "first_joules": 6.78771,
+        "last_joules": 24.2044,
+        "energy_delta": 17.41669
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "c",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.40108461678028107,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:20:02.223874",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.38468787632882595,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:20:04.316146",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "c",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.3862436767667532,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:20:05.228470",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "java",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.9912034180015326,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:20:08.333829",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 1,
+        "first_joules": 7.62748,
+        "last_joules": 7.62748,
+        "energy_delta": 0.0
+      }
+    }
+  ],
+  "summary": {
+    "spectralnorm/python/1000/codegreen": {
+      "energy": {
+        "mean": 1636.7804899999999,
+        "std": 0.0,
+        "min": 1636.7804899999999,
+        "max": 1636.7804899999999,
+        "median": 1636.7804899999999,
+        "ci95_lower": 1636.7804899999999,
+        "ci95_upper": 1636.7804899999999,
+        "n": 1
+      },
+      "time": {
+        "mean": 18.692505395039916,
+        "std": 0.0,
+        "min": 18.692505395039916,
+        "max": 18.692505395039916,
+        "median": 18.692505395039916,
+        "ci95_lower": 18.692505395039916,
+        "ci95_upper": 18.692505395039916,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "spectralnorm/java/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.9295273311436176,
+        "std": 0.0,
+        "min": 0.9295273311436176,
+        "max": 0.9295273311436176,
+        "median": 0.9295273311436176,
+        "ci95_lower": 0.9295273311436176,
+        "ci95_upper": 0.9295273311436176,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "fannkuchredux/c/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.3862436767667532,
+        "std": 0.0,
+        "min": 0.3862436767667532,
+        "max": 0.3862436767667532,
+        "median": 0.3862436767667532,
+        "ci95_lower": 0.3862436767667532,
+        "ci95_upper": 0.3862436767667532,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "nbody/cpp/1000/codegreen": {
+      "energy": {
+        "mean": 5.382109999999999,
+        "std": 0.0,
+        "min": 5.382109999999999,
+        "max": 5.382109999999999,
+        "median": 5.382109999999999,
+        "ci95_lower": 5.382109999999999,
+        "ci95_upper": 5.382109999999999,
+        "n": 1
+      },
+      "time": {
+        "mean": 2.226267596706748,
+        "std": 0.0,
+        "min": 2.226267596706748,
+        "max": 2.226267596706748,
+        "median": 2.226267596706748,
+        "ci95_lower": 2.226267596706748,
+        "ci95_upper": 2.226267596706748,
+        "n": 1
+      },
+      "valid_runs": 0,
+      "total_runs": 1
+    },
+    "binarytrees/python/1000/codegreen": {
+      "energy": {
+        "mean": 17.41669,
+        "std": 0.0,
+        "min": 17.41669,
+        "max": 17.41669,
+        "median": 17.41669,
+        "ci95_lower": 17.41669,
+        "ci95_upper": 17.41669,
+        "n": 1
+      },
+      "time": {
+        "mean": 0.8227935936301947,
+        "std": 0.0,
+        "min": 0.8227935936301947,
+        "max": 0.8227935936301947,
+        "median": 0.8227935936301947,
+        "ci95_lower": 0.8227935936301947,
+        "ci95_upper": 0.8227935936301947,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "fannkuchredux/python/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.38468787632882595,
+        "std": 0.0,
+        "min": 0.38468787632882595,
+        "max": 0.38468787632882595,
+        "median": 0.38468787632882595,
+        "ci95_lower": 0.38468787632882595,
+        "ci95_upper": 0.38468787632882595,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "spectralnorm/c/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.5180803555995226,
+        "std": 0.0,
+        "min": 0.5180803555995226,
+        "max": 0.5180803555995226,
+        "median": 0.5180803555995226,
+        "ci95_lower": 0.5180803555995226,
+        "ci95_upper": 0.5180803555995226,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "nbody/c/1000/codegreen": {
+      "energy": {
+        "mean": 0.05091000000000001,
+        "std": 0.0,
+        "min": 0.05091000000000001,
+        "max": 0.05091000000000001,
+        "median": 0.05091000000000001,
+        "ci95_lower": 0.05091000000000001,
+        "ci95_upper": 0.05091000000000001,
+        "n": 1
+      },
+      "time": {
+        "mean": 0.5999198947101831,
+        "std": 0.0,
+        "min": 0.5999198947101831,
+        "max": 0.5999198947101831,
+        "median": 0.5999198947101831,
+        "ci95_lower": 0.5999198947101831,
+        "ci95_upper": 0.5999198947101831,
+        "n": 1
+      },
+      "valid_runs": 0,
+      "total_runs": 1
+    },
+    "nbody/python/1000/codegreen": {
+      "energy": {
+        "mean": 0.68858,
+        "std": 0.0,
+        "min": 0.68858,
+        "max": 0.68858,
+        "median": 0.68858,
+        "ci95_lower": 0.68858,
+        "ci95_upper": 0.68858,
+        "n": 1
+      },
+      "time": {
+        "mean": 0.5291822366416454,
+        "std": 0.0,
+        "min": 0.5291822366416454,
+        "max": 0.5291822366416454,
+        "median": 0.5291822366416454,
+        "ci95_lower": 0.5291822366416454,
+        "ci95_upper": 0.5291822366416454,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "fannkuchredux/java/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.9912034180015326,
+        "std": 0.0,
+        "min": 0.9912034180015326,
+        "max": 0.9912034180015326,
+        "median": 0.9912034180015326,
+        "ci95_lower": 0.9912034180015326,
+        "ci95_upper": 0.9912034180015326,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "binarytrees/c/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.40108461678028107,
+        "std": 0.0,
+        "min": 0.40108461678028107,
+        "max": 0.40108461678028107,
+        "median": 0.40108461678028107,
+        "ci95_lower": 0.40108461678028107,
+        "ci95_upper": 0.40108461678028107,
+        "n": 1
+      },
+      "valid_runs": 1,
+      "total_runs": 1
+    },
+    "nbody/java/1000/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 1.006055137142539,
+        "std": 0.0,
+        "min": 1.006055137142539,
+        "max": 1.006055137142539,
+        "median": 1.006055137142539,
+        "ci95_lower": 1.006055137142539,
+        "ci95_upper": 1.006055137142539,
+        "n": 1
+      },
+      "valid_runs": 0,
+      "total_runs": 1
+    }
+  }
+}

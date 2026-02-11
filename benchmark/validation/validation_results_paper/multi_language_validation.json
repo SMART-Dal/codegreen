@@ -1,0 +1,35 @@
+{
+  "benchmark": "nbody",
+  "size": 5000,
+  "repetitions": 5,
+  "languages": {
+    "Python": {
+      "instrumented_energy_mean": 5.440862,
+      "instrumented_energy_std": 0.09560346194568521,
+      "instrumented_time_mean": 0.35079739019274714,
+      "native_time_mean": 0.06367811411619187,
+      "overhead_percent": 450.89161332990466
+    },
+    "C": {
+      "instrumented_energy_mean": 0.8624220000000001,
+      "instrumented_energy_std": 0.03051388365973742,
+      "instrumented_time_mean": 0.15270973034203053,
+      "native_time_mean": 0.002785613015294075,
+      "overhead_percent": 5382.087048832556
+    },
+    "C++": {
+      "instrumented_energy_mean": 0.981282,
+      "instrumented_energy_std": 0.07781196524956807,
+      "instrumented_time_mean": 0.1488947995007038,
+      "native_time_mean": 0.0026976987719535828,
+      "overhead_percent": 5419.326362478906
+    },
+    "Java": {
+      "instrumented_energy_mean": 2.367286,
+      "instrumented_energy_std": 0.047194015552821926,
+      "instrumented_time_mean": 0.22867320775985717,
+      "native_time_mean": 0.07189165502786636,
+      "overhead_percent": 218.08032193892285
+    }
+  }
+}

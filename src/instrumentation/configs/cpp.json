@@ -42,9 +42,6 @@
             "function_exit": {
                 "mode": "inside_end"
             },
-            "class_exit": {
-                "mode": "inside_end"
-            },
             "function_return": {
                 "mode": "immediately_before"
             },
@@ -67,12 +64,25 @@
     "query_config": {
         "capture_mapping": {
             "function_def": "function_enter",
+            "function_name": "function_enter",
+            "function.method": "function_enter",
+            "local.definition.function": "function_enter",
             "return": "function_return"
         },
         "priority_order": [
             "function_def",
+            "function_name",
+            "function.method",
+            "local.definition.function",
             "return"
-        ]
+        ],
+        "deduplication_rules": {
+            "function_enter": {
+                "scope": "function",
+                "priority_order": ["function_def", "function_name", "function.method"],
+                "max_per_function": 1
+            }
+        }
     },
     "instrumentation_config": {
         "import_statement": "#include <codegreen/runtime.hpp>",
@@ -80,7 +90,6 @@
             "function_enter": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"enter\");",
             "function_exit": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
             "function_return": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
-            "class_enter": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"class_enter\");",
             "loop_start": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
             "loop_exit": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
         },

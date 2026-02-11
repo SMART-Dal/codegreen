@@ -2,6 +2,10 @@
   <img src="docs/website/docs/assets/codegreen_logo.svg#gh-light-mode-only" width="200" alt="CodeGreen Logo">
   <img src="docs/website/docs/assets/codegreen_logo_white.svg#gh-dark-mode-only" width="200" alt="CodeGreen Logo">
 </p>
+<!-- add zenodo doi badge -->
+
+[![DOI](https://zenodo.org/badge/942273936.svg)](https://doi.org/10.5281/zenodo.18371771)
+
 
 # CodeGreen - Energy Monitoring and Code Optimization Tool
 
@@ -90,6 +94,21 @@ CodeGreen uses a hybrid C++/Python architecture for optimal performance:
 - **Python AST Engine**: Multi-language code analysis using Tree-sitter.
 - **JSON Rules**: Externalized configuration for language-specific behavior.
 - **SQLite Database**: Persistent storage for energy measurement sessions.
+
+## 📝 Citation
+
+If you use CodeGreen in your research, please cite it as:
+```bibtex
+@software{Rajput_CodeGreen_A_Modular_2026,
+author = {Rajput, Saurabhsingh},
+doi = {10.5281/zenodo.18371772},
+month = jan,
+title = {{CodeGreen: A Modular Energy Measurement System for Multi-Language Software}},
+url = {https://smart-dal.github.io/codegreen/},
+version = {v0.1.0},
+year = {2026}
+}
+```
 
 ## 🤝 Contributing
 

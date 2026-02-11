@@ -1,0 +1,35 @@
+{
+  "benchmark": "nbody",
+  "size": 5000,
+  "repetitions": 5,
+  "languages": {
+    "Python": {
+      "energy_mean_j": 5.3178,
+      "energy_std_j": 0.0538,
+      "inst_time_s": 0.3458,
+      "native_time_s": 0.0619,
+      "overhead_pct": 458.5
+    },
+    "C": {
+      "energy_mean_j": 0.7545,
+      "energy_std_j": 0.1445,
+      "inst_time_s": 0.1496,
+      "native_time_s": 0.0028,
+      "overhead_pct": 5200.8
+    },
+    "C++": {
+      "energy_mean_j": 0.7976,
+      "energy_std_j": 0.1408,
+      "inst_time_s": 0.1491,
+      "native_time_s": 0.0024,
+      "overhead_pct": 6093.1
+    },
+    "Java": {
+      "energy_mean_j": 2.3537,
+      "energy_std_j": 0.2109,
+      "inst_time_s": 0.2368,
+      "native_time_s": 0.0745,
+      "overhead_pct": 218.0
+    }
+  }
+}

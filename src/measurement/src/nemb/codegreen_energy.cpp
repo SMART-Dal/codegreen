@@ -14,6 +14,8 @@
 #include <iostream>
 #include <mutex>
 #include <map>
+#include <unistd.h>
+#include <pthread.h>
 
 namespace codegreen {
 
@@ -305,17 +307,43 @@ double validate_measurement_accuracy(double d) { return 0.99; }
 extern "C" {
     static std::unique_ptr<codegreen::EnergyMeter> c_api_meter;
     static std::mutex c_api_mutex;
+    static pid_t c_api_init_pid = 0;
+    static bool c_api_is_forked_child = false;
+
+    // Fork safety: abandon NEMB resources in child without destructing.
+    // After fork(), the coordinator's background threads are dead, mutexes may
+    // be inconsistent, and RAPL file descriptors are shared with the parent.
+    // Calling destructors would close those shared FDs, breaking the parent.
+    // release() surrenders ownership without invoking destructors -- the small
+    // leak in the short-lived child is reclaimed by the OS on exit.
+    static void nemb_after_fork_child() {
+        c_api_is_forked_child = true;
+        if (c_api_meter) {
+            c_api_meter.release();
+        }
+    }
+
+    __attribute__((constructor))
+    static void nemb_register_fork_handler() {
+        pthread_atfork(nullptr, nullptr, nemb_after_fork_child);
+    }
 
     int nemb_initialize() {
+        if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
-        if(!c_api_meter) c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+        if(!c_api_meter) {
+            c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+            c_api_init_pid = getpid();
+        }
         return c_api_meter->is_available() ? 1 : 0;
     }
     uint64_t nemb_start_session(const char* n) {
+        if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         return c_api_meter ? c_api_meter->start_session(n?n:"") : 0;
     }
     int nemb_stop_session(uint64_t i, double* e, double* p) {
+        if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) return 0;
         auto res = c_api_meter->end_session(i);
@@ -323,6 +351,7 @@ extern "C" {
         return 0;
     }
     int nemb_read_current(double* e, double* p) {
+        if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) return 0;
         auto res = c_api_meter->read();
@@ -331,27 +360,38 @@ extern "C" {
     }
 
     void nemb_report_at_exit() {
-        std::lock_guard<std::mutex> l(c_api_mutex);
-        if(!c_api_meter) return;
+        if (c_api_is_forked_child) return;
+        if (c_api_init_pid != 0 && getpid() != c_api_init_pid) return;
+        int retries = 10;
+        while (retries-- > 0) {
+            if (c_api_mutex.try_lock()) {
+                if (!c_api_meter) { c_api_mutex.unlock(); return; }
+                auto cps = c_api_meter->get_checkpoint_measurements();
+                c_api_meter.reset();
+                c_api_mutex.unlock();
 
-        auto cps = c_api_meter->get_checkpoint_measurements();
-        if (cps.empty()) return;
-
-        std::cout << "\n--- CODEGREEN_RESULT_START ---" << std::endl;
-        std::cout << "{\"measurements\": [";
-        for(size_t i=0; i<cps.size(); ++i) {
-            std::cout << "{\"checkpoint_id\": \"" << cps[i].name << "\", \"timestamp\": " << cps[i].timestamp_ns
-               << ", \"joules\": " << cps[i].cumulative_energy_joules << ", \"watts\": " << cps[i].instantaneous_power_watts << "}";
-            if(i < cps.size()-1) std::cout << ", ";
+                if (cps.empty()) return;
+                std::cout << "\n--- CODEGREEN_RESULT_START ---" << std::endl;
+                std::cout << "{\"measurements\": [";
+                for (size_t i = 0; i < cps.size(); ++i) {
+                    std::cout << "{\"checkpoint_id\": \"" << cps[i].name << "\", \"timestamp\": " << cps[i].timestamp_ns
+                       << ", \"joules\": " << cps[i].cumulative_energy_joules << ", \"watts\": " << cps[i].instantaneous_power_watts << "}";
+                    if (i < cps.size() - 1) std::cout << ", ";
+                }
+                std::cout << "]}" << std::endl;
+                std::cout << "--- CODEGREEN_RESULT_END ---" << std::endl;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        std::cout << "]}" << std::endl;
-        std::cout << "--- CODEGREEN_RESULT_END ---" << std::endl;
     }
 
     void nemb_mark_checkpoint(const char* n) {
+        if (c_api_is_forked_child) return;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
             c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+            c_api_init_pid = getpid();
             std::atexit(nemb_report_at_exit);
         }
         if(c_api_meter) c_api_meter->mark_checkpoint(n?n:"");
@@ -373,6 +413,7 @@ extern "C" {
     }
 
     int nemb_get_checkpoints_json(char* b, int m) {
+        if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter || !b || m <= 0) return 0;
         auto cps = c_api_meter->get_checkpoint_measurements();

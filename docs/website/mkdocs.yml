@@ -168,6 +168,7 @@ nav:
   - About:
     - Changelog: about/changelog.md
     - License: about/LICENSE
+    - Citation: about/citing.md
 
 extra:
   social:

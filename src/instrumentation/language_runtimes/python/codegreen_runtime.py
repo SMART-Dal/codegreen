@@ -20,19 +20,22 @@ from pathlib import Path
 def _find_nemb_library() -> Optional[str]:
     """Find the path to the shared NEMB library."""
     possible_names = ["libcodegreen-nemb.so", "libcodegreen-nemb.dylib", "codegreen-nemb.dll"]
-    
-    # Paths to search
+
+    # Project root: /home/user/codegreen
+    # This file: src/instrumentation/language_runtimes/python/codegreen_runtime.py
+    # python -> language_runtimes -> instrumentation -> src -> codegreen (5 levels)
+    project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+
     search_paths = [
-        # 1. Relative to this file (if installed in site-packages/codegreen/instrumentation)
-        Path(__file__).parent.parent.parent / "lib",
-        Path(__file__).parent.parent.parent / "build" / "lib",
-        # 2. Standard library paths
+        project_root / "lib",
+        project_root / "build" / "lib",
+        project_root / "codegreen" / "lib",
         Path("/usr/local/lib"),
         Path("/usr/lib"),
-        # 3. Environment variable
-        Path(os.environ.get("CODEGREEN_LIB_PATH", ""))
     ]
-    
+    if os.environ.get("CODEGREEN_LIB_PATH"):
+        search_paths.insert(0, Path(os.environ["CODEGREEN_LIB_PATH"]))
+
     for path in search_paths:
         if not path.exists():
             continue
@@ -40,7 +43,7 @@ def _find_nemb_library() -> Optional[str]:
             lib_path = path / name
             if lib_path.exists():
                 return str(lib_path)
-    
+
     return None
 
 class NEMBClient:
@@ -82,12 +85,14 @@ class NEMBClient:
         """Retrieve correlated time-series measurements from C++ backend"""
         if not self.lib:
             return []
-            
-        # Use a large buffer for JSON data (1MB)
         buf_size = 1024 * 1024
         buf = ctypes.create_string_buffer(buf_size)
-        
         ret = self.lib.nemb_get_checkpoints_json(buf, buf_size)
+        if ret < 0:
+            # Buffer too small; C++ returns -(required_size)
+            buf_size = (-ret) + 1
+            buf = ctypes.create_string_buffer(buf_size)
+            ret = self.lib.nemb_get_checkpoints_json(buf, buf_size)
         if ret > 0:
             try:
                 data = json.loads(buf.value.decode('utf-8'))
@@ -111,6 +116,7 @@ class NEMBClient:
 
 _nemb_client: Optional[NEMBClient] = None
 _client_lock = threading.Lock()
+_is_child_process = False
 
 def _get_nemb_client() -> NEMBClient:
     """Get or create global NEMB client"""
@@ -121,21 +127,39 @@ def _get_nemb_client() -> NEMBClient:
                 _nemb_client = NEMBClient()
     return _nemb_client
 
+def _after_fork_child():
+    """Reset NEMB state in forked child to avoid corrupting parent measurements.
+
+    Nullify the ctypes library handle so child processes don't call into
+    the NEMB backend (which shares file descriptors with the parent).
+    """
+    global _nemb_client, _output_reported, _is_child_process
+    if _nemb_client is not None and _nemb_client.lib is not None:
+        _nemb_client.lib = None  # Detach without closing parent's FDs
+    _nemb_client = None
+    _output_reported = True
+    _is_child_process = True
+
+try:
+    os.register_at_fork(after_in_child=_after_fork_child)
+except AttributeError:
+    pass
+
+_output_reported = False
+
 def _report_at_exit():
     """Report measurements to stdout in a way that CLI can parse"""
+    global _output_reported
+    if _output_reported or _is_child_process:
+        return
+    _output_reported = True
+
     client = _get_nemb_client()
     measurements = client.get_final_measurements()
-    
-    if not measurements:
-        return
-    
-    # Wrap in clear markers for CLI tool parsing
-    print("\n--- CODEGREEN_RESULT_START ---")
-    results = {
-        "measurements": measurements
-    }
-    print(json.dumps(results))
-    print("--- CODEGREEN_RESULT_END ---")
+
+    print("\n--- CODEGREEN_RESULT_START ---", flush=True)
+    print(json.dumps({"measurements": measurements}), flush=True)
+    print("--- CODEGREEN_RESULT_END ---", flush=True)
 
 import atexit
 atexit.register(_report_at_exit)

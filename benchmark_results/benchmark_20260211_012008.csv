@@ -1,0 +1,13 @@
+problem,language,size,profiler,repetition,energy_joules,time_seconds,output_valid
+nbody,python,1000,codegreen,1,0.688580,0.529182,True
+nbody,c,1000,codegreen,1,0.050910,0.599920,False
+nbody,cpp,1000,codegreen,1,5.382110,2.226268,False
+nbody,java,1000,codegreen,1,0.000000,1.006055,False
+spectralnorm,python,1000,codegreen,1,1636.780490,18.692505,True
+spectralnorm,c,1000,codegreen,1,0.000000,0.518080,True
+spectralnorm,java,1000,codegreen,1,0.000000,0.929527,True
+binarytrees,python,1000,codegreen,1,17.416690,0.822794,True
+binarytrees,c,1000,codegreen,1,0.000000,0.401085,True
+fannkuchredux,python,1000,codegreen,1,0.000000,0.384688,True
+fannkuchredux,c,1000,codegreen,1,0.000000,0.386244,True
+fannkuchredux,java,1000,codegreen,1,0.000000,0.991203,True

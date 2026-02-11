@@ -1,0 +1,172 @@
+{
+  "benchmarks": [
+    {
+      "benchmark": "binarytrees",
+      "language": "C",
+      "size": "18",
+      "native_time": 0.9676,
+      "inst_time": 1.3024,
+      "energy_J": 92.954,
+      "overhead_pct": 34.6,
+      "checkpoints": 20
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "C++",
+      "size": "18",
+      "native_time": 1.0617,
+      "inst_time": 1.2583,
+      "energy_J": 89.787,
+      "overhead_pct": 18.5,
+      "checkpoints": 20
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "Java",
+      "size": "18",
+      "native_time": 0.0637,
+      "inst_time": 1.0666,
+      "energy_J": 63.876,
+      "overhead_pct": 1573.1,
+      "checkpoints": 20
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "Python",
+      "size": "14",
+      "native_time": 0.595,
+      "inst_time": 4.436,
+      "energy_J": 219.712,
+      "overhead_pct": 645.5,
+      "checkpoints": 393227
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "C",
+      "size": "10",
+      "native_time": 0.2186,
+      "inst_time": 0.3461,
+      "energy_J": 16.969,
+      "overhead_pct": 58.4,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "C++",
+      "size": "10",
+      "native_time": 0.1998,
+      "inst_time": 0.3516,
+      "energy_J": 17.669,
+      "overhead_pct": 76.0,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "Java",
+      "size": "10",
+      "native_time": 0.2552,
+      "inst_time": 0.3936,
+      "energy_J": 17.25,
+      "overhead_pct": 54.2,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "Python",
+      "size": "10",
+      "native_time": 0.4626,
+      "inst_time": 5.8015,
+      "energy_J": 447.065,
+      "overhead_pct": 1154.2,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "nbody",
+      "language": "C",
+      "size": "500000",
+      "native_time": 0.0411,
+      "inst_time": 0.1673,
+      "energy_J": 3.13,
+      "overhead_pct": 306.9,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "C++",
+      "size": "500000",
+      "native_time": 0.0363,
+      "inst_time": 0.1634,
+      "energy_J": 2.728,
+      "overhead_pct": 350.3,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "Java",
+      "size": "500000",
+      "native_time": 0.1015,
+      "inst_time": 0.2423,
+      "energy_J": 4.334,
+      "overhead_pct": 138.7,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "Python",
+      "size": "500000",
+      "native_time": 2.8768,
+      "inst_time": 2.9883,
+      "energy_J": 222.564,
+      "overhead_pct": 3.9,
+      "checkpoints": 2
+    }
+  ],
+  "accuracy": {
+    "method": "CodeGreen vs Perf RAPL on Python nbody",
+    "mean_error_pct": 7.6,
+    "correlation_r": 0.9987,
+    "r_squared": 0.9974,
+    "data_points": [
+      {
+        "n": 100000,
+        "codegreen_J": 41.9,
+        "perf_J": 48.1,
+        "error_pct": 12.8
+      },
+      {
+        "n": 250000,
+        "codegreen_J": 106.6,
+        "perf_J": 109.1,
+        "error_pct": 2.3
+      },
+      {
+        "n": 500000,
+        "codegreen_J": 210.5,
+        "perf_J": 228.4,
+        "error_pct": 7.8
+      }
+    ]
+  },
+  "overhead_by_language": {
+    "C": {
+      "mean": 133.3,
+      "min": 34.6,
+      "max": 306.9
+    },
+    "C++": {
+      "mean": 148.3,
+      "min": 18.5,
+      "max": 350.3
+    },
+    "Java": {
+      "mean": 588.7,
+      "min": 54.2,
+      "max": 1573.1
+    },
+    "Python": {
+      "mean": 601.2,
+      "min": 3.9,
+      "max": 1154.2
+    }
+  }
+}

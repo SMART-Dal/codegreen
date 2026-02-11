@@ -1,0 +1,253 @@
+{
+  "timestamp": "2026-01-26T16:23:32",
+  "base_costs": {
+    "c_cpp_ms": 125.0,
+    "python_ms": 150.0,
+    "java_ms": 300.0,
+    "per_checkpoint_us": 1.8
+  },
+  "overhead": [
+    {
+      "benchmark": "nbody",
+      "language": "C",
+      "granularity": "coarse",
+      "size": "500000",
+      "native_time": 0.0414,
+      "inst_time": 0.1702,
+      "energy_J": 3.037,
+      "raw_overhead_pct": 311.0,
+      "normalized_overhead_pct": 9.1,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "C++",
+      "granularity": "coarse",
+      "size": "500000",
+      "native_time": 0.04,
+      "inst_time": 0.1689,
+      "energy_J": 2.961,
+      "raw_overhead_pct": 321.8,
+      "normalized_overhead_pct": 9.6,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "Java",
+      "granularity": "coarse",
+      "size": "500000",
+      "native_time": 0.1028,
+      "inst_time": 0.2432,
+      "energy_J": 4.348,
+      "raw_overhead_pct": 136.5,
+      "normalized_overhead_pct": 0,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "Python",
+      "granularity": "coarse",
+      "size": "500000",
+      "native_time": 2.9162,
+      "inst_time": 2.7849,
+      "energy_J": 213.209,
+      "raw_overhead_pct": -4.5,
+      "normalized_overhead_pct": 0,
+      "checkpoints": 2
+    },
+    {
+      "benchmark": "nbody",
+      "language": "C",
+      "granularity": "fine",
+      "size": "500000",
+      "native_time": 0.042,
+      "inst_time": 2.222,
+      "energy_J": 49.803,
+      "raw_overhead_pct": 5189.1,
+      "normalized_overhead_pct": 607.0,
+      "checkpoints": 1000008
+    },
+    {
+      "benchmark": "nbody",
+      "language": "C++",
+      "granularity": "fine",
+      "size": "500000",
+      "native_time": 0.0396,
+      "inst_time": 2.1819,
+      "energy_J": 47.78,
+      "raw_overhead_pct": 5416.6,
+      "normalized_overhead_pct": 549.4,
+      "checkpoints": 1000008
+    },
+    {
+      "benchmark": "nbody",
+      "language": "Java",
+      "granularity": "fine",
+      "size": "500000",
+      "native_time": 0.0991,
+      "inst_time": 2.4086,
+      "energy_J": 57.527,
+      "raw_overhead_pct": 2330.0,
+      "normalized_overhead_pct": 211.3,
+      "checkpoints": 1000006
+    },
+    {
+      "benchmark": "nbody",
+      "language": "Python",
+      "granularity": "fine",
+      "size": "500000",
+      "native_time": 2.8736,
+      "inst_time": 20.4955,
+      "energy_J": 491.703,
+      "raw_overhead_pct": 613.2,
+      "normalized_overhead_pct": 451.4,
+      "checkpoints": 2500011
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "C",
+      "granularity": "fine",
+      "size": "10",
+      "native_time": 0.2173,
+      "inst_time": 0.3456,
+      "energy_J": 16.892,
+      "raw_overhead_pct": 59.1,
+      "normalized_overhead_pct": 1.5,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "C++",
+      "granularity": "fine",
+      "size": "10",
+      "native_time": 0.2025,
+      "inst_time": 0.3505,
+      "energy_J": 17.84,
+      "raw_overhead_pct": 73.1,
+      "normalized_overhead_pct": 11.3,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "Java",
+      "granularity": "fine",
+      "size": "10",
+      "native_time": 0.2716,
+      "inst_time": 0.3907,
+      "energy_J": 16.074,
+      "raw_overhead_pct": 43.9,
+      "normalized_overhead_pct": 0,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "fannkuchredux",
+      "language": "Python",
+      "granularity": "fine",
+      "size": "10",
+      "native_time": 0.4635,
+      "inst_time": 5.6886,
+      "energy_J": 440.455,
+      "raw_overhead_pct": 1127.4,
+      "normalized_overhead_pct": 1095.0,
+      "checkpoints": 4
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "C",
+      "granularity": "fine",
+      "size": "18",
+      "native_time": 0.974,
+      "inst_time": 1.3153,
+      "energy_J": 92.884,
+      "raw_overhead_pct": 35.0,
+      "normalized_overhead_pct": 22.2,
+      "checkpoints": 20
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "C++",
+      "granularity": "fine",
+      "size": "18",
+      "native_time": 1.0302,
+      "inst_time": 1.2309,
+      "energy_J": 89.992,
+      "raw_overhead_pct": 19.5,
+      "normalized_overhead_pct": 7.3,
+      "checkpoints": 20
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "Java",
+      "granularity": "fine",
+      "size": "18",
+      "native_time": 0.0664,
+      "inst_time": 1.0637,
+      "energy_J": 63.507,
+      "raw_overhead_pct": 1501.3,
+      "normalized_overhead_pct": 1049.6,
+      "checkpoints": 20
+    },
+    {
+      "benchmark": "binarytrees",
+      "language": "Python",
+      "granularity": "fine",
+      "size": "14",
+      "native_time": 0.6753,
+      "inst_time": 4.3377,
+      "energy_J": 213.644,
+      "raw_overhead_pct": 542.3,
+      "normalized_overhead_pct": 415.3,
+      "checkpoints": 393227
+    }
+  ],
+  "accuracy": {
+    "data": [
+      {
+        "size": 100000,
+        "codegreen_J": 52.8,
+        "perf_J": 45.61,
+        "error_pct": 15.8
+      },
+      {
+        "size": 250000,
+        "codegreen_J": 106.24,
+        "perf_J": 119.07,
+        "error_pct": 10.8
+      },
+      {
+        "size": 500000,
+        "codegreen_J": 212.63,
+        "perf_J": 226.43,
+        "error_pct": 6.1
+      }
+    ],
+    "mean_error_pct": 10.9,
+    "correlation_r": 0.9967,
+    "r_squared": 0.9934
+  },
+  "linearity": {
+    "data": [
+      {
+        "size": 50000,
+        "energy_J": 22.03
+      },
+      {
+        "size": 100000,
+        "energy_J": 42.88
+      },
+      {
+        "size": 200000,
+        "energy_J": 88.96
+      },
+      {
+        "size": 400000,
+        "energy_J": 168.55
+      },
+      {
+        "size": 800000,
+        "energy_J": 344.44
+      }
+    ],
+    "r_squared": 0.9997
+  }
+}

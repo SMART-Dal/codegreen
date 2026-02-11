@@ -1,0 +1,646 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-11T01:06:18.921435",
+    "total_runs": 24
+  },
+  "runs": [
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.6844400000000013,
+      "time_seconds": 0.542932378128171,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T00:59:58.806897",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 7.62297,
+        "last_joules": 8.30741,
+        "energy_delta": 0.6844400000000013
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 0.7055800000000003,
+      "time_seconds": 0.5390189681202173,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:00:01.347235",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 6.89403,
+        "last_joules": 7.59961,
+        "energy_delta": 0.7055800000000003
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "5000",
+      "profiler": "codegreen",
+      "energy_joules": 1.9201400000000008,
+      "time_seconds": 0.5487274061888456,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:00:02.491241",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 6.51627,
+        "last_joules": 8.43641,
+        "energy_delta": 1.9201400000000008
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "5000",
+      "profiler": "codegreen",
+      "energy_joules": 1.9248900000000004,
+      "time_seconds": 0.5533114653080702,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:00:05.045661",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 7.71127,
+        "last_joules": 9.63616,
+        "energy_delta": 1.9248900000000004
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "50000",
+      "profiler": "codegreen",
+      "energy_joules": 15.718,
+      "time_seconds": 0.7302200756967068,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:00:06.570182",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 7.6976,
+        "last_joules": 23.4156,
+        "energy_delta": 15.718
+      }
+    },
+    {
+      "problem": "nbody",
+      "language": "python",
+      "size": "50000",
+      "profiler": "codegreen",
+      "energy_joules": 15.958190000000002,
+      "time_seconds": 0.7302746474742889,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:00:09.301545",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 12,
+        "first_joules": 6.66011,
+        "last_joules": 22.6183,
+        "energy_delta": 15.958190000000002
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "100",
+      "profiler": "codegreen",
+      "energy_joules": 29.89083,
+      "time_seconds": 0.9021426942199469,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:00:11.164749",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 7.88257,
+        "last_joules": 37.7734,
+        "energy_delta": 29.89083
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "100",
+      "profiler": "codegreen",
+      "energy_joules": 30.10181,
+      "time_seconds": 0.9075084570795298,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:00:14.073884",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 7.75099,
+        "last_joules": 37.8528,
+        "energy_delta": 30.10181
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "500",
+      "profiler": "codegreen",
+      "energy_joules": 429.58149,
+      "time_seconds": 5.337932979688048,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:00:24.847958",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 7.33451,
+        "last_joules": 436.916,
+        "energy_delta": 429.58149
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "500",
+      "profiler": "codegreen",
+      "energy_joules": 438.02816,
+      "time_seconds": 5.477837607264519,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:00:32.327239",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 6.74784,
+        "last_joules": 444.776,
+        "energy_delta": 438.02816
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 1661.32233,
+      "time_seconds": 18.963234681636095,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:01:09.860857",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 6.37767,
+        "last_joules": 1667.7,
+        "energy_delta": 1661.32233
+      }
+    },
+    {
+      "problem": "spectralnorm",
+      "language": "python",
+      "size": "1000",
+      "profiler": "codegreen",
+      "energy_joules": 1622.4884,
+      "time_seconds": 18.62189405784011,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:01:30.483928",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 42,
+        "first_joules": 4.5016,
+        "last_joules": 1626.99,
+        "energy_delta": 1622.4884
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "10",
+      "profiler": "codegreen",
+      "energy_joules": 24.073890000000002,
+      "time_seconds": 1.116405587643385,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:01:32.822494",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 24580,
+        "first_joules": 7.45281,
+        "last_joules": 31.5267,
+        "energy_delta": 24.073890000000002
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "10",
+      "profiler": "codegreen",
+      "energy_joules": 23.63807,
+      "time_seconds": 1.0987787581980228,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:01:35.949499",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 24580,
+        "first_joules": 6.47813,
+        "last_joules": 30.1162,
+        "energy_delta": 23.63807
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "14",
+      "profiler": "codegreen",
+      "energy_joules": 64.41489,
+      "time_seconds": 5.55303131043911,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:01:48.414838",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 393224,
+        "first_joules": 8.25331,
+        "last_joules": 72.6682,
+        "energy_delta": 64.41489
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "14",
+      "profiler": "codegreen",
+      "energy_joules": 65.51555,
+      "time_seconds": 5.555520333349705,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:01:56.535526",
+      "checkpoints": [],
+      "checkpoint_summary": {
+        "count": 393224,
+        "first_joules": 7.82995,
+        "last_joules": 73.3455,
+        "energy_delta": 65.51555
+      }
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "18",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 75.47238934785128,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:04:44.032109",
+      "checkpoints": []
+    },
+    {
+      "problem": "binarytrees",
+      "language": "python",
+      "size": "18",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 74.79035812057555,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:06:09.159612",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "7",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.39004852063953876,
+      "output_valid": false,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:06:10.091797",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "7",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.39070248417556286,
+      "output_valid": false,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:06:12.483627",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "10",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.3900830093771219,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:06:13.307533",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "10",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.3906119540333748,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:06:15.699250",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "11",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.39039710350334644,
+      "output_valid": true,
+      "repetition": 1,
+      "timestamp": "2026-02-11T01:06:16.523493",
+      "checkpoints": []
+    },
+    {
+      "problem": "fannkuchredux",
+      "language": "python",
+      "size": "11",
+      "profiler": "codegreen",
+      "energy_joules": 0.0,
+      "time_seconds": 0.38667112216353416,
+      "output_valid": true,
+      "repetition": 2,
+      "timestamp": "2026-02-11T01:06:18.911173",
+      "checkpoints": []
+    }
+  ],
+  "summary": {
+    "nbody/python/50000/codegreen": {
+      "energy": {
+        "mean": 15.838095000000001,
+        "std": 0.1698399777731982,
+        "min": 15.718,
+        "max": 15.958190000000002,
+        "median": 15.838095000000001,
+        "ci95_lower": 15.566440109999998,
+        "ci95_upper": 16.109749890000003,
+        "n": 2
+      },
+      "time": {
+        "mean": 0.7302473615854979,
+        "std": 3.8588073989755414e-05,
+        "min": 0.7302200756967068,
+        "max": 0.7302746474742889,
+        "median": 0.7302473615854979,
+        "ci95_lower": 0.7301856409050524,
+        "ci95_upper": 0.7303090822659433,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "nbody/python/5000/codegreen": {
+      "energy": {
+        "mean": 1.9225150000000006,
+        "std": 0.0033587572106358096,
+        "min": 1.9201400000000008,
+        "max": 1.9248900000000004,
+        "median": 1.9225150000000006,
+        "ci95_lower": 1.9171427500000011,
+        "ci95_upper": 1.9278872500000002,
+        "n": 2
+      },
+      "time": {
+        "mean": 0.5510194357484579,
+        "std": 0.0032414192885637104,
+        "min": 0.5487274061888456,
+        "max": 0.5533114653080702,
+        "median": 0.5510194357484579,
+        "ci95_lower": 0.545834864884615,
+        "ci95_upper": 0.5562040066123008,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "binarytrees/python/14/codegreen": {
+      "energy": {
+        "mean": 64.96522,
+        "std": 0.7782841497807889,
+        "min": 64.41489,
+        "max": 65.51555,
+        "median": 64.96522,
+        "ci95_lower": 63.72037354,
+        "ci95_upper": 66.21006646000001,
+        "n": 2
+      },
+      "time": {
+        "mean": 5.554275821894407,
+        "std": 0.00176000497861036,
+        "min": 5.55303131043911,
+        "max": 5.555520333349705,
+        "median": 5.554275821894407,
+        "ci95_lower": 5.551460736982524,
+        "ci95_upper": 5.55709090680629,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "binarytrees/python/10/codegreen": {
+      "energy": {
+        "mean": 23.855980000000002,
+        "std": 0.3081712773767234,
+        "min": 23.63807,
+        "max": 24.073890000000002,
+        "median": 23.855980000000002,
+        "ci95_lower": 23.36306758,
+        "ci95_upper": 24.348892420000006,
+        "n": 2
+      },
+      "time": {
+        "mean": 1.1075921729207039,
+        "std": 0.012464050631634246,
+        "min": 1.0987787581980228,
+        "max": 1.116405587643385,
+        "median": 1.1075921729207039,
+        "ci95_lower": 1.0876562288179994,
+        "ci95_upper": 1.1275281170234084,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "fannkuchredux/python/11/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.3885341128334403,
+        "std": 0.0026346666719558,
+        "min": 0.38667112216353416,
+        "max": 0.39039710350334644,
+        "median": 0.3885341128334403,
+        "ci95_lower": 0.3843200279381126,
+        "ci95_upper": 0.392748197728768,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "nbody/python/1000/codegreen": {
+      "energy": {
+        "mean": 0.6950100000000008,
+        "std": 0.014948237354282941,
+        "min": 0.6844400000000013,
+        "max": 0.7055800000000003,
+        "median": 0.6950100000000008,
+        "ci95_lower": 0.6711006600000019,
+        "ci95_upper": 0.7189193399999997,
+        "n": 2
+      },
+      "time": {
+        "mean": 0.5409756731241941,
+        "std": 0.002767198754187322,
+        "min": 0.5390189681202173,
+        "max": 0.542932378128171,
+        "median": 0.5409756731241941,
+        "ci95_lower": 0.5365496064051986,
+        "ci95_upper": 0.5454017398431897,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "binarytrees/python/18/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 75.13137373421341,
+        "std": 0.48226890578765147,
+        "min": 74.79035812057555,
+        "max": 75.47238934785128,
+        "median": 75.13137373421341,
+        "ci95_lower": 74.35999641616456,
+        "ci95_upper": 75.90275105226226,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "fannkuchredux/python/7/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.3903755024075508,
+        "std": 0.0004624220509713697,
+        "min": 0.39004852063953876,
+        "max": 0.39070248417556286,
+        "median": 0.3903755024075508,
+        "ci95_lower": 0.38963586964830754,
+        "ci95_upper": 0.3911151351667941,
+        "n": 2
+      },
+      "valid_runs": 0,
+      "total_runs": 2
+    },
+    "fannkuchredux/python/10/codegreen": {
+      "energy": null,
+      "time": {
+        "mean": 0.39034748170524836,
+        "std": 0.0003740203533087854,
+        "min": 0.3900830093771219,
+        "max": 0.3906119540333748,
+        "median": 0.39034748170524836,
+        "ci95_lower": 0.3897492452990264,
+        "ci95_upper": 0.39094571811147033,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "spectralnorm/python/500/codegreen": {
+      "energy": {
+        "mean": 433.804825,
+        "std": 5.972697635445003,
+        "min": 429.58149,
+        "max": 438.02816,
+        "median": 433.804825,
+        "ci95_lower": 424.25164122999996,
+        "ci95_upper": 443.35800877,
+        "n": 2
+      },
+      "time": {
+        "mean": 5.4078852934762836,
+        "std": 0.09892751087870066,
+        "min": 5.337932979688048,
+        "max": 5.477837607264519,
+        "median": 5.4078852934762836,
+        "ci95_lower": 5.249653159687296,
+        "ci95_upper": 5.566117427265271,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "spectralnorm/python/100/codegreen": {
+      "energy": {
+        "mean": 29.99632,
+        "std": 0.14918538869473727,
+        "min": 29.89083,
+        "max": 30.10181,
+        "median": 29.99632,
+        "ci95_lower": 29.757701620000002,
+        "ci95_upper": 30.23493838,
+        "n": 2
+      },
+      "time": {
+        "mean": 0.9048255756497383,
+        "std": 0.00379416730424999,
+        "min": 0.9021426942199469,
+        "max": 0.9075084570795298,
+        "median": 0.9048255756497383,
+        "ci95_lower": 0.89875689785555,
+        "ci95_upper": 0.9108942534439266,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    },
+    "spectralnorm/python/1000/codegreen": {
+      "energy": {
+        "mean": 1641.905365,
+        "std": 27.45973524312371,
+        "min": 1622.4884,
+        "max": 1661.32233,
+        "median": 1641.905365,
+        "ci95_lower": 1597.9841901700001,
+        "ci95_upper": 1685.82653983,
+        "n": 2
+      },
+      "time": {
+        "mean": 18.792564369738102,
+        "std": 0.24136426978058803,
+        "min": 18.62189405784011,
+        "max": 18.963234681636095,
+        "median": 18.792564369738102,
+        "ci95_lower": 18.406508124224843,
+        "ci95_upper": 19.17862061525136,
+        "n": 2
+      },
+      "valid_runs": 2,
+      "total_runs": 2
+    }
+  }
+}

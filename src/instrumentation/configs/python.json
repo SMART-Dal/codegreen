@@ -44,16 +44,6 @@
                 "mode": "inside_end",
                 "find_last_statement": true
             },
-            "class_enter": {
-                "mode": "query_target",
-                "query": "class_body_start",
-                "placement": "before",
-                "fallback_mode": "inside_start"
-            },
-            "class_exit": {
-                "mode": "inside_end",
-                "find_last_statement": true
-            },
             "before": {
                 "mode": "before"
             },
@@ -62,38 +52,31 @@
             }
         }
     },
+    "custom_queries": {
+        "definitions": "(function_definition name: (identifier) @function_name body: (block) @function_body) @function_def",
+        "loops": "(for_statement) @loop.for (while_statement) @loop.while",
+        "returns": "(return_statement) @return"
+    },
     "query_config": {
         "capture_mapping": {
-            "local.definition.function": "function_enter",
-            "function": "function_enter",
-            "local.definition.type": "class_enter",
-            "type.definition": "class_enter",
-            "keyword.return": "function_exit",
+            "function_def": "function_enter",
+            "function_name": "function_enter",
             "return": "function_exit"
         },
         "priority_order": [
-            "local.definition.function",
-            "function",
-            "local.definition.type",
-            "type.definition",
-            "keyword.return",
+            "function_def",
+            "function_name",
             "return"
         ],
         "deduplication_rules": {
             "function_exit": {
                 "scope": "function",
-                "priority_order": [
-                    "keyword.return",
-                    "return"
-                ],
+                "priority_order": ["return"],
                 "max_per_function": 1
             },
             "function_enter": {
                 "scope": "function",
-                "priority_order": [
-                    "local.definition.function",
-                    "function"
-                ],
+                "priority_order": ["function_def", "function_name"],
                 "max_per_function": 1
             }
         }
@@ -103,7 +86,6 @@
         "templates": {
             "function_enter": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'enter')",
             "function_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'exit')",
-            "class_enter": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'class_enter')",
             "loop_start": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_start')",
             "loop_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_exit')"
         },

@@ -52,9 +52,9 @@ CodeGreen is a comprehensive energy monitoring and optimization tool designed to
 
 - **🔋 Energy Monitoring**: Real-time monitoring of CPU, GPU, and system energy consumption
 - **📊 Code Analysis**: Language-agnostic code analysis for energy optimization opportunities  
-- **🛠️ IDE Integration**: Support for VSCode, IntelliJ, and other popular IDEs
+<!-- - **🛠️ IDE Integration**: Support for VSCode, IntelliJ, and other popular IDEs -->
 - **🔌 Hardware Plugins**: Extensible plugin system for different hardware platforms
-- **📈 Visualization**: Charts and reports for energy consumption analysis
+<!-- - **📈 Visualization**: Charts and reports for energy consumption analysis -->
 - **⚡ Code Instrumentation**: Automatic code instrumentation for energy profiling
 
 ## Quick Start

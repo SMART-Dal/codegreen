@@ -1,0 +1,104 @@
+{
+  "nbody": {
+    "Python": {
+      "energy_mean": 5.5653,
+      "energy_std": 0.083,
+      "inst_time": 0.3555,
+      "native_time": 0.062,
+      "overhead_pct": 473.5,
+      "checkpoints": 25011
+    },
+    "C": {
+      "energy_mean": 0.978,
+      "energy_std": 0.0435,
+      "inst_time": 0.1544,
+      "native_time": 0.0027,
+      "overhead_pct": 5588.4,
+      "checkpoints": 10008
+    },
+    "C++": {
+      "energy_mean": 0.9743,
+      "energy_std": 0.0379,
+      "inst_time": 0.1562,
+      "native_time": 0.0027,
+      "overhead_pct": 5670.6,
+      "checkpoints": 10008
+    },
+    "Java": {
+      "energy_mean": 2.675,
+      "energy_std": 0.1988,
+      "inst_time": 0.2357,
+      "native_time": 0.0726,
+      "overhead_pct": 224.5,
+      "checkpoints": 10006
+    }
+  },
+  "fannkuchredux": {
+    "Python": {
+      "energy_mean": 0.9257,
+      "energy_std": 0.049,
+      "inst_time": 0.1891,
+      "native_time": 0.0448,
+      "overhead_pct": 322.1,
+      "checkpoints": 4
+    },
+    "C": {
+      "energy_mean": 0.0,
+      "energy_std": 0.0,
+      "inst_time": 0.1306,
+      "native_time": 0.0022,
+      "overhead_pct": 5936.8,
+      "checkpoints": 4
+    },
+    "C++": {
+      "energy_mean": 0.0636,
+      "energy_std": 0.0017,
+      "inst_time": 0.1309,
+      "native_time": 0.1307,
+      "overhead_pct": 0.1,
+      "checkpoints": 4
+    },
+    "Java": {
+      "energy_mean": 0.9673,
+      "energy_std": 0.0836,
+      "inst_time": 0.2007,
+      "native_time": 0.0882,
+      "overhead_pct": 127.5,
+      "checkpoints": 4
+    }
+  },
+  "binarytrees": {
+    "Python": {
+      "energy_mean": 60.2435,
+      "energy_std": 0.6021,
+      "inst_time": 1.082,
+      "native_time": 0.4398,
+      "overhead_pct": 146.0,
+      "checkpoints": 24580
+    },
+    "C": {
+      "energy_mean": 0.3793,
+      "energy_std": 0.1043,
+      "inst_time": 0.1364,
+      "native_time": 0.0058,
+      "overhead_pct": 2241.7,
+      "checkpoints": 12
+    },
+    "C++": {
+      "energy_mean": 0.4803,
+      "energy_std": 0.0344,
+      "inst_time": 0.1298,
+      "native_time": 0.137,
+      "overhead_pct": -5.3,
+      "checkpoints": 12
+    },
+    "Java": {
+      "energy_mean": 1.2893,
+      "energy_std": 0.0122,
+      "inst_time": 0.2127,
+      "native_time": 0.0633,
+      "overhead_pct": 236.1,
+      "checkpoints": 12
+    }
+  }
+}

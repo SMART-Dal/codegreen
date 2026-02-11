@@ -121,24 +121,27 @@ void MeasurementCoordinator::stop_measurements() {
     if (!running_.load()) {
         return;
     }
-    
-    std::cout << "⏹️  Stopping coordinated measurements..." << std::endl;
-    
+
     running_.store(false);
-    
+
     // Wake up any waiting threads
+    {
+        std::lock_guard<std::mutex> lock(shutdown_mutex_);
+        shutdown_cv_.notify_all();
+    }
     readings_condition_.notify_all();
-    
-    // Wait for threads to finish
-    if (measurement_thread_.joinable()) {
-        measurement_thread_.join();
-    }
-    
-    if (provider_health_thread_.joinable()) {
-        provider_health_thread_.join();
-    }
-    
-    std::cout << "  ✅ Measurements stopped" << std::endl;
+
+    // Join with timeout to prevent hangs
+    auto join_with_timeout = [](std::thread& t, int timeout_ms) {
+        if (!t.joinable()) return;
+        auto fut = std::async(std::launch::async, [&t]{ t.join(); });
+        if (fut.wait_for(std::chrono::milliseconds(timeout_ms)) == std::future_status::timeout) {
+            t.detach();
+        }
+    };
+
+    join_with_timeout(measurement_thread_, 2000);
+    join_with_timeout(provider_health_thread_, 1000);
 }
 
 SynchronizedReading MeasurementCoordinator::get_synchronized_reading() {
@@ -275,45 +278,45 @@ void MeasurementCoordinator::reset_statistics() {
 void MeasurementCoordinator::measurement_loop() {
     while (running_.load()) {
         auto start_time = std::chrono::steady_clock::now();
-        
+
         try {
             auto provider_readings = collect_provider_readings();
             auto synchronized_reading = align_measurements(provider_readings);
-            
-            // Apply filtering and validation
+
             if (config_.enable_real_time_filtering) {
                 apply_real_time_filtering(synchronized_reading);
             }
-            
+
             bool validation_passed = true;
             if (config_.enable_outlier_detection) {
                 validation_passed = cross_validate_measurements(synchronized_reading);
             }
-            
-            // Buffer the reading
+
             buffer_reading(synchronized_reading);
-            
-            // Update statistics
             update_statistics(synchronized_reading, validation_passed);
-            
+
         } catch (const std::exception& e) {
             std::cerr << "Error in measurement loop: " << e.what() << std::endl;
         }
-        
-        // Maintain target interval
+
+        // Use condition variable wait instead of sleep for immediate shutdown response
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         auto sleep_time = config_.measurement_interval - elapsed;
-        
+
         if (sleep_time > std::chrono::milliseconds::zero()) {
-            std::this_thread::sleep_for(sleep_time);
+            std::unique_lock<std::mutex> lock(shutdown_mutex_);
+            shutdown_cv_.wait_for(lock, sleep_time, [this]{ return !running_.load(); });
         }
     }
 }
 
 void MeasurementCoordinator::provider_health_loop() {
     while (running_.load()) {
-        std::this_thread::sleep_for(config_.provider_restart_interval);
-        
+        {
+            std::unique_lock<std::mutex> lock(shutdown_mutex_);
+            shutdown_cv_.wait_for(lock, config_.provider_restart_interval, [this]{ return !running_.load(); });
+        }
+        if (!running_.load()) break;
         if (config_.auto_restart_failed_providers) {
             check_provider_health();
         }
