@@ -60,10 +60,6 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
-extra_head:
-  - <link rel="apple-touch-icon" sizes="180x180" href="/codegreen/assets/apple-touch-icon.png">
-  - <link rel="manifest" href="/codegreen/assets/manifest.webmanifest">
-
 copyright: Copyright &copy; 2024 CodeGreen Team
 
 plugins:
