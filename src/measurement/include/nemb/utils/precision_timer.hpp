@@ -3,6 +3,7 @@
 #include <chrono>
 #include <atomic>
 #include <memory>
+#include <string>
 
 namespace codegreen::nemb::utils {
 
