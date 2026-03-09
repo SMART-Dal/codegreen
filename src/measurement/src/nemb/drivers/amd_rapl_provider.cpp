@@ -1,5 +1,6 @@
 #include "../../../include/nemb/core/energy_provider.hpp"
 #include "../../../include/nemb/hal/counter_manager.hpp"
+#include "../../../include/nemb/utils/precision_timer.hpp"
 #include <iostream>
 #include <fstream>
 #include <fcntl.h>
@@ -62,8 +63,7 @@ public:
             return {};
         }
 
-        auto now = std::chrono::steady_clock::now();
-        uint64_t ts = now.time_since_epoch().count();
+        uint64_t ts = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
         uint32_t raw32 = static_cast<uint32_t>(raw_energy & 0xFFFFFFFF);
         uint64_t accumulated = counter_.update(raw32, ts);
         double energy_j = accumulated * energy_unit_;
@@ -75,12 +75,12 @@ public:
         reading.domain_energy_joules["package"] = energy_j;
 
         // Compute average power
-        double dt = std::chrono::duration<double>(now - last_time_).count();
-        if (dt > 0 && last_energy_ >= 0) {
-            reading.average_power_watts = (energy_j - last_energy_) / dt;
+        if (last_ts_ns_ > 0 && last_energy_ >= 0) {
+            double dt = static_cast<double>(ts - last_ts_ns_) / 1e9;
+            if (dt > 0) reading.average_power_watts = (energy_j - last_energy_) / dt;
         }
         last_energy_ = energy_j;
-        last_time_ = now;
+        last_ts_ns_ = ts;
 
         record_measurement_attempt(true);
         return reading;
@@ -122,7 +122,7 @@ private:
     bool initialized_{false};
     hal::Counter32 counter_{std::numeric_limits<uint32_t>::max(), "amd_pkg"};
     double last_energy_{-1.0};
-    std::chrono::steady_clock::time_point last_time_;
+    uint64_t last_ts_ns_{0};
 };
 
 std::unique_ptr<EnergyProvider> create_amd_rapl_provider() {

@@ -7,7 +7,23 @@ echo "====================="
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
 
+# Parse flags
+SKIP_RAPL=0
+UPGRADE=0
+for arg in "$@"; do
+    case "$arg" in
+        --skip-rapl) SKIP_RAPL=1 ;;
+        --upgrade) UPGRADE=1 ;;
+        --help)
+            echo "Usage: ./install.sh [--skip-rapl] [--upgrade]"
+            echo "  --skip-rapl  Skip RAPL sensor permission setup"
+            echo "  --upgrade    Rebuild and reinstall (preserves config)"
+            exit 0 ;;
+    esac
+done
+
 # --- System Requirements ---
+echo ""
 echo "Checking system requirements..."
 
 if ! command -v python3 &> /dev/null; then
@@ -19,7 +35,7 @@ PYTHON_VERSION=$(python3 --version | awk '{print $2}')
 PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
 PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || [ "$PYTHON_MAJOR" -eq 3 -a "$PYTHON_MINOR" -lt 8 ]; then
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 8 ]; }; then
     echo "Error: Python 3.8+ required, found $PYTHON_VERSION"
     exit 1
 fi
@@ -34,33 +50,34 @@ done
 echo "[ok] CMake $(cmake --version | head -1 | awk '{print $3}')"
 echo "[ok] g++ $(g++ --version | head -1 | awk '{print $NF}')"
 
+if ! command -v perf &> /dev/null; then
+    echo "[!!] perf not found (needed for 'codegreen run' and benchmark validation)"
+    echo "     Install with: sudo apt install linux-tools-$(uname -r)"
+fi
+
 # --- Git Submodules ---
-echo ""
-echo "Initializing submodules..."
-git submodule update --init --recursive 2>/dev/null || {
-    echo "Warning: git submodule update failed (not a git checkout?)"
-}
+if [ -d .git ]; then
+    echo ""
+    echo "Initializing submodules..."
+    git submodule update --init --recursive 2>/dev/null || true
+fi
 
 # --- Python Dependencies ---
 echo ""
 echo "Installing Python dependencies..."
 
-export PIP_BREAK_SYSTEM_PACKAGES=1
 IS_VENV=$(python3 -c "import sys; print(1 if sys.prefix != sys.base_prefix else 0)")
 
-PIP_USER_FLAG="--user"
-SUDO_CMD=""
-
+PIP_FLAGS=""
 if [ "$IS_VENV" -eq 1 ]; then
     echo "Virtual environment detected."
-    PIP_USER_FLAG=""
+else
+    PIP_FLAGS="--user"
+    export PIP_BREAK_SYSTEM_PACKAGES=1
 fi
 
-python3 -m pip install $PIP_USER_FLAG --upgrade pip setuptools wheel 2>&1 | tail -1
-python3 -m pip install $PIP_USER_FLAG -r requirements.txt 2>&1 | tail -1
-python3 -m pip install $PIP_USER_FLAG cmake-build-extension pybind11 2>&1 | tail -1
-
-unset PIP_BREAK_SYSTEM_PACKAGES
+python3 -m pip install $PIP_FLAGS --upgrade pip setuptools wheel 2>&1 | tail -1
+python3 -m pip install $PIP_FLAGS -r requirements.txt 2>&1 | tail -1
 
 # --- Build C++ Backend ---
 echo ""
@@ -70,8 +87,15 @@ BUILD_DIR="$PROJECT_ROOT/build"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-cmake .. -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=$(which python3) 2>&1 | tail -3
-make -j$(nproc) 2>&1 | tail -3
+if [ "$UPGRADE" -eq 1 ]; then
+    echo "Clean rebuild..."
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=$(which python3) 2>&1 | tail -3
+else
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=$(which python3) 2>&1 | tail -3
+fi
+make -j$(nproc) 2>&1 | tail -5
+
+cd "$PROJECT_ROOT"
 
 if [ ! -f "$PROJECT_ROOT/lib/libcodegreen-nemb.so" ]; then
     echo "Error: Build failed - libcodegreen-nemb.so not produced"
@@ -79,123 +103,119 @@ if [ ! -f "$PROJECT_ROOT/lib/libcodegreen-nemb.so" ]; then
 fi
 echo "[ok] libcodegreen-nemb.so built"
 
-cd "$PROJECT_ROOT"
-
 # --- Install Python Package ---
 echo ""
 echo "Installing CodeGreen CLI..."
 
-export PIP_BREAK_SYSTEM_PACKAGES=1
-python3 -m pip uninstall -y codegreen 2>/dev/null || true
-python3 -m pip install $PIP_USER_FLAG -e . 2>&1 | tail -1
+python3 -m pip install $PIP_FLAGS -e . 2>&1 | tail -1
 unset PIP_BREAK_SYSTEM_PACKAGES
 
-# --- Install Library ---
+# --- Install Shared Library ---
 echo ""
 echo "Installing shared library..."
-LIB_INSTALL_DIR="$PROJECT_ROOT/lib"
+LIB_DIR="$PROJECT_ROOT/lib"
 
-# Also install to /usr/local/lib if writable (for LD path)
 if [ -w /usr/local/lib ]; then
-    cp "$LIB_INSTALL_DIR/libcodegreen-nemb.so" /usr/local/lib/
+    cp "$LIB_DIR/libcodegreen-nemb.so" /usr/local/lib/
     ldconfig 2>/dev/null || true
     echo "[ok] Library installed to /usr/local/lib"
 else
-    echo "Note: Install library system-wide with:"
-    echo "  sudo cp $LIB_INSTALL_DIR/libcodegreen-nemb.so /usr/local/lib/ && sudo ldconfig"
+    # Ensure LD_LIBRARY_PATH includes our lib dir
+    echo "[ok] Library at $LIB_DIR"
+    if ! echo "$LD_LIBRARY_PATH" | grep -q "$LIB_DIR"; then
+        echo "     Add to shell profile: export LD_LIBRARY_PATH=\"$LIB_DIR:\$LD_LIBRARY_PATH\""
+    fi
 fi
 
 # --- Verify Installation ---
 echo ""
 echo "Verifying installation..."
 
-INSTALL_BIN="$(python3 -m site --user-base 2>/dev/null)/bin"
 if [ "$IS_VENV" -eq 1 ]; then
     INSTALL_BIN="$(python3 -c 'import sys; print(sys.prefix)')/bin"
+else
+    INSTALL_BIN="$(python3 -m site --user-base 2>/dev/null)/bin"
 fi
 export PATH="$INSTALL_BIN:$PATH"
 
 if command -v codegreen &>/dev/null; then
-    echo "[ok] codegreen CLI installed"
+    CG_PATH=$(which codegreen)
+    echo "[ok] codegreen CLI: $CG_PATH"
+    # Quick smoke test
+    if codegreen --help &>/dev/null; then
+        echo "[ok] CLI responds to --help"
+    else
+        echo "[!!] CLI installed but --help failed"
+    fi
 else
-    echo "Warning: codegreen not in PATH"
-    echo "  Add: export PATH=\"$INSTALL_BIN:\$PATH\""
+    echo "[!!] codegreen not in PATH"
+    echo "     Add: export PATH=\"$INSTALL_BIN:\$PATH\""
 fi
 
 # --- RAPL Sensor Permissions ---
-echo ""
-echo "Setting up energy sensor permissions..."
+if [ "$SKIP_RAPL" -eq 0 ]; then
+    echo ""
+    echo "Setting up energy sensor permissions..."
 
-RAPL_OK=0
-if [ -r "/sys/class/powercap/intel-rapl:0/energy_uj" ]; then
-    echo "[ok] Intel RAPL sensors already accessible"
-    RAPL_OK=1
-elif [ "$(id -u)" -eq 0 ]; then
-    # Running as root (sudo ./install.sh) - set up RAPL now
-    ACTUAL_USER="${SUDO_USER:-$USER}"
-    if [ "$ACTUAL_USER" != "root" ]; then
-        echo "Setting up RAPL access for $ACTUAL_USER..."
-        echo "  (Read-only access to energy counters via group permissions)"
-        echo "  (Same approach as CodeCarbon, Scaphandre, and other energy tools)"
+    RAPL_OK=0
+    if [ -r "/sys/class/powercap/intel-rapl:0/energy_uj" ]; then
+        echo "[ok] RAPL sensors accessible"
+        RAPL_OK=1
+    elif [ "$(id -u)" -eq 0 ]; then
+        ACTUAL_USER="${SUDO_USER:-$USER}"
+        if [ "$ACTUAL_USER" != "root" ]; then
+            echo "Setting up RAPL access for $ACTUAL_USER..."
 
-        # Create codegreen group
-        if ! getent group codegreen > /dev/null 2>&1; then
-            groupadd codegreen
-            echo "  [ok] Created 'codegreen' group"
+            if ! getent group codegreen > /dev/null 2>&1; then
+                groupadd codegreen
+                echo "  [ok] Created 'codegreen' group"
+            fi
+
+            if ! id -nG "$ACTUAL_USER" | grep -qw codegreen; then
+                usermod -aG codegreen "$ACTUAL_USER"
+                echo "  [ok] Added $ACTUAL_USER to 'codegreen' group"
+            fi
+
+            RAPL_COUNT=0
+            for f in /sys/class/powercap/intel-rapl*/energy_uj /sys/class/powercap/intel-rapl*/max_energy_range_uj; do
+                [ -f "$f" ] && chgrp codegreen "$f" 2>/dev/null && chmod g+r "$f" 2>/dev/null && RAPL_COUNT=$((RAPL_COUNT+1))
+            done
+
+            UDEV_RULE='/etc/udev/rules.d/99-codegreen-rapl.rules'
+            echo 'SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"' > "$UDEV_RULE"
+            udevadm control --reload-rules 2>/dev/null || true
+            udevadm trigger 2>/dev/null || true
+
+            if [ "$RAPL_COUNT" -gt 0 ]; then
+                echo "  [ok] RAPL permissions set ($RAPL_COUNT files)"
+                echo "  [ok] Udev rule: $UDEV_RULE"
+                RAPL_OK=1
+                echo ""
+                echo "  Log out and back in for group membership to take effect"
+            else
+                echo "  [!!] No RAPL files found (CPU may not support RAPL)"
+            fi
         fi
-
-        # Add user to group
-        if ! id -nG "$ACTUAL_USER" | grep -qw codegreen; then
-            usermod -aG codegreen "$ACTUAL_USER"
-            echo "  [ok] Added $ACTUAL_USER to 'codegreen' group"
-        fi
-
-        # Set RAPL file permissions
-        RAPL_COUNT=0
-        for f in /sys/class/powercap/intel-rapl*/energy_uj /sys/class/powercap/intel-rapl*/max_energy_range_uj; do
-            [ -f "$f" ] && chgrp codegreen "$f" 2>/dev/null && chmod g+r "$f" 2>/dev/null && RAPL_COUNT=$((RAPL_COUNT+1))
-        done
-
-        # Udev rule for persistence across reboots
-        UDEV_RULE='/etc/udev/rules.d/99-codegreen-rapl.rules'
-        echo 'SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"' > "$UDEV_RULE"
-        udevadm control --reload-rules 2>/dev/null || true
-        udevadm trigger 2>/dev/null || true
-
-        if [ "$RAPL_COUNT" -gt 0 ]; then
-            echo "  [ok] Set read permissions on $RAPL_COUNT RAPL sysfs files"
-            echo "  [ok] Udev rule: $UDEV_RULE (persists across reboots)"
-            echo "  [ok] Group: 'codegreen' with read-only access to /sys/class/powercap/"
-            RAPL_OK=1
-            echo ""
-            echo "[!!] Log out and log back in for group membership to take effect"
-            echo "     Verify with: groups | grep codegreen"
-        else
-            echo "  [!!] No RAPL files found in /sys/class/powercap/"
-            echo "       CPU may not support RAPL energy counters"
-        fi
+    else
+        echo "[!!] RAPL not accessible. Fix with: sudo ./install.sh"
     fi
-else
-    echo "[!!] RAPL sensors not accessible (permission denied)"
-    echo "  RAPL files at /sys/class/powercap/intel-rapl*/energy_uj need read access"
-    echo "  Fix: re-run installer with sudo, or run:"
-    echo "    sudo codegreen init-sensors"
-    echo "    (then log out and back in for group changes)"
 fi
 
+# --- Summary ---
 echo ""
-echo "Installation complete!"
+echo "==============================="
+echo "Installation complete"
+echo "==============================="
 echo ""
-echo "What was installed:"
 echo "  Library: $PROJECT_ROOT/lib/libcodegreen-nemb.so"
-echo "  CLI:     $(which codegreen 2>/dev/null || echo '$INSTALL_BIN/codegreen')"
-if [ "$RAPL_OK" -eq 1 ]; then
-echo "  Sensors: RAPL access via 'codegreen' group (read-only)"
-fi
+echo "  CLI:     $(which codegreen 2>/dev/null || echo "$INSTALL_BIN/codegreen")"
+echo "  Version: $(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])' 2>/dev/null || echo '0.1.0')"
 echo ""
 echo "Quick start:"
-echo "  codegreen measure python your_script.py"
-echo "  codegreen measure python your_script.py -g fine --export-plot energy.html"
-echo "  codegreen benchmark python nbody 50000"
+echo "  codegreen measure python script.py"
+echo "  codegreen measure python script.py -g fine --json"
+echo "  codegreen run -- python script.py"
+echo "  codegreen run --budget 10.0 --json -- python train.py"
 echo ""
-echo "Docs: https://smart-dal.github.io/codegreen/"
+echo "Upgrade: ./install.sh --upgrade"
+echo "Docs:    https://smart-dal.github.io/codegreen/"

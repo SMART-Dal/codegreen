@@ -74,8 +74,9 @@ private:
     EnergyResult convert_synchronized_reading(const nemb::SynchronizedReading& sync_reading) const;
 };
 
-EnergyMeter::Impl::Impl(const NEMBConfig& config) 
+EnergyMeter::Impl::Impl(const NEMBConfig& config)
     : config_(config), timer_() {
+    timer_.initialize(nemb::utils::PrecisionTimer::ClockSource::MONOTONIC);
     
     auto nemb_config = nemb::ConfigLoader::load_config();
     

@@ -1,4 +1,5 @@
 #include "../../../include/nemb/drivers/amd_gpu_provider.hpp"
+#include "../../../include/nemb/utils/precision_timer.hpp"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -200,8 +201,7 @@ EnergyReading AMDGPUProvider::get_reading() {
     reading.average_power_watts = total_power;
     reading.domain_energy_joules = std::move(domain_energy);
     reading.domain_power_watts = std::move(domain_power);
-    reading.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        now.time_since_epoch()).count();
+    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
     reading.provider_id = "amd_gpu";
     reading.confidence = (active_gpus > 0) ? 0.97 : 0.0; // 97% confidence for ROCm SMI
     reading.uncertainty_percent = (active_gpus > 0) ? 3.0 : 100.0; // 3% uncertainty for ROCm SMI

@@ -73,6 +73,30 @@ std::string PrecisionTimer::get_clock_source_name() const {
  }
 }
 
+bool PrecisionTimer::initialize(ClockSource source) {
+ if (source == ClockSource::TSC_INVARIANT) {
+ return initialize(); // auto-select handles TSC
+ }
+ clockid_t clock_id;
+ switch (source) {
+ case ClockSource::MONOTONIC_RAW: clock_id = CLOCK_MONOTONIC_RAW; break;
+ case ClockSource::MONOTONIC: clock_id = CLOCK_MONOTONIC; break;
+ case ClockSource::REALTIME: clock_id = CLOCK_REALTIME; break;
+ default: return false;
+ }
+ double resolution = measure_clock_resolution(clock_id);
+ if (resolution <= 0 || resolution >= 1000000) return false;
+ clock_source_ = source;
+ resolution_ns_ = resolution;
+ return true;
+}
+
+uint64_t PrecisionTimer::monotonic_timestamp_ns() {
+ struct timespec ts;
+ clock_gettime(CLOCK_MONOTONIC, &ts);
+ return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
+}
+
 bool PrecisionTimer::is_tsc_available() {
 #ifdef __x86_64__
  uint32_t eax, ebx, ecx, edx;

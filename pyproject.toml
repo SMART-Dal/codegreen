@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64", "wheel", "cmake-build-extension>=0.6.0", "pybind11>=3.0.0"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -34,8 +34,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: C++",
     "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS",
-    "Operating System :: Microsoft :: Windows",
     "Environment :: Console"
 ]
 requires-python = ">=3.8"

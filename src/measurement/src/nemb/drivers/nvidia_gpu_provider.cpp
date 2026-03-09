@@ -1,4 +1,5 @@
 #include "../../../include/nemb/drivers/nvidia_gpu_provider.hpp"
+#include "../../../include/nemb/utils/precision_timer.hpp"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -237,8 +238,7 @@ EnergyReading NVIDIAGPUProvider::get_reading() {
     reading.average_power_watts = total_power;
     reading.domain_energy_joules = std::move(domain_energy);
     reading.domain_power_watts = std::move(domain_power);
-    reading.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        now.time_since_epoch()).count();
+    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
     reading.provider_id = "nvidia_gpu";
     reading.confidence = (active_gpus > 0) ? 0.98 : 0.0; // 98% confidence for NVML
     reading.uncertainty_percent = (active_gpus > 0) ? 2.0 : 100.0; // 2% uncertainty for NVML

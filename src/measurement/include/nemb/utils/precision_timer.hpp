@@ -28,10 +28,17 @@ public:
     ~PrecisionTimer() = default;
     
     /**
-     * @brief Initialize the precision timer
+     * @brief Initialize the precision timer (auto-selects best clock)
      * @return true if initialization successful
      */
     bool initialize();
+
+    /**
+     * @brief Initialize with a specific clock source
+     * @param source Clock source to use
+     * @return true if initialization successful
+     */
+    bool initialize(ClockSource source);
     
     /**
      * @brief Get current timestamp in nanoseconds
@@ -70,6 +77,12 @@ public:
      * @return true if TSC can be used for timing
      */
     static bool is_tsc_available();
+
+    /**
+     * @brief Get CLOCK_MONOTONIC timestamp (for use by energy providers)
+     * Ensures all components use the same time base for checkpoint correlation.
+     */
+    static uint64_t monotonic_timestamp_ns();
     
     /**
      * @brief Measure elapsed time between two timestamps

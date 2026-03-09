@@ -1,4 +1,5 @@
 #include "../../../include/nemb/drivers/intel_rapl_provider.hpp"
+#include "../../../include/nemb/utils/precision_timer.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -80,10 +81,7 @@ EnergyReading IntelRAPLProvider::get_reading() {
     EnergyReading reading;
     reading.provider_id = "intel_rapl";
 
-    // Use CLOCK_MONOTONIC to match PrecisionTimer for checkpoint correlation
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    reading.timestamp_ns = static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
+    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
 
     // Keep system_time for compatibility and dt calculation
     auto now = std::chrono::steady_clock::now();

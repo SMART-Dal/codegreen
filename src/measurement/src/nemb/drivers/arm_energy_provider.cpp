@@ -1,4 +1,5 @@
 #include "../../../include/nemb/core/energy_provider.hpp"
+#include "../../../include/nemb/utils/precision_timer.hpp"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -47,7 +48,7 @@ public:
         }
 
         EnergyReading reading;
-        reading.timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+        reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
         reading.energy_joules = microjoules / 1e6;
         reading.provider_id = "arm_eas";
         reading.domain_energy_joules["soc"] = reading.energy_joules;
