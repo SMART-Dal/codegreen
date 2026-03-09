@@ -37,7 +37,8 @@ jobs:
         CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
         # Install build deps inside container
         CIBW_BEFORE_ALL_LINUX: >
-          yum install -y cmake gcc-c++ make pkgconfig &&
+          yum install -y epel-release &&
+          yum install -y cmake gcc-c++ make pkgconfig jsoncpp-devel libcurl-devel sqlite-devel &&
           git submodule update --init --recursive
         # Build C++ and set RPATH so .so is found at runtime
         CIBW_BEFORE_BUILD: >
