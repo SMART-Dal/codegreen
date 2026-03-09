@@ -2,126 +2,125 @@
   <img src="docs/website/docs/assets/codegreen_logo.svg#gh-light-mode-only" width="200" alt="CodeGreen Logo">
   <img src="docs/website/docs/assets/codegreen_logo_white.svg#gh-dark-mode-only" width="200" alt="CodeGreen Logo">
 </p>
-<!-- add zenodo doi badge -->
 
 [![DOI](https://zenodo.org/badge/942273936.svg)](https://doi.org/10.5281/zenodo.18371771)
 
-
-# CodeGreen - Energy Monitoring and Code Optimization Tool
+# CodeGreen - Garage for Energy Measurement and Optimization
 
 CodeGreen is a comprehensive tool for fine-grained energy profiling and optimization of code. It provides real-time energy measurement during code execution, identifies energy hotspots, and offers optimization suggestions to reduce energy consumption.
 
-## 🚀 Quick Start
+## Installation
 
-### Prerequisites
+### From PyPI (recommended for users)
 
-- **Linux** (Primary platform, Kernel 5.0+ required for RAPL energy measurement)
-- **Python 3.8+**
-- **C++ Build Tools**: `gcc`, `g++`, and **CMake** (required for NEMB energy sensors)
+```bash
+pip install codegreen
+```
 
-### Installation
+Requires Linux with RAPL support. The wheel includes the pre-built C++ measurement backend.
 
-#### Easy Installation (Recommended)
+### From source (recommended for development)
 
 ```bash
 git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 ./install.sh
 
-# Add to PATH
-export PATH="$HOME/.local/bin:$PATH"
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-
-# One-time sensor setup (sets permanent permissions)
-sudo codegreen init-sensors
-
-# Log out and log back in once
-# After that, no sudo needed!
+# For RAPL sensor access (one-time, requires sudo):
+sudo ./install.sh   # or: sudo codegreen init-sensors
+# Then log out and back in for group permissions
 ```
 
-The installer automatically:
-- Checks system requirements
-- Installs Python dependencies and CLI tool
-- Builds C++ measurement engine
+### Requirements
 
-#### System Requirements
+- Linux (kernel 5.0+, Ubuntu 20.04+, Debian 11+, Fedora 35+, MacOS)
+- Python 3.9+
+- CMake 3.16+, g++ 9+ (for source builds only)
+- Intel or AMD CPU with RAPL support
+- `perf` (for `codegreen run` and benchmark validation)
 
-- Linux (Ubuntu 20.04+, Debian 11+, Fedora 35+) or macOS
-- Python 3.8+
-- CMake 3.15+
-- C++ compiler (gcc 9+ or clang 10+)
-- Make
-- Intel CPU with RAPL support (for energy measurement)
+## Usage
 
-See [INSTALL.md](INSTALL.md) for detailed installation instructions and troubleshooting.
+### Measure energy of any command (like hyperfine, but for energy)
 
-## 📊 Basic Usage
-
-Once installed, use the `codegreen` CLI to measure and analyze your code.
-
-### 1. Verify Environment
-Check which hardware sensors (CPU, GPU, NVIDIA) are active on your system:
 ```bash
-codegreen info
+codegreen run -- python script.py
+codegreen run --repeat 20 --warmup 3 -- ./my_binary arg1 arg2
+codegreen run --budget 10.0 --json -- python train.py   # CI/CD gate
 ```
 
-### 2. Static Analysis (Identify Hotspots)
-Analyze a source file to see where energy checkpoints will be added. This uses our language-agnostic Tree-sitter query engine:
+### Per-function energy profiling
+
 ```bash
-codegreen analyze python tests/complex_python_cases.py --save-instrumented
-```
-*This produces an `_instrumented.py` file with measurement calls inserted at every function entry and return path.*
+# Coarse mode: total program energy
+codegreen measure python script.py
 
-### 3. Dynamic Measurement (Real-time Energy)
-Execute your code and capture actual Joule (J) and Watt (W) consumption data:
+# Fine mode: per-function energy breakdown
+codegreen measure python script.py -g fine --json
+
+# With energy timeline plot
+codegreen measure python script.py -g fine --export-plot energy.html
+```
+
+### Static analysis (no execution)
+
 ```bash
-codegreen measure python my_script.py
+codegreen analyze python script.py --save-instrumented
 ```
 
-## 🔌 Pluggable Language Support
+### Benchmark validation (against perf RAPL ground truth)
 
-CodeGreen is designed to be language-agnostic. To add support for a new language (e.g., **Go** or **Rust**), you do not need to modify the core engine:
+```bash
+codegreen benchmark -p nbody spectralnorm -l python -r 5 --profilers codegreen perf
+```
 
-1.  **Config**: Drop a `<language>.json` file into `src/instrumentation/configs/`.
-2.  **Queries**: Add Tree-sitter `.scm` queries to the `third_party/nvim-treesitter/queries/` directory.
-3.  **Run**: Immediately start analyzing with `codegreen analyze <language> <file>`.
+## Output formats
 
-## 🏗️ Architecture
+JSON (default for `--json`), CSV, Markdown table, and text summary. The JSON output is a comprehensive single source of truth containing system state, per-function energy, instrumentation points with AST-stable identifiers, and statistical analysis.
 
-CodeGreen uses a hybrid C++/Python architecture for optimal performance:
+## Language support
 
-- **C++ Core (NEMB)**: High-performance energy measurement backend.
-- **Python AST Engine**: Multi-language code analysis using Tree-sitter.
-- **JSON Rules**: Externalized configuration for language-specific behavior.
-- **SQLite Database**: Persistent storage for energy measurement sessions.
+Adding a new language requires only a JSON config file in `src/instrumentation/configs/` plus the tree-sitter grammar. No Python code changes needed.
 
-## 📝 Citation
+Currently supported: Python, C, C++, JavaScript, Java.
 
-If you use CodeGreen in your research, please cite it as:
+## Architecture
+
+- **C++ NEMB backend**: RAPL energy reading with sub-microsecond timestamping
+- **Python instrumentation**: tree-sitter AST analysis, config-driven checkpoint insertion
+- **Benchmark harness**: statistical analysis with t-distribution CI, IQR outlier detection, perf RAPL ground truth validation
+
+## CI/CD integration
+
+```bash
+# Fail pipeline if energy exceeds budget
+codegreen run --budget 10.0 --json -- python tests/benchmark.py
+# Exit code 1 if mean energy > 10 Joules
+```
+
+## Upgrading
+
+```bash
+pip install --upgrade codegreen   # PyPI
+# or
+cd codegreen && git pull && ./install.sh --upgrade   # source
+```
+
+## Citation
+
 ```bibtex
-@software{Rajput_CodeGreen_A_Modular_2026,
-author = {Rajput, Saurabhsingh},
-doi = {10.5281/zenodo.18371772},
-month = jan,
-title = {{CodeGreen: A Modular Energy Measurement System for Multi-Language Software}},
-url = {https://smart-dal.github.io/codegreen/},
-version = {v0.1.0},
-year = {2026}
+@software{Rajput_CodeGreen_2026,
+  author = {Rajput, Saurabhsingh},
+  doi = {10.5281/zenodo.18371772},
+  title = {{CodeGreen: Per-Function Energy Measurement for Multi-Language Software}},
+  url = {https://smart-dal.github.io/codegreen/},
+  version = {v0.2.0},
+  year = {2026}
 }
 ```
 
-## 🤝 Contributing
+## License
 
-We welcome contributions! 
-1. Fork the repo.
-2. Create your feature branch.
-3. Ensure tests pass by running `./install.sh`.
-4. Submit a Pull Request.
+MPL-2.0 License - see [LICENSE](LICENSE) file.
 
-## 📝 License
-
-MPL-2.0 License - see [LICENSE](LICENSE) file for details.
-
----
-
-**CodeGreen** - Making software development more energy-efficient, one line of code at a time. 🌱⚡
+**Docs**: [smart-dal.github.io/codegreen](https://smart-dal.github.io/codegreen/)

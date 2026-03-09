@@ -3,15 +3,15 @@ include LICENSE
 include requirements.txt
 include pyproject.toml
 include CMakeLists.txt
+include setup.py
 
-recursive-include src *.py *.cpp *.h *.hpp
-recursive-include src/instrumentation/configs *.json
-recursive-include config *.json
-recursive-include bin *.py
-
-include src/instrumentation/language_runtimes/python/codegreen_runtime.py
+recursive-include src *.py *.cpp *.c *.h *.hpp *.json
+recursive-include src/measurement *.cpp *.h *.hpp CMakeLists.txt
+recursive-include src/instrumentation *.py *.json *.h
+recursive-include third_party *.c *.h CMakeLists.txt
 
 global-exclude *.pyc
 global-exclude __pycache__
 global-exclude *.so
 global-exclude .DS_Store
+global-exclude *.o

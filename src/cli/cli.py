@@ -94,19 +94,10 @@ def get_binary_path() -> Optional[Path]:
     """
     # Check multiple possible locations for the binary
     possible_paths = [
-        # 1. In the project's bin directory (development mode)
         Path(__file__).parents[2] / "bin" / "codegreen",
-        Path(__file__).parents[2] / "bin" / "codegreen.exe",
-        
-        # 2. In the build directory (CMake output)
         Path(__file__).parents[2] / "build" / "bin" / "codegreen",
-        Path(__file__).parents[2] / "build" / "bin" / "codegreen.exe",
-        
-        # 3. In the package's bin directory (installed)
+        Path(__file__).parent.parent / "bin" / "codegreen",
         Path(__file__).parent / "bin" / "codegreen",
-        Path(__file__).parent / "bin" / "codegreen.exe",
-        
-        # 4. System-wide installation
         shutil.which("codegreen"),
     ]
     
@@ -1026,10 +1017,18 @@ def _get_c_runtime_paths(language: str = "c") -> tuple:
     project_root = Path(__file__).resolve().parent.parent.parent
     runtime_base = project_root / "src" / "instrumentation" / "language_runtimes"
     include_path = runtime_base / language
-    lib_path = project_root / "lib"
-    if not lib_path.exists():
-        lib_path = project_root / "build" / "lib"
-    return include_path, lib_path
+    # Search order: project/lib -> build/lib -> installed package lib
+    for candidate in [project_root / "lib",
+                      project_root / "build" / "lib",
+                      Path(__file__).parent.parent / "lib"]:
+        if candidate.exists() and any(candidate.glob("libcodegreen-nemb*")):
+            lib_path = candidate
+            # Check for runtime headers in installed package
+            pkg_rt = candidate / "runtime" / language
+            if pkg_rt.exists():
+                include_path = pkg_rt
+            return include_path, lib_path
+    return include_path, project_root / "lib"
 
 
 def _compile_instrumented(instrumented_path: Path, language: Language, verbose: bool) -> Optional[Path]:
