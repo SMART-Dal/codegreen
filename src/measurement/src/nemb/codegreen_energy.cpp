@@ -3,7 +3,9 @@
 #include "nemb/core/measurement_coordinator.hpp"
 #include "nemb/core/energy_provider.hpp"
 #include "nemb/utils/precision_timer.hpp"
+#ifdef HAVE_JNI
 #include <jni.h>
+#endif
 
 #include <sstream>
 #include <iomanip>
@@ -408,7 +410,7 @@ extern "C" {
         if(c_api_meter) c_api_meter->mark_checkpoint(n?n:"");
     }
 
-    // JNI Implementation for Java Runtime
+#ifdef HAVE_JNI
     JNIEXPORT void JNICALL Java_codegreen_runtime_CodeGreenRuntime_nemb_1mark_1checkpoint(
         JNIEnv* env, jclass clazz, jstring name) {
         const char* n = env->GetStringUTFChars(name, nullptr);
@@ -422,6 +424,7 @@ extern "C" {
         JNIEnv* env, jclass clazz) {
         nemb_report_at_exit();
     }
+#endif
 
     int nemb_get_checkpoints_json(char* b, int m) {
         if (c_api_is_forked_child) return 0;

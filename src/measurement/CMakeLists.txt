@@ -74,6 +74,7 @@ target_include_directories(codegreen-nemb PUBLIC
 
 if(JNI_FOUND)
     target_include_directories(codegreen-nemb PRIVATE ${JNI_INCLUDE_DIRS})
+    target_compile_definitions(codegreen-nemb PRIVATE HAVE_JNI)
 endif()
 
 # Set compile definitions for legacy core
