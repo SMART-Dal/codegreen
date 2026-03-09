@@ -57,7 +57,7 @@
         }
     },
     "custom_queries": {
-        "definitions": "(function_definition body: (compound_statement)) @function_def",
+        "definitions": "(function_definition declarator: (function_declarator declarator: (identifier) @function_name) body: (compound_statement)) @function_def",
         "loops": "(for_statement) @loop.for (while_statement) @loop.while (do_statement) @loop.do",
         "returns": "(return_statement) @return"
     },

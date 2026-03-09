@@ -146,6 +146,8 @@ except AttributeError:
     pass
 
 _output_reported = False
+_throttle_interval_ns = int(os.environ.get("CODEGREEN_CHECKPOINT_THROTTLE_MS", "0")) * 1_000_000
+_last_checkpoint_time: Dict[str, int] = {}
 
 def _report_at_exit():
     """Report measurements to stdout in a way that CLI can parse"""
@@ -174,20 +176,14 @@ def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
 
 
 def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str):
-    """
-    Mark a checkpoint in the energy measurement stream.
-
-    Invocation tracking is handled automatically by the NEMB C++ backend.
-    Each call to the same checkpoint gets a unique invocation counter (#inv_N)
-    without overhead in the Python runtime.
-
-    Args:
-        checkpoint_id: Unique identifier for the checkpoint
-        name: Human-readable name
-        checkpoint_type: Type of checkpoint (enter, exit, etc.)
-    """
-    # Simple pass-through to NEMB backend
-    # Invocation counter (#inv_N) added automatically by backend
+    """Mark a checkpoint in the energy measurement stream.
+    Throttling via CODEGREEN_CHECKPOINT_THROTTLE_MS env var (0=disabled)."""
+    if _throttle_interval_ns > 0:
+        now = time.monotonic_ns()
+        last = _last_checkpoint_time.get(checkpoint_id, 0)
+        if now - last < _throttle_interval_ns:
+            return
+        _last_checkpoint_time[checkpoint_id] = now
     measure_checkpoint(checkpoint_id, checkpoint_type, name, 0, "")
 
 

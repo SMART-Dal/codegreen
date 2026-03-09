@@ -151,19 +151,12 @@ private:
      * @return true if this appears to be a wraparound
      */
     bool is_legitimate_wraparound(T new_value, uint64_t timestamp_ns) {
-        // Time-based heuristic: wraparound should happen within reasonable time
         uint64_t time_delta_ms = (timestamp_ns - last_timestamp_ns_) / 1000000;
-        
-        // If too much time passed, likely a reset
-        if (time_delta_ms > 60000) { // 1 minute
+        if (time_delta_ms > 60000) {
             return false;
         }
-        
-        // If new value is very close to 0 and we were near max, likely wraparound
-        double distance_from_zero = static_cast<double>(new_value) / max_value_;
-        double distance_from_max = static_cast<double>(max_value_ - last_raw_value_) / max_value_;
-        
-        return (distance_from_zero < 0.1 && distance_from_max < 0.1);
+        // Old value in top half, new value in bottom half => wraparound
+        return (last_raw_value_ > max_value_ / 2) && (new_value < max_value_ / 2);
     }
     
     T max_value_;

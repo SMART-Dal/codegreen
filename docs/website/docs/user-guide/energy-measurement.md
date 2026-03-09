@@ -13,7 +13,7 @@ CodeGreen uses the Native Energy Measurement Backend (NEMB) for hardware-level e
 
 ### RAPL Domains
 
-Intel RAPL exposes multiple energy domains:
+Intel RAPL exposes multiple energy domains. CodeGreen dynamically enumerates available domains at runtime, including multi-socket systems:
 
 | Domain | What it measures |
 |--------|-----------------|
@@ -113,6 +113,36 @@ For a quick test of sensor accuracy:
 ```bash
 codegreen measure-workload --duration 3
 ```
+
+### Checkpoint Throttling
+
+For workloads with very high checkpoint rates, set the `CODEGREEN_CHECKPOINT_THROTTLE_MS` environment variable to throttle checkpoint recording. This limits how frequently checkpoints are recorded, reducing overhead for tight loops:
+
+```bash
+CODEGREEN_CHECKPOINT_THROTTLE_MS=5 codegreen measure python script.py -g fine
+```
+
+### Benchmark Accuracy
+
+Validated against `perf stat` RAPL readings on representative workloads:
+
+| Benchmark | Error vs perf RAPL |
+|-----------|-------------------|
+| binarytrees/18 | 0.03% |
+| spectralnorm/1000 | 0.71% |
+
+Short workloads are automatically repeated to accumulate sufficient energy for accurate measurement.
+
+## Quick Energy Measurement
+
+For measuring any shell command without code instrumentation:
+
+```bash
+codegreen run python script.py --repeat 10 --warmup 1
+codegreen run --budget 5.0 --json ./my_binary arg1 arg2
+```
+
+See [CLI Reference](cli-reference.md#run) for full options.
 
 ## Performance
 

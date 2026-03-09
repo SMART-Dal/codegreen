@@ -195,6 +195,12 @@ The recursive version consumes orders of magnitude more energy due to exponentia
 ## Common CLI Patterns
 
 ```bash
+# Quick energy measurement of any command (no instrumentation)
+codegreen run python script.py --repeat 10
+
+# Energy budget enforcement (exits non-zero if exceeded)
+codegreen run --budget 5.0 python script.py
+
 # Basic measurement (coarse, 2 checkpoints)
 codegreen measure python script.py
 

@@ -30,7 +30,7 @@
 
     ---
 
-    CLI tool with JSON output, CI/CD workflows, and granularity control (coarse/fine).
+    CLI tool with JSON/CSV/Markdown output, CI/CD energy gating via `--budget`, and granularity control.
 
     [:octicons-arrow-right-24: Installation](getting-started/installation.md)
 
@@ -51,10 +51,12 @@ CodeGreen is an energy measurement tool that helps developers understand the ene
 ### Key Features
 
 - **Energy Measurement**: Per-function energy attribution via Intel RAPL, NVIDIA NVML, AMD ROCm
+- **Quick Measurement**: `codegreen run` measures energy of any shell command (like hyperfine for energy)
 - **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
 - **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
 - **Granularity Control**: Coarse mode (main only) or fine mode (all functions)
-- **Benchmarking**: Built-in benchmark suite comparing CodeGreen vs perf RAPL
+- **CI/CD Energy Gating**: `--budget` flag to enforce energy budgets in pipelines
+- **Benchmarking**: Built-in benchmark suite -- 0.03% error vs perf RAPL on representative workloads
 
 ## Quick Start
 
@@ -78,6 +80,12 @@ Get started with CodeGreen in just a few steps:
 
     ```bash
     codegreen measure python my_script.py
+    ```
+
+=== "Quick Run"
+
+    ```bash
+    codegreen run python my_script.py --repeat 10
     ```
 
 === "Visualize"

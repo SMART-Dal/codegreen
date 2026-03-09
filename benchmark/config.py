@@ -1,4 +1,5 @@
 """Benchmark configuration dataclasses and YAML loader."""
+import platform
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,43 @@ try:
     import yaml
 except ImportError:
     yaml = None
+
+@dataclass
+class SystemState:
+    cpu_model: str = ""
+    cpu_governor: str = ""
+    kernel_version: str = ""
+    rapl_domains: List[str] = field(default_factory=list)
+
+    @classmethod
+    def capture(cls) -> "SystemState":
+        state = cls()
+        state.kernel_version = platform.release()
+        try:
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        state.cpu_model = line.split(":", 1)[1].strip()
+                        break
+        except (FileNotFoundError, OSError):
+            pass
+        try:
+            with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") as f:
+                state.cpu_governor = f.read().strip()
+        except (FileNotFoundError, OSError):
+            pass
+        import os
+        for i in range(10):
+            path = f"/sys/class/powercap/intel-rapl:0:{i}/name"
+            if os.path.exists(path):
+                try:
+                    with open(path) as f:
+                        state.rapl_domains.append(f.read().strip())
+                except OSError:
+                    pass
+            else:
+                break
+        return state
 
 @dataclass
 class Problem:
@@ -44,6 +82,9 @@ class BenchmarkConfig:
     timeout_seconds: int = 60
     clear_cache: bool = True
     cpu_governor: str = "performance"
+    min_runtime_seconds: float = 1.0
+    mode: str = "local"
+    benchmarks_dir: Optional[str] = None
 
     @classmethod
     def from_yaml(cls, path: Path) -> "BenchmarkConfig":
@@ -62,6 +103,9 @@ class BenchmarkConfig:
             timeout_seconds=cfg.get("timeout_seconds", 300),
             clear_cache=cfg.get("best_practices", {}).get("clear_cache", True),
             cpu_governor=cfg.get("best_practices", {}).get("cpu_governor", "performance"),
+            min_runtime_seconds=cfg.get("min_runtime_seconds", 1.0),
+            mode=cfg.get("mode", "local"),
+            benchmarks_dir=cfg.get("benchmarks_dir"),
         )
 
     @classmethod

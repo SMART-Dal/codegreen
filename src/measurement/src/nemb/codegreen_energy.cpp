@@ -295,7 +295,12 @@ EnergyDifference calculate_difference(const EnergyResult& e, const EnergyResult&
     }
     return d;
 }
-double convert_energy(double j, const std::string& u) { return j; }
+double convert_energy(double j, const std::string& u) {
+    if (u == "mJ") return j * 1e3;
+    if (u == "uJ") return j * 1e6;
+    if (u == "kWh") return j / 3.6e6;
+    return j;
+}
 std::string format_energy(double j) { return std::to_string(j) + " J"; }
 std::string format_power(double w) { return std::to_string(w) + " W"; }
 bool is_energy_measurement_supported() { return true; }
@@ -371,6 +376,7 @@ extern "C" {
                 c_api_mutex.unlock();
 
                 if (cps.empty()) return;
+                std::cout << std::setprecision(15);
                 std::cout << "\n--- CODEGREEN_RESULT_START ---" << std::endl;
                 std::cout << "{\"measurements\": [";
                 for (size_t i = 0; i < cps.size(); ++i) {
@@ -392,7 +398,11 @@ extern "C" {
         if(!c_api_meter) {
             c_api_meter = std::make_unique<codegreen::EnergyMeter>();
             c_api_init_pid = getpid();
-            std::atexit(nemb_report_at_exit);
+            static bool atexit_registered = false;
+            if (!atexit_registered) {
+                std::atexit(nemb_report_at_exit);
+                atexit_registered = true;
+            }
         }
         if(c_api_meter) c_api_meter->mark_checkpoint(n?n:"");
     }
@@ -418,6 +428,7 @@ extern "C" {
         if(!c_api_meter || !b || m <= 0) return 0;
         auto cps = c_api_meter->get_checkpoint_measurements();
         std::ostringstream ss;
+        ss << std::setprecision(15);
         ss << "{\"checkpoints\": [";
         for(size_t i=0; i<cps.size(); ++i) {
             ss << "{\"checkpoint_id\": \"" << cps[i].name << "\", \"timestamp\": " << cps[i].timestamp_ns 

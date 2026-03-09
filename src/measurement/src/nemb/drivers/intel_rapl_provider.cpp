@@ -146,8 +146,10 @@ EnergyReading IntelRAPLProvider::get_reading() {
             reading.domain_power_watts[domain] = domain_power;
             last_domain_energies_[domain] = domain_energy;
             
-            // Accumulate total energy and power (avoid double counting for overlapping domains)
-            if (domain == "package" || (domain != "package" && available_domains_.size() == 1)) {
+            // Accumulate total energy and power
+            // package = CPU+uncore, dram = memory, psys = platform
+            // pp0/pp1 are subsets of package, so exclude to avoid double counting
+            if (domain == "package" || domain == "dram" || domain == "psys") {
                 total_energy += domain_energy;
                 total_power += domain_power;
             }
@@ -260,27 +262,43 @@ bool IntelRAPLProvider::detect_rapl_domains() {
     available_domains_.clear();
     domain_paths_.clear();
     
-    // Check for different RAPL domains via sysfs interface
-    const std::vector<std::pair<std::string, std::string>> domain_candidates = {
-        {"package", "/sys/class/powercap/intel-rapl:0/energy_uj"},
-        {"pp0", "/sys/class/powercap/intel-rapl:0:0/energy_uj"},      // CPU cores
-        {"pp1", "/sys/class/powercap/intel-rapl:0:1/energy_uj"},      // GPU (if integrated)
-        {"dram", "/sys/class/powercap/intel-rapl:0:2/energy_uj"},     // Memory
-        {"psys", "/sys/class/powercap/intel-rapl:1/energy_uj"}       // Platform/System
+    // Enumerate RAPL zones dynamically from sysfs, reading name files
+    // to correctly identify domains on multi-socket and varied platforms
+    auto read_sysfs = [](const std::string& path) -> std::string {
+        std::ifstream f(path);
+        std::string val;
+        if (f.is_open()) std::getline(f, val);
+        return val;
     };
-    
-    for (const auto& [domain_name, path] : domain_candidates) {
-        if (std::filesystem::exists(path)) {
-            available_domains_.push_back(domain_name);
-            domain_paths_[domain_name] = path;
-            std::cout << "  [ok] Found domain: " << domain_name << std::endl;
-            
-            // Create RAPL domain entry
-            RAPLDomain domain;
-            domain.name = domain_name;
-            domain.sysfs_path = path;
-            domain.available = true;
-            rapl_domains_[domain_name] = domain;
+    for (int pkg = 0; ; ++pkg) {
+        std::string base = "/sys/class/powercap/intel-rapl:" + std::to_string(pkg);
+        std::string energy_path = base + "/energy_uj";
+        if (!std::filesystem::exists(energy_path)) break;
+        std::string domain_name = read_sysfs(base + "/name");
+        if (domain_name.empty()) domain_name = "package-" + std::to_string(pkg);
+        if (domain_name == "package-0" && pkg == 0) domain_name = "package";
+        available_domains_.push_back(domain_name);
+        domain_paths_[domain_name] = energy_path;
+        RAPLDomain domain;
+        domain.name = domain_name;
+        domain.sysfs_path = energy_path;
+        domain.available = true;
+        rapl_domains_[domain_name] = domain;
+        std::cout << "  [ok] Found domain: " << domain_name << std::endl;
+        for (int sub = 0; ; ++sub) {
+            std::string sub_base = base + ":" + std::to_string(sub);
+            std::string sub_energy = sub_base + "/energy_uj";
+            if (!std::filesystem::exists(sub_energy)) break;
+            std::string sub_name = read_sysfs(sub_base + "/name");
+            if (sub_name.empty()) sub_name = "sub-" + std::to_string(sub);
+            available_domains_.push_back(sub_name);
+            domain_paths_[sub_name] = sub_energy;
+            RAPLDomain sub_domain;
+            sub_domain.name = sub_name;
+            sub_domain.sysfs_path = sub_energy;
+            sub_domain.available = true;
+            rapl_domains_[sub_name] = sub_domain;
+            std::cout << "  [ok] Found sub-domain: " << sub_name << std::endl;
         }
     }
     
@@ -333,11 +351,25 @@ bool IntelRAPLProvider::initialize_counters() {
         config.name = domain;
         config.domain = domain;
         config.bit_width = 32;
-        config.max_value = std::numeric_limits<uint32_t>::max();
         config.conversion_factor = energy_unit_joules_;
         config.unit = "J";
         config.active = true;
-        
+
+        // Read max_energy_range_uj from sysfs for accurate wraparound
+        uint64_t max_energy = std::numeric_limits<uint32_t>::max();
+        std::string max_path = domain_paths_[domain];
+        // Replace energy_uj with max_energy_range_uj in the path
+        auto pos = max_path.rfind("/energy_uj");
+        if (pos != std::string::npos) {
+            std::string max_range_path = max_path.substr(0, pos) + "/max_energy_range_uj";
+            std::ifstream max_file(max_range_path);
+            if (max_file.is_open()) {
+                max_file >> max_energy;
+                std::cout << "  Max energy range for " << domain << ": " << max_energy << " uJ" << std::endl;
+            }
+        }
+        config.max_value = max_energy;
+
         counter_manager_->register_counter(domain, config);
         std::cout << "  [ok] Initialized counter for domain: " << domain << std::endl;
     }

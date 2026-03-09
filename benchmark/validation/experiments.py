@@ -88,6 +88,7 @@ class AccuracyExperiment(Experiment):
     def run(self, harness: BenchmarkHarness) -> ExperimentResult:
         raw_data = {}
         all_cg, all_perf = [], []
+        per_problem_correlations = []
         for problem in self.problems:
             for lang in self.languages:
                 for size in self.sizes:
@@ -106,25 +107,31 @@ class AccuracyExperiment(Experiment):
                             all_cg.extend(cg_energies)
                             all_perf.extend(perf_energies)
                             error = AccuracyAnalysis.compute_error(cg_energies, perf_energies)
+                            per_corr = AccuracyAnalysis.compute_correlation(cg_energies, perf_energies)
+                            per_problem_correlations.append(per_corr.get("pearson_r", 0))
                             raw_data[key] = {
                                 "codegreen": StatisticalAnalysis.summarize(cg_energies),
                                 "perf": StatisticalAnalysis.summarize(perf_energies),
-                                "error": error
+                                "error": error,
+                                "correlation": per_corr
                             }
                     except Exception as e:
                         harness.progress_callback(f"  Error: {e}")
-        correlation = AccuracyAnalysis.compute_correlation(all_cg, all_perf)
+        pooled_correlation = AccuracyAnalysis.compute_correlation(all_cg, all_perf)
+        min_r = min(per_problem_correlations) if per_problem_correlations else 0
         errors = [v["error"]["mape"] for v in raw_data.values() if "error" in v]
         mean_error = sum(errors) / len(errors) if errors else 0
         max_error = max(errors) if errors else 0
         return ExperimentResult(
             name=self.name,
-            passed=mean_error < 10.0 and correlation.get("pearson_r", 0) > 0.9,
+            passed=mean_error < 10.0 and min_r > 0.9,
             metrics={
                 "mean_error_percent": mean_error,
                 "max_error_percent": max_error,
-                "pearson_r": correlation.get("pearson_r", 0),
-                "spearman_r": correlation.get("spearman_r", 0)
+                "pooled_pearson_r": pooled_correlation.get("pearson_r", 0),
+                "min_per_problem_pearson_r": min_r,
+                "pearson_r": min_r,
+                "spearman_r": pooled_correlation.get("spearman_r", 0)
             },
             raw_data=raw_data
         )

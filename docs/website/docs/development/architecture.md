@@ -19,7 +19,7 @@ Hardware (RAPL, NVML, ROCm)
 
 ## Layer 1: CLI (`src/cli/`)
 
-The command-line interface is built with Typer and Rich. It provides 11 commands (measure, analyze, init, info, doctor, validate, config, init-sensors, measure-workload, benchmark, validate-accuracy).
+The command-line interface is built with Typer and Rich. It provides 12 commands (measure, run, analyze, init, info, doctor, validate, config, init-sensors, measure-workload, benchmark, validate-accuracy).
 
 Key file: `src/cli/cli.py`
 

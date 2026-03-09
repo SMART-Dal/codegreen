@@ -256,9 +256,9 @@ class ASTProcessor:
                 body_start = body_node.start_byte
                 
                 # Language-specific logic for finding the insertion point
-                if self.language == 'python':
-                    # For Python, find the first non-docstring statement
-                    logger.debug(f"   Calling _find_python_function_start for Python")
+                if body_node.type == 'block':
+                    # block-based (Python), find first non-docstring statement
+                    logger.debug(f"   Calling _find_python_function_start for block-based body")
                     insertion_byte = self._find_python_function_start(body_node, rule)
                     if insertion_byte is not None:
                         return insertion_byte
@@ -297,7 +297,7 @@ class ASTProcessor:
 
             # For brace-based languages, we want to insert BEFORE the closing brace '}'
             # but only if the body actually uses braces.
-            if self.language in ['c', 'cpp', 'java', 'javascript', 'typescript']:
+            if body_node.type == 'compound_statement' or body_node.type == 'class_body':
                  # Find the LAST closing brace in the body node
                  body_text = self.source_code[body_node.start_byte:body_node.end_byte]
                  last_brace_idx = body_text.rfind('}')
@@ -390,8 +390,9 @@ class ASTProcessor:
                     return line_start
                 continue
             
-            # Skip empty lines (whitespace)
-            if child.type in ['pass_statement', 'expression_statement'] and not child.children:
+            if child.type == 'pass_statement':
+                continue
+            if child.type == 'expression_statement' and not child.children:
                 continue
             
             # Found the first real statement
@@ -1075,25 +1076,18 @@ class ASTRewriter:
         return self.ast_processor.find_body_node(node)
     
     def _line_column_to_byte_offset(self, line: int, column: int) -> int:
-        """Convert line/column position to byte offset (fallback method)"""
+        """Convert line/column position to byte offset (tree-sitter uses byte offsets)"""
         lines = self.source_code.split('\n')
         if line <= 0 or line > len(lines):
             return 0
-            
-        # Convert to 0-based indexing
         line_idx = line - 1
-        
-        # Calculate byte offset
         byte_offset = 0
         for i in range(line_idx):
-            byte_offset += len(lines[i]) + 1  # +1 for newline
-        
-        # Add column offset (clamped to line length)
+            byte_offset += len(lines[i].encode('utf-8')) + 1
         line_text = lines[line_idx] if line_idx < len(lines) else ""
-        column_offset = min(column, len(line_text))
+        column_offset = min(column, len(line_text.encode('utf-8')))
         byte_offset += column_offset
-        
-        return min(byte_offset, len(self.source_code))
+        return min(byte_offset, len(self.source_code.encode('utf-8')))
     
     def apply_edits(self) -> str:
         """Apply edits with validation and verbose diagnostics."""
@@ -1678,8 +1672,7 @@ class ASTRewriter:
                     return indentation
                 continue
             
-            # Skip whitespace and empty nodes
-            if not child.type or child.type in ['pass_statement'] and not child.children:
+            if not child.type or child.type == 'pass_statement':
                 logger.debug(f"   Skipping empty/pass statement: {child.type}")
                 continue
             

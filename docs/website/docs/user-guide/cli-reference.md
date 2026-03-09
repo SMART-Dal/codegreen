@@ -70,6 +70,49 @@ codegreen measure cpp main.cpp -- 5000
 codegreen measure python main.py -o results.json
 ```
 
+### `run`
+
+Measure energy consumption of any shell command using perf RAPL. Works like hyperfine but reports energy instead of just time. No code instrumentation required.
+
+```bash
+codegreen run [OPTIONS] COMMAND [ARGS...]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-n, --repeat INTEGER` | Number of repetitions (default: 10) |
+| `-w, --warmup INTEGER` | Warmup runs before measurement (default: 1) |
+| `--json` | Output results as JSON |
+| `--budget FLOAT` | Energy budget in Joules; exits with error if mean exceeds budget |
+
+**Output includes:**
+
+- Mean energy (Joules) with standard deviation
+- 95% confidence interval
+- Min/max range
+- Mean wall time with standard deviation
+- Outlier detection and removal
+
+**Examples:**
+```bash
+# Measure a Python script with 10 runs
+codegreen run python script.py
+
+# Custom repetitions and warmup
+codegreen run --repeat 20 --warmup 3 python train.py
+
+# Compiled binary with arguments
+codegreen run ./my_binary arg1 arg2
+
+# JSON output for scripting
+codegreen run --json python script.py
+
+# CI/CD energy budget gating (fails if mean > 10J)
+codegreen run --budget 10.0 python train.py
+```
+
 ### `analyze`
 
 Static analysis via Tree-sitter AST parsing. Identifies instrumentation points without executing code.

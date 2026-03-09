@@ -514,6 +514,15 @@ CodeGreen supports environment variables in config values:
 - `${EXECUTABLE_DIR}`: CodeGreen installation directory
 - Any custom environment variable: `${MY_VAR}`
 
+### Runtime Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `CODEGREEN_CONFIG` | Path to configuration file |
+| `CODEGREEN_DEBUG` | Enable debug output |
+| `CODEGREEN_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `CODEGREEN_CHECKPOINT_THROTTLE_MS` | Minimum interval (ms) between checkpoint recordings; reduces overhead for high-frequency checkpoints |
+
 ---
 
 ## Best Practices

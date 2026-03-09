@@ -101,12 +101,14 @@ bool MeasurementCoordinator::start_measurements() {
     
     std::cout << "Starting coordinated measurements..." << std::endl;
     
-    // Reset statistics
+    // Reset statistics and filtering state
     {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         statistics_ = CoordinatorStatistics{};
     }
-    
+    filtered_power_ = 0.0;
+    filter_first_reading_ = true;
+
     running_.store(true);
     
     // Start worker threads
@@ -131,17 +133,8 @@ void MeasurementCoordinator::stop_measurements() {
     }
     readings_condition_.notify_all();
 
-    // Join with timeout to prevent hangs
-    auto join_with_timeout = [](std::thread& t, int timeout_ms) {
-        if (!t.joinable()) return;
-        auto fut = std::async(std::launch::async, [&t]{ t.join(); });
-        if (fut.wait_for(std::chrono::milliseconds(timeout_ms)) == std::future_status::timeout) {
-            t.detach();
-        }
-    };
-
-    join_with_timeout(measurement_thread_, 2000);
-    join_with_timeout(provider_health_thread_, 1000);
+    if (measurement_thread_.joinable()) measurement_thread_.join();
+    if (provider_health_thread_.joinable()) provider_health_thread_.join();
 }
 
 SynchronizedReading MeasurementCoordinator::get_synchronized_reading() {
@@ -324,7 +317,7 @@ void MeasurementCoordinator::provider_health_loop() {
 }
 
 std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_readings() {
-    std::shared_lock<std::shared_mutex> lock(providers_mutex_);
+    std::unique_lock<std::shared_mutex> lock(providers_mutex_);
     
     std::map<std::string, EnergyReading> readings;
     
@@ -445,18 +438,13 @@ bool MeasurementCoordinator::cross_validate_measurements(SynchronizedReading& re
 }
 
 void MeasurementCoordinator::apply_real_time_filtering(SynchronizedReading& reading) {
-    // Simple noise filtering - could be enhanced with Kalman filtering
-    const double alpha = 0.1; // Smoothing factor
-    
-    static double filtered_power = 0.0;
-    static bool first_reading = true;
-    
-    if (first_reading) {
-        filtered_power = reading.total_system_power_watts;
-        first_reading = false;
+    const double alpha = 0.1;
+    if (filter_first_reading_) {
+        filtered_power_ = reading.total_system_power_watts;
+        filter_first_reading_ = false;
     } else {
-        filtered_power = alpha * reading.total_system_power_watts + (1.0 - alpha) * filtered_power;
-        reading.total_system_power_watts = filtered_power;
+        filtered_power_ = alpha * reading.total_system_power_watts + (1.0 - alpha) * filtered_power_;
+        reading.total_system_power_watts = filtered_power_;
     }
 }
 

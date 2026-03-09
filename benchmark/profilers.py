@@ -27,14 +27,7 @@ class ProfilerInterface(ABC):
         pass
 
 class CodeGreenProfiler(ProfilerInterface):
-    """Uses codegreen measure CLI for energy measurement.
-
-    Unified approach for all languages:
-    1. Pass source file to codegreen measure
-    2. CLI instruments source code
-    3. CLI compiles (if needed) and runs instrumented code
-    4. Energy measured via NEMB checkpoints
-    """
+    """Uses codegreen measure CLI for energy measurement."""
     def __init__(self):
         self.source_path: Path | None = None
         self.language: str | None = None
@@ -69,6 +62,8 @@ class CodeGreenProfiler(ProfilerInterface):
         elapsed = time.perf_counter() - start
 
         energy, checkpoints, raw, program_output = self._parse_output(result.stdout)
+        if energy <= 0.0 and checkpoints:
+            energy = 0.0
         return ProfileResult(energy_joules=energy, time_seconds=elapsed, output=program_output, checkpoints=checkpoints, raw_data=raw)
 
     def _detect_from_cmd(self, cmd: List[str]) -> tuple:
@@ -107,16 +102,26 @@ class CodeGreenProfiler(ProfilerInterface):
         if measurement.get("success"):
             checkpoints = measurement.get("checkpoints", [])
             if len(checkpoints) >= 2:
-                energy = checkpoints[-1].get("joules", 0) - checkpoints[0].get("joules", 0)
+                first_j = checkpoints[0].get("joules", 0)
+                last_j = checkpoints[-1].get("joules", 0)
+                energy = last_j - first_j
+                if energy < 0:
+                    energy = 0.0
         return energy, checkpoints, raw, program_output
 
     def is_available(self) -> bool:
-        return True
+        try:
+            with open("/sys/class/powercap/intel-rapl:0/energy_uj") as f:
+                f.read()
+            return True
+        except (FileNotFoundError, PermissionError, OSError):
+            return False
 
 class PerfProfiler(ProfilerInterface):
     def __init__(self):
         self.perf_output_file: Path | None = None
         self._events = self._detect_events()
+        self.repeat_count: int = 1
 
     def __del__(self):
         self._cleanup()
@@ -136,17 +141,28 @@ class PerfProfiler(ProfilerInterface):
     def run(self, cmd: List[str], timeout: int = 300) -> ProfileResult:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             self.perf_output_file = Path(f.name)
-        full_cmd = ["perf", "stat", "-e", self._events, "-o", str(self.perf_output_file), "--"] + cmd
+        if self.repeat_count > 1:
+            shell_cmd = " ".join(f"'{c}'" for c in cmd)
+            loop_cmd = f"for i in $(seq 1 {self.repeat_count}); do {shell_cmd}; done"
+            full_cmd = ["perf", "stat", "-e", self._events, "-o",
+                        str(self.perf_output_file), "--", "bash", "-c", loop_cmd]
+        else:
+            full_cmd = ["perf", "stat", "-e", self._events, "-o",
+                        str(self.perf_output_file), "--"] + cmd
         start = time.perf_counter()
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
         elapsed = time.perf_counter() - start
         energy = self._parse_perf_output()
+        if self.repeat_count > 1:
+            energy /= self.repeat_count
+            elapsed /= self.repeat_count
         return ProfileResult(
             energy_joules=energy,
             time_seconds=elapsed,
             output=result.stdout,
             checkpoints=[],
-            raw_data={"perf_output": self.perf_output_file.read_text() if self.perf_output_file.exists() else ""}
+            raw_data={"perf_output": self.perf_output_file.read_text() if self.perf_output_file.exists() else "",
+                       "repeat_count": self.repeat_count}
         )
 
     def _parse_perf_output(self) -> float:

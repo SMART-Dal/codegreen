@@ -239,8 +239,8 @@ class ExternalQueryLoader:
         if not config:
             return {}
         
-        # Return built-in queries from configuration
-        return config.analysis_patterns
+        # Return tree-sitter queries from configuration (not regex patterns)
+        return config.custom_queries
 
 
 class LanguageAgnosticInstrumentationGenerator:
@@ -390,23 +390,8 @@ class LanguageEngine:
                 self._languages[lang_id] = language
                 self._parsers[lang_id] = parser
                 
-                # Load external queries from nvim-treesitter with fallback to built-in
                 self._queries[lang_id] = {}
-                external_queries = self._external_query_loader.get_instrumentation_queries(lang_id)
-                
-                # Use external full query if available
-                if external_queries and 'full_query' in external_queries:
-                    try:
-                        # Compile the full .scm query
-                        query = Query(language, external_queries['full_query'])
-                        self._queries[lang_id]['instrumentation'] = query
-                        logger.info(f" Compiled comprehensive nvim-treesitter query for {lang_id}")
-                    except (ValueError, TypeError) as e:
-                        logger.error(f"Full query compilation failed for {lang_id}: {e}")
-                    except Exception as e:
-                        logger.error(f"Unexpected error compiling full query for {lang_id}: {e}")
-                
-                # Load custom queries from config (primary query source)
+                # Load instrumentation queries from config (purpose-built for our use case)
                 config_obj = self._config_manager.get_config(lang_id)
                 if config_obj and hasattr(config_obj, 'custom_queries'):
                     for q_name, q_text in config_obj.custom_queries.items():
@@ -558,22 +543,23 @@ class LanguageEngine:
             queries = self._queries[language]
             
             try:
-                # Parse source code with timeout protection
-                import signal
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("Tree-sitter parsing timed out")
-                
-                # Set timeout for parsing (Unix systems only)
-                if hasattr(signal, 'SIGALRM'):
-                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(self._parser_timeout_ms // 1000)
-                
-                tree = parser.parse(bytes(source_code, 'utf8'))
-                
-                if hasattr(signal, 'SIGALRM'):
-                    signal.alarm(0)  # Cancel alarm
-                    signal.signal(signal.SIGALRM, old_handler)
-                
+                import threading
+                parse_result = [None]
+                parse_error = [None]
+                def _parse():
+                    try:
+                        parse_result[0] = parser.parse(bytes(source_code, 'utf8'))
+                    except Exception as e:
+                        parse_error[0] = e
+                t = threading.Thread(target=_parse, daemon=True)
+                t.start()
+                timeout_s = max(self._parser_timeout_ms / 1000.0, 1.0)
+                t.join(timeout=timeout_s)
+                if t.is_alive():
+                    raise TimeoutError(f"Tree-sitter parsing timed out after {timeout_s}s")
+                if parse_error[0]:
+                    raise parse_error[0]
+                tree = parse_result[0]
             except (TimeoutError, MemoryError) as e:
                 logger.error(f"Tree-sitter parsing failed for {language}: {e}")
                 raise RuntimeError(f"Tree-sitter parsing failed for {language}: {e}")
@@ -790,7 +776,26 @@ class LanguageEngine:
                                 branches_terminate = False
             
             return has_else and branches_terminate and blocks_checked > 0
-            
+
+        if node.type == 'try_statement':
+            blocks_terminate = True
+            has_except = False
+            for child in node.children:
+                if child.type in ('block', 'finally_clause'):
+                    for sub in child.children:
+                        if sub.type == 'block':
+                            if not self._node_terminates_control_flow(sub):
+                                blocks_terminate = False
+                    if child.type == 'block' and not self._node_terminates_control_flow(child):
+                        blocks_terminate = False
+                elif child.type == 'except_clause':
+                    has_except = True
+                    for sub in child.children:
+                        if sub.type == 'block':
+                            if not self._node_terminates_control_flow(sub):
+                                blocks_terminate = False
+            return has_except and blocks_terminate
+
         return False
 
     def _find_parent_definition(self, node: 'Node', language: str) -> Optional['Node']:
@@ -882,6 +887,7 @@ class LanguageEngine:
 
         try:
             # Smart node resolution
+            original_node = node
             target_def_node = node
             name = ""
             
@@ -942,8 +948,8 @@ class LanguageEngine:
             
             logger.debug(f"   Point name determined: '{name}'")
 
-            # Extract node information
-            node = target_def_node
+            # Extract node information - only override for entry points
+            node = target_def_node if capture_config['type'] in ['function_enter', 'class_enter'] else original_node
             start_point = node.start_point
             
             # Initialize insertion variables
@@ -1626,8 +1632,10 @@ class LanguageEngine:
         
         # Basic identifier validation
         
-        # Must start with letter or underscore, contain only letters, digits, underscores
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', text):
+        if language in ('c', 'cpp'):
+            if not re.match(r'^[a-zA-Z_~][a-zA-Z0-9_:~]*$', text):
+                return False
+        elif not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', text):
             return False
         
         # Reject overly long names (likely extraction errors)
@@ -1664,24 +1672,17 @@ class LanguageEngine:
         return (row, column)
     
     def _line_column_to_byte_offset(self, source_code: str, line: int, column: int) -> int:
-        """Convert (line, column) to byte offset using source code"""
+        """Convert (line, column) to byte offset using source code (tree-sitter uses byte offsets)"""
         lines = source_code.split('\n')
-        
-        # Ensure line is within bounds
         if line < 0:
             line = 0
         if line >= len(lines):
             line = len(lines) - 1
-        
-        # Calculate byte offset
         byte_offset = 0
         for i in range(line):
-            byte_offset += len(lines[i]) + 1  # +1 for newline
-        
-        # Add column offset
+            byte_offset += len(lines[i].encode('utf-8')) + 1
         if line < len(lines):
-            byte_offset += min(column, len(lines[line]))
-        
+            byte_offset += min(column, len(lines[line].encode('utf-8')))
         return byte_offset
     
     def _calculate_function_insertion_points(self, function_name_node: 'Node', language: str, source_code: str = "", tree: 'Tree' = None):
@@ -1694,7 +1695,9 @@ class LanguageEngine:
         # Find the parent function definition
         parent = function_name_node.parent
         safety_counter = 0
-        while parent and parent.type not in ['function_definition', 'method_definition', 'constructor_definition']:
+        config = self._config_manager.get_config(language)
+        func_types = config.get('node_types', {}).get('function_types', ['function_definition', 'method_definition', 'constructor_definition'])
+        while parent and parent.type not in func_types:
             parent = parent.parent
             safety_counter += 1
             limits = self._config_manager.get_processing_limits(language)
@@ -1941,7 +1944,7 @@ class LanguageEngine:
             return []
         unique_points = {}
         for point in points:
-            key = (point.line, point.type)
+            key = (point.line, point.type, point.name)
             if key in unique_points:
                 existing = unique_points[key]
                 if point.priority < existing.priority:
@@ -1969,11 +1972,11 @@ class LanguageEngine:
             
             if points:
                 import_stmt = self._language_agnostic_generator.get_import_statement(language)
-                if import_stmt:
+                if import_stmt and import_stmt.strip() not in source_code:
                     offset = self._find_import_insertion_point(source_code, language)
                     if offset is not None:
                         all_points.append(InstrumentationPoint(
-                            id="import_runtime", type="import", subtype="runtime", name="import", 
+                            id="import_runtime", type="import", subtype="runtime", name="import",
                             line=1, column=0, context="import", byte_offset=offset, insertion_mode='before'
                         ))
             

@@ -191,9 +191,10 @@ class LanguageConfigManager:
             if not detection_patterns:
                 continue
             
-            # Check for language-specific patterns
             for pattern_name, pattern in detection_patterns.items():
                 if isinstance(pattern, str) and pattern in content:
+                    return language
+                elif isinstance(pattern, list) and any(p in content for p in pattern):
                     return language
                 elif isinstance(pattern, dict) and 'regex' in pattern:
                     import re

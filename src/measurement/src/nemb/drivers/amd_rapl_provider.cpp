@@ -1,4 +1,5 @@
 #include "../../../include/nemb/core/energy_provider.hpp"
+#include "../../../include/nemb/hal/counter_manager.hpp"
 #include <iostream>
 #include <fstream>
 #include <fcntl.h>
@@ -54,20 +55,33 @@ public:
 
     EnergyReading get_reading() override {
         if (!initialized_) return {};
-        
+
         uint64_t raw_energy;
-        // MSR_AMD_PKG_ENERGY_STATUS (0xC001029B)
         if (pread(msr_fd_, &raw_energy, sizeof(raw_energy), 0xC001029B) != sizeof(raw_energy)) {
             record_measurement_attempt(false);
             return {};
         }
 
+        auto now = std::chrono::steady_clock::now();
+        uint64_t ts = now.time_since_epoch().count();
+        uint32_t raw32 = static_cast<uint32_t>(raw_energy & 0xFFFFFFFF);
+        uint64_t accumulated = counter_.update(raw32, ts);
+        double energy_j = accumulated * energy_unit_;
+
         EnergyReading reading;
-        reading.timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-        reading.energy_joules = raw_energy * energy_unit_;
+        reading.timestamp_ns = ts;
+        reading.energy_joules = energy_j;
         reading.provider_id = "amd_rapl";
-        reading.domain_energy_joules["package"] = reading.energy_joules;
-        
+        reading.domain_energy_joules["package"] = energy_j;
+
+        // Compute average power
+        double dt = std::chrono::duration<double>(now - last_time_).count();
+        if (dt > 0 && last_energy_ >= 0) {
+            reading.average_power_watts = (energy_j - last_energy_) / dt;
+        }
+        last_energy_ = energy_j;
+        last_time_ = now;
+
         record_measurement_attempt(true);
         return reading;
     }
@@ -106,6 +120,9 @@ private:
     int msr_fd_{-1};
     double energy_unit_{0.0};
     bool initialized_{false};
+    hal::Counter32 counter_{std::numeric_limits<uint32_t>::max(), "amd_pkg"};
+    double last_energy_{-1.0};
+    std::chrono::steady_clock::time_point last_time_;
 };
 
 std::unique_ptr<EnergyProvider> create_amd_rapl_provider() {

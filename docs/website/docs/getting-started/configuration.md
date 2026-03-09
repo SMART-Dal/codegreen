@@ -148,6 +148,7 @@ CodeGreen uses a JSON configuration file to customize behavior and sensor settin
 - `CODEGREEN_CONFIG`: Path to configuration file
 - `CODEGREEN_DEBUG`: Enable debug output
 - `CODEGREEN_LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
+- `CODEGREEN_CHECKPOINT_THROTTLE_MS`: Minimum interval (ms) between checkpoint recordings; reduces overhead for high-frequency checkpoints
 
 ## Configuration Commands
 

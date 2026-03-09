@@ -6,7 +6,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from benchmark.config import RunResult
+from benchmark.config import RunResult, SystemState
+
+_T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
+        8: 2.306, 9: 2.262, 10: 2.228, 15: 2.131, 20: 2.086, 25: 2.060, 29: 2.045}
+
+def _get_t_value(n: int) -> float:
+    df = n - 1
+    if df >= 30:
+        return 1.96
+    if df in _T95:
+        return _T95[df]
+    candidates = [k for k in _T95 if k <= df]
+    return _T95[max(candidates)] if candidates else 12.706
 
 @dataclass
 class Stats:
@@ -18,24 +30,54 @@ class Stats:
     ci95_lower: float
     ci95_upper: float
     n: int
+    outliers_removed: int = 0
 
 class StatisticalAnalysis:
     @staticmethod
-    def summarize(values: List[float]) -> Stats:
+    def _iqr_filter(values: List[float]) -> tuple:
+        if len(values) < 4:
+            return values, 0
+        sorted_v = sorted(values)
+        n = len(sorted_v)
+        q1 = sorted_v[n // 4]
+        q3 = sorted_v[3 * n // 4]
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        filtered = [v for v in values if lower <= v <= upper]
+        if not filtered:
+            return values, 0
+        return filtered, len(values) - len(filtered)
+
+    @staticmethod
+    def summarize(values: List[float], filter_outliers: bool = True) -> Stats:
         n = len(values)
         if n == 0:
             return Stats(0, 0, 0, 0, 0, 0, 0, 0)
-        sorted_vals = sorted(values)
-        mean = sum(values) / n
-        variance = sum((x - mean) ** 2 for x in values) / max(n - 1, 1)
+        raw_min, raw_max = min(values), max(values)
+        filtered, outliers_removed = StatisticalAnalysis._iqr_filter(values) if filter_outliers else (values, 0)
+        fn = len(filtered)
+        sorted_vals = sorted(filtered)
+        mean = sum(filtered) / fn
+        variance = sum((x - mean) ** 2 for x in filtered) / max(fn - 1, 1)
         std = math.sqrt(variance)
-        median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
-        t_value = 2.045 if n >= 30 else 2.262
-        margin = t_value * std / math.sqrt(n) if n > 0 else 0
+        median = sorted_vals[fn // 2] if fn % 2 else (sorted_vals[fn // 2 - 1] + sorted_vals[fn // 2]) / 2
+        t_value = _get_t_value(fn)
+        margin = t_value * std / math.sqrt(fn) if fn > 0 else 0
         return Stats(
-            mean=mean, std=std, min=min(values), max=max(values),
-            median=median, ci95_lower=mean - margin, ci95_upper=mean + margin, n=n
+            mean=mean, std=std, min=raw_min, max=raw_max,
+            median=median, ci95_lower=mean - margin, ci95_upper=mean + margin,
+            n=n, outliers_removed=outliers_removed
         )
+
+    @staticmethod
+    def compare(baseline: 'Stats', current: 'Stats') -> Dict[str, float]:
+        if baseline.mean == 0:
+            return {"delta": current.mean, "delta_pct": 0.0, "regression": False}
+        delta = current.mean - baseline.mean
+        delta_pct = (delta / baseline.mean) * 100
+        ci_overlap = current.ci95_lower <= baseline.ci95_upper and baseline.ci95_lower <= current.ci95_upper
+        return {"delta": delta, "delta_pct": delta_pct, "regression": delta_pct > 5.0, "ci_overlap": ci_overlap}
 
     @staticmethod
     def compute_overhead(native_times: List[float], instrumented_times: List[float]) -> Dict[str, float]:
@@ -90,8 +132,10 @@ class ResultCollector:
                     "energy_delta": (ckpts[-1].get("joules", 0) - ckpts[0].get("joules", 0)) if len(ckpts) >= 2 else 0.0,
                 }
             runs.append(d)
+        system_state = SystemState.capture()
         data = {
             "metadata": {"timestamp": datetime.now().isoformat(), "total_runs": len(self.results)},
+            "system_state": asdict(system_state),
             "runs": runs,
             "summary": self._serialize_summary(self.summarize_all()),
         }
@@ -114,3 +158,30 @@ class ResultCollector:
         for r in self.results:
             lines.append(f"{r.problem},{r.language},{r.size},{r.profiler},{r.repetition},{r.energy_joules:.6f},{r.time_seconds:.6f},{r.output_valid}")
         path.write_text("\n".join(lines))
+
+    def to_markdown(self) -> str:
+        summary = self.summarize_all()
+        lines = ["| Problem | Language | Size | Profiler | Energy (J) | Std | Time (s) | Valid | N |",
+                 "|---------|----------|------|----------|-----------|-----|----------|-------|---|"]
+        for key, data in sorted(summary.items()):
+            parts = key.split("/")
+            e = data.get("energy")
+            t = data.get("time")
+            e_str = f"{e.mean:.4f} +/- {e.std:.4f}" if e else "N/A"
+            e_std = f"{e.std:.4f}" if e else "-"
+            t_str = f"{t.mean:.4f}" if t else "-"
+            lines.append(f"| {parts[0]} | {parts[1]} | {parts[2]} | {parts[3]} "
+                         f"| {e_str} | {e_std} | {t_str} | {data['valid_runs']}/{data['total_runs']} | {t.n if t else 0} |")
+        return "\n".join(lines)
+
+    def to_text(self) -> str:
+        summary = self.summarize_all()
+        lines = []
+        for key, data in sorted(summary.items()):
+            e = data.get("energy")
+            t = data.get("time")
+            e_str = f"{e.mean:.4f}J (std={e.std:.4f}, CI=[{e.ci95_lower:.4f}, {e.ci95_upper:.4f}])" if e else "N/A"
+            t_str = f"{t.mean:.4f}s" if t else "-"
+            valid = f"{data['valid_runs']}/{data['total_runs']}"
+            lines.append(f"  {key}: {e_str}, {t_str}, valid={valid}")
+        return "\n".join(lines)

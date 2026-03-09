@@ -214,6 +214,10 @@ private:
     // Statistics
     mutable std::mutex stats_mutex_;
     CoordinatorStatistics statistics_;
+
+    // Real-time filtering state (non-static for thread safety)
+    double filtered_power_{0.0};
+    bool filter_first_reading_{true};
     
     // Private methods
     

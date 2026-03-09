@@ -856,17 +856,9 @@ def measure_energy(
                     console.print(f"\n[yellow]Note: No energy sensors available. Code analysis completed.[/yellow]")
             
             if json_output:
-                combined_results = {
-                    'timestamp': datetime.now().isoformat(),
-                    'analysis': {
-                        'language': result.language,
-                        'success': result.success,
-                        'instrumentation_points_count': result.checkpoint_count,
-                        'optimization_suggestions': result.optimization_suggestions,
-                        'metadata': result.metadata
-                    },
-                    'measurement': measurement_result
-                }
+                combined_results = _build_comprehensive_json(
+                    result, measurement_result, source_code, script, language.value, granularity.value
+                )
                 print(json.dumps(combined_results, indent=2))
             else:
                 if measurement_result and measurement_result.get('success'):
@@ -925,6 +917,78 @@ def _filter_main_entry_points(points: List, language: str) -> List:
     if exits:
         fallback.append(exits[-1])
     return fallback
+
+
+def _build_comprehensive_json(
+    analysis_result, measurement_result, source_code: str,
+    script: Path, language: str, granularity: str
+) -> Dict[str, Any]:
+    """Build comprehensive JSON output as single source of truth."""
+    import hashlib, platform
+    source_hash = hashlib.sha256(source_code.encode('utf-8')).hexdigest()
+    points_map = {}
+    for pt in analysis_result.instrumentation_points:
+        content_around = source_code.splitlines()[pt.line - 1].strip() if 0 < pt.line <= len(source_code.splitlines()) else ""
+        content_hash = hashlib.md5(f"{pt.name}:{content_around}".encode()).hexdigest()[:12]
+        points_map[pt.id] = {
+            "type": pt.type, "name": pt.name, "line": pt.line,
+            "column": pt.column, "context": pt.context,
+            "stable_id": f"{pt.name}@{content_hash}",
+            "insertion_mode": pt.insertion_mode,
+        }
+    checkpoints = []
+    per_func = {}
+    if measurement_result and measurement_result.get('checkpoints'):
+        checkpoints = measurement_result['checkpoints']
+        for cp in checkpoints:
+            fname = cp.get('name', 'unknown')
+            if fname not in per_func:
+                per_func[fname] = {"enter_j": None, "exit_j": None, "calls": 0}
+            ctype = cp.get('type', '')
+            joules = cp.get('joules', 0.0)
+            if 'enter' in ctype:
+                per_func[fname]['enter_j'] = joules
+                per_func[fname]['calls'] += 1
+            elif 'exit' in ctype or 'return' in ctype:
+                per_func[fname]['exit_j'] = joules
+    func_energy = {}
+    for fname, data in per_func.items():
+        if data['enter_j'] is not None and data['exit_j'] is not None:
+            delta = data['exit_j'] - data['enter_j']
+            func_energy[fname] = {"energy_j": max(delta, 0.0), "calls": data['calls']}
+    system = {"kernel": platform.release(), "cpu_model": "", "governor": ""}
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    system["cpu_model"] = line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") as f:
+            system["governor"] = f.read().strip()
+    except OSError:
+        pass
+    total_energy = 0.0
+    wall_time = 0.0
+    if checkpoints and len(checkpoints) >= 2:
+        total_energy = max(checkpoints[-1].get('joules', 0) - checkpoints[0].get('joules', 0), 0.0)
+        ts_delta = checkpoints[-1].get('timestamp', 0) - checkpoints[0].get('timestamp', 0)
+        wall_time = ts_delta / 1e6 if ts_delta > 1e6 else ts_delta
+    return {
+        "success": bool(measurement_result and measurement_result.get('success')),
+        "file": str(script), "language": language, "granularity": granularity,
+        "source_fingerprint": source_hash,
+        "system": system,
+        "summary": {"total_energy_j": total_energy, "wall_time_s": wall_time,
+                     "avg_power_w": total_energy / wall_time if wall_time > 0 else 0.0,
+                     "checkpoint_count": len(checkpoints)},
+        "instrumentation_points": points_map,
+        "per_function_energy": func_energy,
+        "checkpoints": checkpoints,
+        "optimization_suggestions": analysis_result.optimization_suggestions,
+    }
 
 
 def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
@@ -2156,14 +2220,99 @@ def run_benchmark(
 
         console.print(table)
 
-        # Save results (overwrite previous)
         json_file = output_dir / "benchmark_latest.json"
         csv_file = output_dir / "benchmark_latest.csv"
         collector.to_json(json_file)
         collector.to_csv(csv_file)
-        console.print(f"Results saved to {json_file}")
+        console.print(f"\n{collector.to_text()}")
+        console.print(f"\nResults saved to {json_file}")
     finally:
         harness.cleanup()
+
+@app.command("run")
+def run_command(
+    command: Annotated[List[str], typer.Argument(help="Command to measure energy for")],
+    repeat: Annotated[int, typer.Option("--repeat", "-n", help="Number of repetitions")] = 10,
+    warmup: Annotated[int, typer.Option("--warmup", "-w", help="Warmup runs")] = 1,
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    budget: Annotated[Optional[float], typer.Option("--budget", help="Energy budget in Joules (fail if exceeded)")] = None,
+):
+    """Measure energy of any shell command (like hyperfine but for energy).
+
+    Examples:
+    - codegreen run python script.py
+    - codegreen run --repeat 20 ./my_binary arg1 arg2
+    - codegreen run --budget 10.0 python train.py
+    """
+    import subprocess, time, re, tempfile, math
+    from benchmark.results import StatisticalAnalysis
+
+    for i in range(warmup):
+        if not json_output:
+            console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
+        subprocess.run(command, capture_output=True, timeout=300)
+
+    events = "power/energy-pkg/"
+    try:
+        r = subprocess.run(["perf", "list", "power"], capture_output=True, text=True, timeout=5)
+        if "energy-ram" in r.stdout:
+            events += ",power/energy-ram/"
+    except Exception:
+        pass
+
+    energies, times = [], []
+    for i in range(repeat):
+        if not json_output:
+            console.print(f"[dim]Run {i+1}/{repeat}[/dim]")
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            perf_file = f.name
+        try:
+            full = ["perf", "stat", "-e", events, "-o", perf_file, "--"] + command
+            start = time.perf_counter()
+            subprocess.run(full, capture_output=True, text=True, timeout=300)
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+            content = open(perf_file).read()
+            total = 0.0
+            for m in re.finditer(r'([\d.,]+)\s+Joules', content):
+                total += float(m.group(1).replace(',', ''))
+            if total > 0:
+                energies.append(total)
+        finally:
+            import os
+            os.unlink(perf_file)
+
+    if not energies:
+        if json_output:
+            print(json.dumps({"success": False, "error": "No energy data (RAPL unavailable?)"}))
+        else:
+            console.print("[red]No energy data collected. Is RAPL accessible?[/red]")
+        raise typer.Exit(1)
+
+    e_stats = StatisticalAnalysis.summarize(energies)
+    t_stats = StatisticalAnalysis.summarize(times)
+
+    if json_output:
+        print(json.dumps({
+            "command": " ".join(command), "runs": len(energies),
+            "energy_joules": {"mean": e_stats.mean, "std": e_stats.std, "min": e_stats.min, "max": e_stats.max,
+                              "ci95": [e_stats.ci95_lower, e_stats.ci95_upper]},
+            "time_seconds": {"mean": t_stats.mean, "std": t_stats.std, "min": t_stats.min, "max": t_stats.max},
+            "budget_exceeded": budget is not None and e_stats.mean > budget
+        }, indent=2))
+    else:
+        console.print(f"\n[bold]Energy:[/bold] {e_stats.mean:.4f} J +/- {e_stats.std:.4f} J")
+        console.print(f"  Range: [{e_stats.min:.4f} .. {e_stats.max:.4f}] J, "
+                       f"CI95: [{e_stats.ci95_lower:.4f}, {e_stats.ci95_upper:.4f}] J")
+        console.print(f"[bold]Time:[/bold]   {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
+        console.print(f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}")
+        if budget is not None:
+            if e_stats.mean > budget:
+                console.print(f"[red]BUDGET EXCEEDED: {e_stats.mean:.4f}J > {budget}J[/red]")
+                raise typer.Exit(1)
+            else:
+                console.print(f"[green]Within budget: {e_stats.mean:.4f}J <= {budget}J[/green]")
+
 
 @app.command("validate-accuracy")
 def run_validation(

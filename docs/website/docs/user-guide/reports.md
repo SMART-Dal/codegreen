@@ -20,6 +20,18 @@ codegreen measure python script.py --json
 
 Machine-readable JSON with analysis metadata, measurement results, and checkpoint data.
 
+### CSV Output
+
+```bash
+codegreen measure python script.py --csv
+```
+
+### Markdown Output
+
+```bash
+codegreen measure python script.py --markdown
+```
+
 ### File Output
 
 ```bash

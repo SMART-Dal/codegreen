@@ -3,9 +3,7 @@
     "extensions": [
         ".js",
         ".jsx",
-        ".mjs",
-        ".ts",
-        ".tsx"
+        ".mjs"
     ],
     "tree_sitter_name": "javascript",
     "ast_config": {

@@ -7,13 +7,11 @@ class AccuracyAnalysis:
     def compute_error(measured: List[float], reference: List[float]) -> Dict[str, float]:
         if not measured or not reference:
             return {"mape": 0, "max_error": 0, "rmse": 0}
-        m_mean = sum(measured) / len(measured)
-        r_mean = sum(reference) / len(reference)
-        mape = abs(m_mean - r_mean) / r_mean * 100 if r_mean > 0 else 0
         errors = []
         for m, r in zip(measured, reference):
             if r > 0:
                 errors.append(abs(m - r) / r * 100)
+        mape = sum(errors) / len(errors) if errors else 0
         max_error = max(errors) if errors else 0
         squared_errors = [(m - r) ** 2 for m, r in zip(measured, reference)]
         rmse = math.sqrt(sum(squared_errors) / len(squared_errors)) if squared_errors else 0
@@ -63,6 +61,13 @@ class AccuracyAnalysis:
     def _rank(values: List[float]) -> List[float]:
         indexed = sorted(enumerate(values), key=lambda x: x[1])
         ranks = [0.0] * len(values)
-        for rank, (orig_idx, _) in enumerate(indexed, 1):
-            ranks[orig_idx] = float(rank)
+        i = 0
+        while i < len(indexed):
+            j = i
+            while j < len(indexed) and indexed[j][1] == indexed[i][1]:
+                j += 1
+            avg_rank = (i + 1 + j) / 2.0
+            for k in range(i, j):
+                ranks[indexed[k][0]] = avg_rank
+            i = j
         return ranks

@@ -483,16 +483,17 @@ python scripts/compare_energy.py baseline.json current.json
 
 ### 4. Energy Budgets
 
-Set per-function energy budgets:
-```python
-# energy_budget.json
-{
-  "compute_transform": {"max_joules": 10.0},
-  "process_data": {"max_joules": 5.0},
-  "render_output": {"max_joules": 2.0}
-}
+Use `codegreen run --budget` for built-in energy budget enforcement. The command exits with a non-zero status if mean energy exceeds the budget, making it suitable for CI gates:
+
+```bash
+# Fail the pipeline if mean energy exceeds 10 Joules
+codegreen run --budget 10.0 --json python tests/benchmark.py
+
+# With multiple repetitions for statistical confidence
+codegreen run --budget 5.0 --repeat 20 --warmup 3 ./my_binary
 ```
 
+For per-function budgets with `codegreen measure`:
 ```bash
 codegreen measure python app.py --output results.json
 python scripts/check_budget.py results.json energy_budget.json
