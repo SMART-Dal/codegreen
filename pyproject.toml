@@ -79,8 +79,16 @@ Repository = "https://github.com/SMART-Dal/codegreen"
 codegreen = "src.cli.entrypoint:main_cli_wrapper"
 
 # Setuptools configuration
+# NOTE: setup.py handles the actual build (cmake for C++ NEMB backend).
+# This section tells setuptools which Python packages to include in the wheel.
+# The C++ binary (lib/libcodegreen-nemb.so, bin/codegreen) is copied into the
+# wheel by setup.py's BuildWithCMake command.
 [tool.setuptools.packages]
-find = {where = ["."], include = ["src", "src.cli", "src.analyzer", "src.instrumentation", "src.utils", "benchmark", "benchmark.validation"]}
+find = {where = ["."], include = [
+    "src", "src.cli", "src.analyzer", "src.instrumentation", "src.utils",
+    "src.analysis", "src.analysis.cfg",
+    "benchmark", "benchmark.validation", "benchmark.suites",
+]}
 
 [tool.setuptools.package-data]
 "src.instrumentation" = [
@@ -88,6 +96,14 @@ find = {where = ["."], include = ["src", "src.cli", "src.analyzer", "src.instrum
     "language_runtimes/python/*.py",
     "language_runtimes/c/*.h",
     "language_runtimes/cpp/*.h",
+    "language_runtimes/java/**/*.java",
+]
+# Native binaries are copied by setup.py BuildWithCMake, but we also
+# declare them here so setuptools knows the wheel is platform-specific.
+"src" = [
+    "lib/*.so",
+    "lib/runtime/**/*.h",
+    "bin/codegreen",
 ]
 
 [tool.setuptools.exclude-package-data]

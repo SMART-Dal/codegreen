@@ -47,6 +47,16 @@ CodeGreen executes Tree-sitter queries found in `third_party/nvim-treesitter/que
 
 ---
 
+## `node_types` Details
+
+Beyond the standard `function_types`, `body_types`, `class_types`, and `return_types`, several optional fields control advanced instrumentation behaviour:
+
+* **`terminating_types`**: Node types that unconditionally end control flow (e.g. `return_statement`, `throw_statement`). Used to detect whether an implicit function-exit checkpoint would be unreachable.
+* **`constructor_invocation_types`**: Node types for delegating constructor calls that must remain the first statement in a body (e.g. Java's `explicit_constructor_invocation`). The `inside_start` insertion rule skips past these before placing its checkpoint.
+* **`import_after_node_types`**: Top-level node types after which the runtime import should be placed (e.g. `package_declaration`). When set, the import insertion uses tree-sitter AST lookup instead of line-based scanning.
+
+---
+
 ## Step-by-Step: Adding a Language
 
 1. **Clone Template**: Copy `TEMPLATE.json` to `yourlang.json`.

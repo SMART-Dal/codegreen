@@ -70,6 +70,8 @@ class RunResult:
     time_seconds: float
     output_valid: bool
     repetition: int = 0
+    variant: str = "default"
+    suite: str = "benchmarksgame"
     timestamp: datetime = field(default_factory=datetime.now)
     checkpoints: List[Dict[str, Any]] = field(default_factory=list)
 

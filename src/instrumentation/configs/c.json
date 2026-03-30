@@ -67,7 +67,10 @@
         "deduplication_rules": {
             "function_enter": {
                 "scope": "function",
-                "priority_order": ["function_def", "function_name"],
+                "priority_order": [
+                    "function_def",
+                    "function_name"
+                ],
                 "max_per_function": 1
             }
         }
@@ -82,7 +85,11 @@
             "loop_exit": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
         },
         "statement_terminator": ";",
-        "comment_prefix": "//"
+        "comment_prefix": "//",
+        "runtime_guard_files": [
+            "codegreen_runtime.h",
+            "codegreen_runtime.c"
+        ]
     },
     "formatting_config": {
         "indent_size": 2,
@@ -135,7 +142,7 @@
         "debug_text_preview_length": 100,
         "debug_error_text_length": 200,
         "debug_significant_change_threshold": 100,
-        "default_indent_size": 4,
+        "default_indent_size": 2,
         "max_inheritance_depth": 5
     },
     "node_types": {
@@ -156,6 +163,67 @@
         ],
         "return_types": [
             "return_statement"
+        ],
+        "throw_types": [],
+        "constructor_invocation_types": [],
+        "import_after_node_types": [],
+        "terminating_types": [
+            "return_statement",
+            "break_statement",
+            "continue_statement"
+        ],
+        "identifier_types": [
+            "identifier",
+            "type_identifier",
+            "field_identifier"
+        ],
+        "definition_types": [
+            "function_definition"
+        ],
+        "if_statement_types": [
+            "if_statement"
+        ],
+        "else_clause_types": [],
+        "elif_clause_types": [],
+        "try_statement_types": [],
+        "catch_clause_types": [],
+        "finally_clause_types": [],
+        "for_statement_types": [
+            "for_statement"
+        ],
+        "docstring_node_types": [],
+        "docstring_delimiters": [],
+        "comment_prefix": "//",
+        "indentation_sensitive": false
+    },
+    "project_config": {
+        "source_patterns": [
+            "**/src/**/*.c",
+            "**/*.c"
+        ],
+        "exclude_patterns": [
+            "**/test/**",
+            "**/tests/**",
+            "**/.git/**",
+            "**/build/**"
+        ],
+        "build_systems": {
+            "cmake": {
+                "detect": "CMakeLists.txt",
+                "build_cmd": "cmake --build build"
+            },
+            "make": {
+                "detect": "Makefile",
+                "build_cmd": "make"
+            }
+        },
+        "runtime_injection": {
+            "type": "include_link",
+            "include_flag": "-I${CODEGREEN_RUNTIME}",
+            "link_flag": "-L${CODEGREEN_LIB} -lcodegreen-nemb"
+        },
+        "source_root_markers": [
+            "src"
         ]
     }
 }

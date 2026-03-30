@@ -85,28 +85,20 @@ class CodeGreenProfiler(ProfilerInterface):
             raw = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
             return energy, checkpoints, raw, stdout
-        measurement = raw.get("measurement", {})
-        raw_output = measurement.get("output", "")
-        # Program output is between NEMB init (ends with "Measurements started")
-        # and CODEGREEN_RESULT markers. Extract that region.
-        lines = raw_output.splitlines()
-        start_idx = 0
-        end_idx = len(lines)
-        for i, line in enumerate(lines):
-            if "Measurements started" in line:
-                start_idx = i + 1
-            if "CODEGREEN_RESULT_START" in line:
-                end_idx = i
-                break
-        program_output = "\n".join(l for l in lines[start_idx:end_idx] if l.strip())
-        if measurement.get("success"):
-            checkpoints = measurement.get("checkpoints", [])
-            if len(checkpoints) >= 2:
-                first_j = checkpoints[0].get("joules", 0)
-                last_j = checkpoints[-1].get("joules", 0)
-                energy = last_j - first_j
-                if energy < 0:
-                    energy = 0.0
+
+        # Extract energy from summary (primary) or checkpoints (fallback)
+        summary = raw.get("summary", {})
+        if summary.get("total_energy_j", 0) > 0:
+            energy = summary["total_energy_j"]
+
+        checkpoints = raw.get("checkpoints", [])
+        if energy <= 0 and len(checkpoints) >= 2:
+            first_j = checkpoints[0].get("joules", 0)
+            last_j = checkpoints[-1].get("joules", 0)
+            energy = last_j - first_j
+            if energy < 0:
+                energy = 0.0
+
         return energy, checkpoints, raw, program_output
 
     def is_available(self) -> bool:

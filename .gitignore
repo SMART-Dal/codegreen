@@ -104,3 +104,25 @@ bin
 bin/src/*
 bin/runtime/*
 benchmark/benchmarksgame
+benchmark/*.zip
+
+# MkDocs build output and cache
+docs/website/site/
+docs/website/.cache/
+
+# Scratch/temp files
+energy_*.html
+test_demo.py
+theory.txt
+todo.txt
+validation.txt
+work.tex
+/cat
+/image*
+2026-*.txt
+CLAUDE.md
+third_party/hyperfine/
+third_party/vhs/
+*copy*
+benchmark/results/
+dist/

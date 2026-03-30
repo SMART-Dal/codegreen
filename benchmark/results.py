@@ -86,6 +86,97 @@ class StatisticalAnalysis:
         overhead_pct = ((instr_mean - native_mean) / native_mean) * 100 if native_mean > 0 else 0
         return {"native_mean": native_mean, "instrumented_mean": instr_mean, "overhead_percent": overhead_pct}
 
+class ComparisonReport:
+    """Compare two sets of measurements (e.g., original vs patched, perf vs codegreen)."""
+
+    @staticmethod
+    def compare_variants(collector: 'ResultCollector',
+                         baseline_variant: str = "original",
+                         candidate_variant: str = "patched") -> List[Dict[str, Any]]:
+        comparisons = []
+        # Group by task (problem + profiler), compare variants
+        tasks = {}
+        for r in collector.results:
+            key = (r.problem.rsplit('/', 1)[0] if '/' in r.problem else r.problem,
+                   r.profiler)
+            tasks.setdefault(key, {}).setdefault(r.variant, []).append(r)
+
+        for (task_name, profiler), variants in tasks.items():
+            baseline = variants.get(baseline_variant, [])
+            candidate = variants.get(candidate_variant, [])
+            if not baseline or not candidate:
+                continue
+            b_energies = [r.energy_joules for r in baseline if r.energy_joules > 0]
+            c_energies = [r.energy_joules for r in candidate if r.energy_joules > 0]
+            if not b_energies or not c_energies:
+                continue
+            b_stats = StatisticalAnalysis.summarize(b_energies)
+            c_stats = StatisticalAnalysis.summarize(c_energies)
+            delta = StatisticalAnalysis.compare(b_stats, c_stats)
+
+            # Wilcoxon if enough samples
+            p_value, significant = 1.0, False
+            if len(b_energies) >= 3 and len(c_energies) >= 3:
+                try:
+                    from scipy.stats import wilcoxon
+                    min_len = min(len(b_energies), len(c_energies))
+                    stat, p_value = wilcoxon(b_energies[:min_len], c_energies[:min_len])
+                    significant = p_value < 0.05
+                except (ImportError, ValueError):
+                    pass
+
+            comparisons.append({
+                "task": task_name,
+                "profiler": profiler,
+                "baseline_variant": baseline_variant,
+                "candidate_variant": candidate_variant,
+                "baseline_energy": b_stats,
+                "candidate_energy": c_stats,
+                "delta_pct": delta["delta_pct"],
+                "p_value": p_value,
+                "significant": significant,
+                "n_baseline": len(b_energies),
+                "n_candidate": len(c_energies),
+            })
+        return comparisons
+
+    @staticmethod
+    def compare_profilers(collector: 'ResultCollector',
+                          baseline_profiler: str = "perf",
+                          test_profiler: str = "codegreen") -> List[Dict[str, Any]]:
+        comparisons = []
+        tasks = {}
+        for r in collector.results:
+            key = (r.problem, r.variant)
+            tasks.setdefault(key, {}).setdefault(r.profiler, []).append(r)
+
+        for (task_name, variant), profilers in tasks.items():
+            baseline = profilers.get(baseline_profiler, [])
+            test = profilers.get(test_profiler, [])
+            if not baseline or not test:
+                continue
+            b_energies = [r.energy_joules for r in baseline if r.energy_joules > 0]
+            t_energies = [r.energy_joules for r in test if r.energy_joules > 0]
+            if not b_energies or not t_energies:
+                continue
+            b_mean = sum(b_energies) / len(b_energies)
+            t_mean = sum(t_energies) / len(t_energies)
+            error_pct = abs(t_mean - b_mean) / b_mean * 100 if b_mean > 0 else 0
+
+            comparisons.append({
+                "task": task_name,
+                "variant": variant,
+                "baseline_profiler": baseline_profiler,
+                "test_profiler": test_profiler,
+                "baseline_mean_j": b_mean,
+                "test_mean_j": t_mean,
+                "error_pct": error_pct,
+                "n_baseline": len(b_energies),
+                "n_test": len(t_energies),
+            })
+        return comparisons
+
+
 class ResultCollector:
     def __init__(self):
         self.results: List[RunResult] = []

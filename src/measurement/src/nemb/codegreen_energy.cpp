@@ -98,16 +98,10 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
     }
     
     nemb::CoordinatorConfig coordinator_config;
+    coordinator_config.measurement_interval = std::chrono::milliseconds(nemb_config.coordinator.measurement_interval_ms);
     coordinator_config.temporal_alignment_tolerance_ms = nemb_config.coordinator.temporal_alignment_tolerance_ms;
     coordinator_config.cross_validation_threshold = nemb_config.coordinator.cross_validation_threshold;
     coordinator_config.measurement_buffer_size = nemb_config.coordinator.measurement_buffer_size;
-    
-    // High-accuracy mode: 1ms polling and large history buffer
-    if (config.prefer_accuracy_over_speed) {
-        coordinator_config.measurement_interval = std::chrono::milliseconds(1);
-        coordinator_config.measurement_buffer_size = 100000; 
-    }
-    
     coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
     coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
     

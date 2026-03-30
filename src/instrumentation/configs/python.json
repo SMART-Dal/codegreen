@@ -71,12 +71,17 @@
         "deduplication_rules": {
             "function_exit": {
                 "scope": "function",
-                "priority_order": ["return"],
+                "priority_order": [
+                    "return"
+                ],
                 "max_per_function": 1
             },
             "function_enter": {
                 "scope": "function",
-                "priority_order": ["function_def", "function_name"],
+                "priority_order": [
+                    "function_def",
+                    "function_name"
+                ],
                 "max_per_function": 1
             }
         }
@@ -90,7 +95,10 @@
             "loop_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_exit')"
         },
         "statement_terminator": "",
-        "comment_prefix": "#"
+        "comment_prefix": "#",
+        "runtime_guard_files": [
+            "codegreen_runtime.py"
+        ]
     },
     "formatting_config": {
         "indent_size": 4,
@@ -156,31 +164,103 @@
     },
     "node_types": {
         "function_types": [
-            "function_definition",
-            "method_definition",
-            "constructor_definition",
-            "async_function_definition"
+            "function_definition"
         ],
         "body_types": [
-            "block",
-            "compound_statement",
-            "constructor_body"
+            "block"
         ],
         "loop_types": [
             "for_statement",
-            "while_statement",
-            "do_statement"
+            "while_statement"
         ],
         "class_types": [
-            "class_definition",
-            "class_specifier",
-            "struct_specifier"
+            "class_definition"
         ],
         "comment_types": [
             "comment"
         ],
         "return_types": [
             "return_statement"
+        ],
+        "throw_types": [
+            "raise_statement"
+        ],
+        "constructor_invocation_types": [],
+        "import_after_node_types": [],
+        "terminating_types": [
+            "return_statement",
+            "raise_statement",
+            "break_statement",
+            "continue_statement"
+        ],
+        "identifier_types": [
+            "identifier"
+        ],
+        "definition_types": [
+            "function_definition",
+            "class_definition",
+            "decorated_definition"
+        ],
+        "if_statement_types": [
+            "if_statement"
+        ],
+        "else_clause_types": [
+            "else_clause"
+        ],
+        "elif_clause_types": [
+            "elif_clause"
+        ],
+        "try_statement_types": [
+            "try_statement"
+        ],
+        "catch_clause_types": [
+            "except_clause"
+        ],
+        "finally_clause_types": [
+            "finally_clause"
+        ],
+        "for_statement_types": [
+            "for_statement"
+        ],
+        "docstring_node_types": [
+            "expression_statement"
+        ],
+        "docstring_delimiters": ["\"\"\"", "'''"],
+        "comment_prefix": "#",
+        "indentation_sensitive": true
+    },
+    "project_config": {
+        "source_patterns": [
+            "**/*.py"
+        ],
+        "exclude_patterns": [
+            "**/test/**",
+            "**/tests/**",
+            "**/.git/**",
+            "**/__pycache__/**",
+            "**/build/**",
+            "**/dist/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/node_modules/**",
+            "**/.tox/**"
+        ],
+        "build_systems": {
+            "pip": {
+                "detect": "setup.py",
+                "build_cmd": "pip install -e ."
+            },
+            "poetry": {
+                "detect": "pyproject.toml",
+                "build_cmd": "poetry install"
+            }
+        },
+        "runtime_injection": {
+            "type": "pythonpath",
+            "module": "codegreen_runtime"
+        },
+        "source_root_markers": [
+            "src"
         ]
     }
 }

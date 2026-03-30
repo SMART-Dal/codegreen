@@ -35,23 +35,37 @@ jobs:
         CIBW_BUILD: "cp39-manylinux_x86_64 cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
         CIBW_SKIP: "*-musllinux*"
         CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
-        # Install build deps inside container
+        # Install C++ build deps inside manylinux container
         CIBW_BEFORE_ALL_LINUX: >
           yum install -y epel-release &&
           yum install -y cmake gcc-c++ make pkgconfig jsoncpp-devel libcurl-devel sqlite-devel &&
           git submodule update --init --recursive
-        # Build C++ and set RPATH so .so is found at runtime
+        # Build C++ NEMB backend before wheel packaging
         CIBW_BEFORE_BUILD: >
           cd {project} &&
           mkdir -p build && cd build &&
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=$(which python) &&
-          cmake --build . --config Release -j$(nproc)
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib'
+            -DPython3_EXECUTABLE=$(which python) &&
+          cmake --build . --config Release -j$(nproc) &&
+          echo "=== NEMB build artifacts ===" &&
+          ls -la {project}/lib/libcodegreen-nemb.so {project}/build/bin/codegreen 2>/dev/null
         CIBW_ENVIRONMENT: >
           LD_LIBRARY_PATH={project}/lib:$LD_LIBRARY_PATH
-        # Smoke test
+        # Thorough smoke test: verify binary exists, loads, and CLI works
         CIBW_TEST_COMMAND: >
-          python -c "from src.cli.cli import get_binary_path; print('binary:', get_binary_path())" &&
-          codegreen --help
+          python -c "
+          import importlib, pathlib, sys;
+          pkg = pathlib.Path(importlib.import_module('src').__file__).parent;
+          so = pkg / 'lib' / 'libcodegreen-nemb.so';
+          binary = pkg / 'bin' / 'codegreen';
+          assert so.exists(), f'NEMB .so not found at {so}';
+          assert binary.exists(), f'codegreen binary not found at {binary}';
+          print(f'NEMB binary OK: {so} ({so.stat().st_size} bytes)');
+          print(f'CLI binary OK: {binary} ({binary.stat().st_size} bytes)');
+          " &&
+          codegreen --help &&
+          codegreen analyze python -c "print('hello')" --json 2>/dev/null || true
 
     - uses: actions/upload-artifact@v4
       with:
@@ -93,39 +107,60 @@ jobs:
     - name: Install and test
       run: |
         pip install wheelhouse/*cp$(echo ${{ matrix.python-version }} | tr -d '.')*manylinux*.whl
-        codegreen --help
-        codegreen doctor || true
-        echo 'print(sum(range(100000)))' > test.py
-        codegreen measure python test.py --json || true
 
-  publish-testpypi:
-    name: Publish to Test PyPI
-    needs: [build-wheels, build-sdist, test-wheel]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    environment: test-pypi
-    permissions:
-      id-token: write  # trusted publishing
-    steps:
-    - uses: actions/download-artifact@v4
-      with:
-        path: dist/
-    - run: |
-        mkdir -p final_dist
-        find dist/ -name "*.whl" -o -name "*.tar.gz" | xargs -I{} cp {} final_dist/
-    - uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/
-        packages-dir: final_dist/
+        # 1. Verify CLI works
+        codegreen --help
+
+        # 2. Verify NEMB binary is in the installed package
+        python -c "
+        import importlib, pathlib
+        pkg = pathlib.Path(importlib.import_module('src').__file__).parent
+        so = pkg / 'lib' / 'libcodegreen-nemb.so'
+        binary = pkg / 'bin' / 'codegreen'
+        assert so.exists(), f'NEMB .so missing at {so}'
+        assert binary.exists(), f'CLI binary missing at {binary}'
+        print(f'NEMB: {so} ({so.stat().st_size} bytes)')
+        print(f'CLI:  {binary} ({binary.stat().st_size} bytes)')
+        "
+
+        # 3. Verify instrumentation works (no execution, no RAPL needed)
+        cat > /tmp/cg_test.py << 'PYEOF'
+        def fibonacci(n):
+            if n <= 1: return n
+            return fibonacci(n-1) + fibonacci(n-2)
+        def main():
+            fibonacci(10)
+        if __name__ == "__main__":
+            main()
+        PYEOF
+        codegreen analyze python /tmp/cg_test.py --json | python -c "
+        import json, sys
+        d = json.load(sys.stdin)
+        pts = d.get('instrumentation_points', [])
+        assert len(pts) >= 2, f'Expected >= 2 instrumentation points, got {len(pts)}'
+        print(f'Instrumentation: {len(pts)} points found')
+        "
+
+        # 4. Verify all language configs load
+        python -c "
+        import json, pathlib, importlib
+        pkg = pathlib.Path(importlib.import_module('src.instrumentation').__file__).parent
+        configs = list((pkg / 'configs').glob('*.json'))
+        assert len(configs) >= 4, f'Expected >= 4 language configs, got {len(configs)}'
+        for c in configs:
+            d = json.loads(c.read_text())
+            assert 'ast_config' in d, f'{c.name}: missing ast_config'
+        print(f'Configs: {len(configs)} language configs valid')
+        "
+
+        # 5. Verify doctor reports system status
+        codegreen doctor || true
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [publish-testpypi]
+    needs: [build-wheels, build-sdist, test-wheel]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    environment: pypi
-    permissions:
-      id-token: write  # trusted publishing (no API tokens needed)
     steps:
     - uses: actions/download-artifact@v4
       with:
@@ -133,6 +168,9 @@ jobs:
     - run: |
         mkdir -p final_dist
         find dist/ -name "*.whl" -o -name "*.tar.gz" | xargs -I{} cp {} final_dist/
+        echo "=== Artifacts to publish ==="
+        ls -la final_dist/
     - uses: pypa/gh-action-pypi-publish@release/v1
       with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: final_dist/

@@ -83,12 +83,13 @@ class ASTProcessor:
             target_nodes = captures_dict.get("target", [])
             if target_nodes:
                 # Filter out docstrings if we have multiple matches
+                docstring_node_types = set(self.config.node_types.get("docstring_node_types", []))
+                docstring_delimiters = self.config.node_types.get("docstring_delimiters", [])
                 non_docstring_nodes = []
                 for captured_node in target_nodes:
-                    # Check if this is a docstring (expression_statement containing only a string)
-                    if captured_node.type == 'expression_statement' and len(captured_node.children) > 0:
-                        is_docstring = any(child.type == 'string' for child in captured_node.children)
-                        if is_docstring:
+                    if docstring_node_types and captured_node.type in docstring_node_types and docstring_delimiters:
+                        node_text = self.source_code[captured_node.start_byte:captured_node.end_byte].strip()
+                        if any(node_text.startswith(d) and node_text.endswith(d) for d in docstring_delimiters):
                             logger.debug(f"   Skipping docstring node at {captured_node.start_byte}")
                             continue
                     non_docstring_nodes.append(captured_node)
@@ -119,55 +120,45 @@ class ASTProcessor:
     def find_body_node(self, node: Node) -> Optional[Node]:
         """Find the body/block node for a given node using language configuration."""
         ast_config = self.config.ast_config
-        
-        # Check if the node itself is a body/block
-        body_types = self.config.node_types.get("body_types", ["block"])
-        if node.type in body_types or node.type in ["compound_statement", "block", "body", "class_body"]:
+        body_types = set(self.config.node_types.get("body_types", []))
+        identifier_types = set(self.config.node_types.get("identifier_types", []))
+        definition_types = set(self.config.node_types.get("definition_types", []))
+
+        if node.type in body_types:
             logger.debug(f"   Node is already a body/block: {node.type}")
             return node
-        
-        # If this is an identifier (function name, class name, etc.), look for parent definition
-        if node.type in ["identifier", "type_identifier", "field_identifier"]:
+
+        if node.type in identifier_types:
             logger.debug(f" Finding body for identifier node: {node.type} at {node.start_point}-{node.end_point}")
             current = node.parent
             level = 0
-            # Get configurable parent search levels
             limits = self.config_manager.get_processing_limits(self.language)
             max_levels = limits.get('max_parent_search_levels', 10)
-            while current and level < max_levels:  # Prevent infinite loops
+            while current and level < max_levels:
                 logger.debug(f"   Parent level {level}: {current.type} at {current.start_point}-{current.end_point}")
-                if current.type in ["function_definition", "method_definition", "async_function_definition", "class_definition", "class_specifier", "class_declaration", "constructor_definition"]:
+                if current.type in definition_types:
                     logger.debug(f"   Found parent definition: {current.type}")
-                    # Found the parent function/method/class, now find its body
                     body = self._find_body_in_node(current, ast_config)
                     logger.debug(f"   Body found: {body.type if body else None}")
                     return body
                 current = current.parent
                 level += 1
             logger.debug(f"   No parent definition found after {level} levels")
-        
-        # For other node types, try to find body directly
+
         return self._find_body_in_node(node, ast_config)
     
     def _find_body_in_node(self, node: Node, ast_config: Dict[str, Any]) -> Optional[Node]:
         """Helper method to find body within a specific node."""
-        # First, try field name
         body_field = ast_config.get("body_field", "body")
         body = node.child_by_field_name(body_field)
         if body:
             return body
-        
-        # Fallback: check all possible body types from config
-        body_types = self.config.node_types.get("body_types", ["block"])
+
+        body_types = set(self.config.node_types.get("body_types", []))
         for child in node.named_children:
             if child.type in body_types:
                 return child
-        
-        # Super fallback: look for any child that looks like a block
-        for child in node.named_children:
-            if child.type in ["compound_statement", "block", "body", "class_body"]:
-                return child
-        
+
         return None
     
     def find_insertion_point(self, node: Node, insertion_mode: str) -> Optional[int]:
@@ -180,9 +171,10 @@ class ASTProcessor:
         insertion_rules = ast_config.get("insertion_rules", {})
         logger.debug(f"   Available insertion rules: {list(insertion_rules.keys())}")
         
-        # Map insertion modes to rule keys based on node type
-        if node.type in ['class_definition', 'class_declaration', 'class_specifier', 'struct_specifier']:
-            # For class definitions, use different mapping
+        # Map insertion modes to rule keys based on node type (config-driven)
+        class_types = set(self.config.node_types.get("class_types", []))
+        is_class = node.type in class_types
+        if is_class:
             mode_mapping = {
                 'inside_start': 'class_enter',
                 'inside_end': 'class_exit',
@@ -190,7 +182,6 @@ class ASTProcessor:
                 'after': 'after'
             }
         else:
-            # For function definitions and other nodes
             mode_mapping = {
                 'inside_start': 'function_enter',
                 'inside_end': 'function_exit',
@@ -240,7 +231,6 @@ class ASTProcessor:
         """Manual AST walking logic (fallback)."""
         if mode == "inside_start":
             logger.debug(f"   Processing inside_start mode for {node.type}")
-            # Get the internal body/block node
             body_node = self.find_body_node(node)
 
             if not body_node:
@@ -252,37 +242,44 @@ class ASTProcessor:
                 logger.debug(f"   Found first statement position: {insertion_byte}")
                 return insertion_byte
             else:
-                # For inside_start, we want to insert at the beginning of the body content
                 body_start = body_node.start_byte
-                
-                # Language-specific logic for finding the insertion point
-                if body_node.type == 'block':
-                    # block-based (Python), find first non-docstring statement
-                    logger.debug(f"   Calling _find_python_function_start for block-based body")
-                    insertion_byte = self._find_python_function_start(body_node, rule)
-                    if insertion_byte is not None:
-                        return insertion_byte
-                else:
-                    # For C/C++/Java, look for opening brace
-                    # Get configurable text preview length
+                has_brace = any(child.type == '{' for child in body_node.children)
+
+                if has_brace:
                     limits = self.config_manager.get_processing_limits(self.language)
                     text_preview_length = limits.get('debug_text_preview_length', 100)
                     body_text = self.source_code[body_start:body_start + text_preview_length]
-                    
-                    # Find the opening brace
                     brace_pos = body_text.find('{')
                     if brace_pos != -1:
-                        # Insert after the opening brace and any whitespace
                         insertion_pos = body_start + brace_pos + 1
-                        # Skip whitespace after the brace
                         while insertion_pos < len(self.source_code) and self.source_code[insertion_pos] in ' \t':
                             insertion_pos += 1
-                        # Skip newline if present
                         if insertion_pos < len(self.source_code) and self.source_code[insertion_pos] == '\n':
                             insertion_pos += 1
+
+                        # Skip past constructor invocation types (e.g. super()/this() in Java)
+                        # These must remain the first statement in the body per language spec.
+                        ctor_types = self.config.node_types.get('constructor_invocation_types', [])
+                        if ctor_types:
+                            for child in body_node.named_children:
+                                if child.type in ctor_types:
+                                    # Insert AFTER the constructor invocation
+                                    insertion_pos = child.end_byte
+                                    while insertion_pos < len(self.source_code) and self.source_code[insertion_pos] in ' \t':
+                                        insertion_pos += 1
+                                    if insertion_pos < len(self.source_code) and self.source_code[insertion_pos] == '\n':
+                                        insertion_pos += 1
+                                    logger.debug(f"   Skipped constructor invocation '{child.type}', inserting at {insertion_pos}")
+                                break  # only check the first named child
+
                         logger.debug(f"   Using body start after brace: {insertion_pos}")
                         return insertion_pos
-                
+                elif self.config.node_types.get("indentation_sensitive", False):
+                    logger.debug(f"   Finding first statement in indentation-based body")
+                    insertion_byte = self._find_indentation_body_start(body_node, rule)
+                    if insertion_byte is not None:
+                        return insertion_byte
+
                 logger.debug(f"   Using body start: {body_node.start_byte}")
                 return body_node.start_byte
         
@@ -296,8 +293,8 @@ class ASTProcessor:
                 return node.end_byte
 
             # For brace-based languages, we want to insert BEFORE the closing brace '}'
-            # but only if the body actually uses braces.
-            if body_node.type == 'compound_statement' or body_node.type == 'class_body':
+            has_brace = any(child.type == '{' for child in body_node.children)
+            if has_brace:
                  # Find the LAST closing brace in the body node
                  body_text = self.source_code[body_node.start_byte:body_node.end_byte]
                  last_brace_idx = body_text.rfind('}')
@@ -324,9 +321,10 @@ class ASTProcessor:
             return body_node.end_byte
                 
         elif mode == "immediately_before":
+            line_start = self.source_code.rfind('\n', 0, node.start_byte) + 1
             logger.debug(f"   Processing immediately_before mode for {node.type}")
-            logger.debug(f"   Immediately before insertion position: {node.start_byte}")
-            return node.start_byte
+            logger.debug(f"   Immediately before insertion position: {line_start} (line start of node at {node.start_byte})")
+            return line_start
 
         elif mode == "before":
             logger.debug(f"   Processing before mode - inserting before node")
@@ -364,45 +362,36 @@ class ASTProcessor:
         # Fallback to body start
         return body_node.start_byte
     
-    def _find_python_function_start(self, body_node: Node, rule: Dict) -> Optional[int]:
-        """Find the insertion point before the first non-docstring statement in a Python function body."""
-        logger.debug(f"   Finding Python function start for body node {body_node.type}")
-        
-        # Use tree-sitter to find the first non-comment/docstring statement
+    def _find_indentation_body_start(self, body_node: Node, rule: Dict) -> Optional[int]:
+        """Find insertion point before first non-docstring/comment statement in indentation-based body."""
+        comment_types = set(self.config.node_types.get("comment_types", []))
+        docstring_node_types = set(self.config.node_types.get("docstring_node_types", []))
+        docstring_delimiters = self.config.node_types.get("docstring_delimiters", [])
+
         for child in body_node.children:
-            # Skip comments
-            if child.type == 'comment':
-                logger.debug(f"   Skipping comment: {self.source_code[child.start_byte:child.end_byte]}")
+            if child.type in comment_types:
                 continue
-            
-            # Skip docstrings (expression_statement with string)
-            if child.type == 'expression_statement':
-                # Check if this is a docstring by looking for string children
+
+            if child.type in docstring_node_types and docstring_delimiters:
+                child_text = self._get_node_text(child).strip()
+                if any(child_text.startswith(d) and child_text.endswith(d) for d in docstring_delimiters):
+                    continue
+                # Check children for docstring content
+                is_docstring = False
                 for grandchild in child.children:
-                    if grandchild.type == 'string':
-                        logger.debug(f"   Skipping docstring: {self.source_code[child.start_byte:child.end_byte]}")
+                    gc_text = self._get_node_text(grandchild).strip()
+                    if any(gc_text.startswith(d) and gc_text.endswith(d) for d in docstring_delimiters):
+                        is_docstring = True
                         break
-                else:
-                    # This is a real statement, not a docstring
-                    # Return the beginning of the line containing this statement
-                    line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
-                    logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
-                    return line_start
-                continue
-            
+                if is_docstring:
+                    continue
+
             if child.type == 'pass_statement':
                 continue
-            if child.type == 'expression_statement' and not child.children:
-                continue
-            
-            # Found the first real statement
-            # Return the beginning of the line containing this statement
+
             line_start = self.source_code.rfind('\n', 0, child.start_byte) + 1
-            logger.debug(f"   Found first statement: {self.source_code[child.start_byte:child.end_byte]}")
             return line_start
-        
-        # Fallback to body start if no statements found
-        logger.debug(f"   No statement found, using body start")
+
         return body_node.start_byte
     
     def _find_first_statement_line_start(self, body_node: Node, rule: Dict[str, Any]) -> int:
@@ -830,9 +819,9 @@ class TreeSitterIndentationEngine:
         while node:
             if node.type in body_types:
                 if node.parent and node.parent.type in container_types:
-                    # Find first non-comment child to get body indent
+                    # Find first non-comment, non-brace child to get body indent
                     for child in node.children:
-                        if child.type not in ('comment',) and child.start_point[1] > 0:
+                        if child.type not in ('comment', '{', '}') and child.start_point[1] > 0:
                             col = child.start_point[1]
                             indent_string = indent_char * col if indent_char == ' ' else '\t' * col
                             return IndentationInfo(col // indent_size, indent_char, indent_size, indent_string)
@@ -1022,12 +1011,12 @@ class ASTRewriter:
                     logger.error(f" Point '{point.id}' has no node and no byte_offset - cannot insert")
                     return False
                 
-            edit_type = f"insert_{point.insertion_mode}"
-            if point.insertion_mode == "query_target":
-                # query_target finds the specific node to insert relative to.
-                # Currently we only support placement="before" in the query logic which returns start_byte.
-                # So we treat this as insert_before.
+            if point.insertion_mode == "wrap_with_braces":
+                edit_type = "wrap_with_braces"
+            elif point.insertion_mode == "query_target":
                 edit_type = "insert_before"
+            else:
+                edit_type = f"insert_{point.insertion_mode}"
                 
             logger.debug(f"   Edit type: {edit_type}")
             
@@ -1054,9 +1043,8 @@ class ASTRewriter:
         node: Node = point.node  # Assume added to dataclass
         
         # If we have a node and an insertion mode, let the AST processor find the best point.
-        # This is more accurate than a fixed byte offset because it handles block boundaries,
-        # braces, and indentation based on the actual tree structure.
-        if node and point.insertion_mode:
+        # For wrap_with_braces, the byte_offset is pre-computed; skip AST lookup.
+        if node and point.insertion_mode and point.insertion_mode != 'wrap_with_braces':
             insertion_offset = self.ast_processor.find_insertion_point(node, point.insertion_mode)
             if insertion_offset is not None:
                 logger.debug(f"   AST processor found insertion offset: {insertion_offset}")
@@ -1277,8 +1265,11 @@ class ASTRewriter:
                     logger.debug("   Fresh parse succeeded, using fresh tree")
                     return new_code, fresh_tree
                 else:
-                    logger.warning("   Both incremental and fresh parsing failed, using original tree")
-                    return new_code, tree
+                    # Return the fresh tree (even with errors) rather than the stale old tree.
+                    # The stale tree's has_error flag is unreliable for the new code.
+                    # The caller's validation (has_error check) needs an accurate tree.
+                    logger.warning("   Both incremental and fresh parsing failed, using fresh tree")
+                    return new_code, fresh_tree if fresh_tree else tree
                 
             return new_code, new_tree
             
@@ -1366,6 +1357,14 @@ class ASTRewriter:
             prefix = '\n' if offset > 0 and code[offset-1] != '\n' else ''
             result = code[:offset] + prefix + indented_text + '\n' + code[offset:]
             logger.debug(f"   insert_immediately_before: inserted at offset {offset}, result length: {len(result)}")
+        elif edit.edit_type == 'wrap_with_braces':
+            # Replace the original statement with { checkpoint; original_statement }
+            # Used when a return/throw is the direct child of a braceless if/else.
+            # node_end_byte marks the end of the original statement to wrap.
+            end = edit.node_end_byte if edit.node_end_byte else offset
+            original_stmt = code[offset:end]
+            result = code[:offset] + '{ ' + indented_text.strip() + ' ' + original_stmt + ' }' + code[end:]
+            logger.debug(f"   wrap_with_braces: wrapped [{offset}:{end}], result length: {len(result)}")
         else:
             logger.warning(f"Unknown edit type: {edit.edit_type}")
             return code
@@ -1390,9 +1389,9 @@ class ASTRewriter:
         """
         logger.debug(f" Calculating indentation for edit_type='{edit_type}' at offset={offset}")
 
-        # For insert_inside_end (implicit exits), use config-driven AST body indent for all languages.
-        # This avoids the multi-line statement continuation indent bug.
-        if edit_type == 'insert_inside_end' and self.tree and self.indent_engine:
+        # For body-level insertions, use config-driven AST body indent for all languages.
+        # This avoids incorrect indent from detect_indent_style which can pick wrong unit size.
+        if edit_type in ('insert_inside_end', 'insert_inside_start', 'insert_immediately_before') and self.tree and self.indent_engine:
             indent_info = self.indent_engine.calculate_body_indentation(
                 self.tree, code, offset, self.language
             )
@@ -1400,9 +1399,9 @@ class ASTRewriter:
             indented = [indent_info.indent_string + l.strip() if l.strip() else '' for l in lines]
             return '\n'.join(indented)
 
-        # For Python, use Python-specific indentation (whitespace-sensitive)
-        if self.language == 'python':
-            return self._calculate_python_indentation(text, code, offset, edit_type)
+        # For indentation-sensitive languages, use whitespace-aware indentation
+        if self.lang_config.node_types.get("indentation_sensitive", False):
+            return self._calculate_indentation_sensitive(text, code, offset, edit_type)
 
         # Use TreeSitter indentation engine for other languages
         if self.tree and self.indent_engine:
@@ -1438,7 +1437,7 @@ class ASTRewriter:
         logger.debug(" Using legacy line-based indentation fallback")
         return self._legacy_add_proper_indentation(text, code, offset, edit_type)
     
-    def _calculate_python_indentation(self, text: str, code: str, offset: int, edit_type: str = None) -> str:
+    def _calculate_indentation_sensitive(self, text: str, code: str, offset: int, edit_type: str = None) -> str:
         """
         Calculate proper Python indentation based on the target location and edit type.
 
@@ -1460,7 +1459,7 @@ class ASTRewriter:
         logger.debug(f"   Offset column: {column} (line_start={line_start})")
 
         # Detect indentation style from the file
-        indent_char, indent_size = self._detect_python_indent_style(code)
+        indent_char, indent_size = self._detect_indent_style_from_source(code)
         logger.debug(f"   Detected indent: char='{indent_char}', size={indent_size}")
 
         # GENERAL RULE: If offset is at column 0 (line start), use that line's existing indentation
@@ -1556,7 +1555,7 @@ class ASTRewriter:
         logger.debug(f"   Final Python indented text: '{result}'")
         return result
     
-    def _detect_python_indent_style(self, code: str) -> Tuple[str, int]:
+    def _detect_indent_style_from_source(self, code: str) -> Tuple[str, int]:
         """
         Detect Python indentation style from the source code.
         
@@ -1619,7 +1618,11 @@ class ASTRewriter:
         # Walk up the AST to find the function definition
         current = target_node
         while current:
-            if current.type in ['function_definition', 'method_definition', 'async_function_definition']:
+            default_func_types = ['function_definition', 'method_definition', 'function_declaration',
+                                  'method_declaration', 'constructor_declaration', 'async_function_definition']
+            func_types = set(self.lang_config.node_types.get('function_types', default_func_types)
+                            if self.lang_config else default_func_types)
+            if current.type in func_types:
                 return current
             current = current.parent
         
@@ -1787,21 +1790,32 @@ class ASTRewriter:
         return None
     
     def _is_docstring_or_comment(self, node: 'Node', text: str) -> bool:
-        """Check if a node is a docstring or comment."""
+        """Check if a node is a docstring or comment (config-driven)."""
         if not text:
             return False
-        
+
+        comment_types = set(self.lang_config.node_types.get("comment_types", []))
+        if node.type in comment_types:
+            return True
+
+        comment_prefix = self.lang_config.node_types.get("comment_prefix", "")
         text = text.strip()
-        
-        # Check for docstrings
-        if (text.startswith('"""') and text.endswith('"""')) or \
-           (text.startswith("'''") and text.endswith("'''")):
+        if comment_prefix and text.startswith(comment_prefix):
             return True
-        
-        # Check for comments
-        if node.type == 'comment' or text.startswith('#'):
-            return True
-        
+
+        docstring_delimiters = self.lang_config.node_types.get("docstring_delimiters", [])
+        for delim in docstring_delimiters:
+            if text.startswith(delim) and text.endswith(delim):
+                return True
+
+        docstring_node_types = set(self.lang_config.node_types.get("docstring_node_types", []))
+        if node.type in docstring_node_types and docstring_delimiters:
+            for child in node.children:
+                child_text = self._get_node_text(child).strip()
+                for delim in docstring_delimiters:
+                    if child_text.startswith(delim) and child_text.endswith(delim):
+                        return True
+
         return False
     
     def _get_node_text(self, node: 'Node') -> str:
