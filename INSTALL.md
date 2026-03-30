@@ -248,19 +248,14 @@ rm ~/.local/bin/codegreen
 
 ---
 
-## Alternative Methods
+## Install from PyPI (Recommended for Users)
 
-### From PyPI (Future)
 ```bash
 pip install codegreen
 sudo codegreen init-sensors
 ```
 
-### From GitHub Release (Future)
-```bash
-wget https://github.com/SMART-Dal/codegreen/releases/download/v0.1.0/codegreen-0.1.0-linux-x86_64.whl
-pip install codegreen-0.1.0-linux-x86_64.whl
-```
+The PyPI wheel includes the pre-compiled C++ NEMB backend. No cmake, g++, or manual compilation needed. Works on Linux x86_64 with Python 3.9-3.13.
 
 ---
 
@@ -276,3 +271,136 @@ pip install -e ".[dev]"
 ```
 
 This installs in editable mode with development dependencies.
+
+---
+
+## Build and Release Architecture
+
+This section documents how CodeGreen is built, packaged, and published. Read this before debugging CI/CD failures or modifying the build pipeline.
+
+### What Gets Built
+
+CodeGreen has two parts:
+
+1. **Python package** (~2000 lines): CLI (`src/cli/`), instrumentation engine (`src/instrumentation/`), analysis/EFG (`src/analysis/`), benchmark harness (`benchmark/`). Pure Python, no compilation needed.
+
+2. **C++ NEMB backend** (~5000 lines): Native Energy Measurement Backend. Compiles to two artifacts:
+   - `lib/libcodegreen-nemb.so` (~7.5MB) -- shared library that reads RAPL MSRs, polls energy counters at 1ms intervals, manages checkpoint ring buffers, and correlates timestamps with energy.
+   - `build/bin/codegreen` (~5MB) -- CLI binary that links against the shared library. Handles sensor initialization, process spawning, and checkpoint I/O.
+
+   The C++ code depends on: `jsoncpp` (JSON config parsing), `libcurl` (for future remote features), `sqlite3` (result storage), `pthreads` (background measurement thread).
+
+### How the Wheel is Built
+
+The CI/CD pipeline at `.github/workflows/build-and-publish.yml` uses `cibuildwheel` to produce platform-specific wheels:
+
+1. **Container**: `cibuildwheel` spins up a `manylinux_2_28` Docker container (AlmaLinux 8 based). This guarantees the compiled binary works on any Linux with glibc >= 2.28 (Ubuntu 20.04+, Debian 11+, Fedora 35+, RHEL 8+).
+
+2. **C++ deps installed inside container** (`CIBW_BEFORE_ALL_LINUX`):
+   ```
+   yum install cmake gcc-c++ make pkgconfig jsoncpp-devel libcurl-devel sqlite-devel
+   ```
+
+3. **NEMB compiled inside container** (`CIBW_BEFORE_BUILD`):
+   ```
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=$ORIGIN/../lib
+   cmake --build . --config Release
+   ```
+   The `-DCMAKE_INSTALL_RPATH=$ORIGIN/../lib` sets the runtime library search path relative to the binary, so `libcodegreen-nemb.so` is found after `pip install` without `LD_LIBRARY_PATH`.
+
+4. **Binary packaged into wheel**: `setup.py`'s `BuildWithCMake` class copies `lib/libcodegreen-nemb.so` and `build/bin/codegreen` into the wheel's `src/lib/` and `src/bin/` directories. The `BinaryDistribution` class marks the wheel as platform-specific (not `none-any`).
+
+5. **Separate wheel per Python version**: `cibuildwheel` builds for cp39, cp310, cp311, cp312, cp313. Each wheel is tagged like `codegreen-0.2.0-cp311-cp311-manylinux_2_28_x86_64.whl`.
+
+6. **Smoke tests** (`CIBW_TEST_COMMAND`): After building each wheel, cibuildwheel installs it in a clean environment and verifies:
+   - The `.so` file exists at the expected path
+   - The CLI binary exists and is executable
+   - `codegreen --help` works
+   - Instrumentation finds checkpoints in a test Python file
+
+### How Publishing Works
+
+Publishing only triggers on **tag pushes** (e.g., `git tag v0.2.0 && git push origin --tags`):
+
+1. `build-wheels` job produces 5 platform-specific wheels (one per Python version)
+2. `build-sdist` job produces a `.tar.gz` source distribution
+3. `test-wheel` job installs each wheel on fresh VMs with Python 3.10/3.11/3.12 and runs 5 verification checks
+4. `publish-pypi` job uploads all wheels + sdist to PyPI using the `PYPI_API_TOKEN` GitHub secret
+
+The source distribution (sdist) is a fallback: if a user's platform has no pre-built wheel (e.g., ARM64), pip downloads the sdist and runs `setup.py` which triggers cmake compilation on their machine.
+
+### File Responsibilities
+
+| File | Role |
+|------|------|
+| `pyproject.toml` | Package metadata, dependencies, Python package list, entry points |
+| `setup.py` | `BuildWithCMake` (triggers cmake), `BinaryDistribution` (marks as platform wheel), copies `.so`/binary into wheel |
+| `CMakeLists.txt` | C++ build: finds deps, compiles NEMB, links tree-sitter grammars |
+| `.github/workflows/build-and-publish.yml` | CI/CD: cibuildwheel config, smoke tests, PyPI publish |
+| `install.sh` | Local development install: checks deps, runs cmake, pip install -e . |
+
+### Platform Support
+
+| Platform | Pre-built wheel | From source | Energy measurement |
+|----------|----------------|-------------|-------------------|
+| Linux x86_64 (Intel/AMD) | Yes (pip install) | Yes | Full (RAPL + NVML + ROCm) |
+| Linux ARM64 | No | Yes (needs cmake + deps) | RAPL if available |
+| macOS (Intel) | No | Partial (NEMB won't build) | No (different energy API) |
+| macOS (Apple Silicon) | No | Partial | No |
+| Windows | No | No | No |
+
+### Common CI/CD Failures
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `502 Bad Gateway` from quay.io | manylinux Docker registry outage | Wait and rerun: `gh run rerun <id>` |
+| `cmake: command not found` | Missing `CIBW_BEFORE_ALL_LINUX` deps | Check yum install line |
+| `.so not found` in smoke test | Binary not copied into wheel | Check `setup.py` `BuildWithCMake.run()` |
+| `py2.py3-none-any.whl` (no binary) | `BinaryDistribution` not used | Ensure `setup.py` has `distclass=BinaryDistribution` |
+| `No such file or directory` in cmake | YAML multiline broke command | Keep cmake args on one line in `CIBW_BEFORE_BUILD` |
+| SSH submodule clone fails | `Programming-Language-Benchmarks` uses SSH URL | Switch to HTTPS or remove from default submodules |
+
+### How to Debug Build Failures
+
+```bash
+# Check latest CI runs
+cd ~/codegreen && gh run list --limit 5
+
+# Get failure logs
+gh run view <run-id> --log-failed
+
+# Reproduce locally (simulates what cibuildwheel does)
+python setup.py bdist_wheel
+unzip -l dist/*.whl | grep -E "\.so|/bin/codegreen"  # verify binary in wheel
+
+# Test wheel in clean environment (run from /tmp, not project dir)
+cd /tmp
+python3 -m venv test && source test/bin/activate
+pip install ~/codegreen/dist/codegreen-*.whl
+codegreen --help
+python -c "import importlib, pathlib; pkg=pathlib.Path(importlib.import_module('src').__file__).parent; print(f'so={(pkg/\"lib\"/\"libcodegreen-nemb.so\").exists()}')"
+deactivate && rm -rf test
+```
+
+### Releasing a New Version
+
+```bash
+cd ~/codegreen
+
+# 1. Update version
+# Edit pyproject.toml: version = "X.Y.Z"
+
+# 2. Commit
+git add -A && git commit -m "vX.Y.Z: description"
+
+# 3. Tag and push (triggers build + publish)
+git tag vX.Y.Z
+git push origin main --tags
+
+# 4. Monitor
+gh run list --limit 3
+gh run view <run-id> --log-failed  # if it fails
+
+# 5. Create GitHub Release (optional, for release notes)
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "changelog here"
+```
