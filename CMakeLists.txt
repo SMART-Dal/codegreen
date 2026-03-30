@@ -53,8 +53,8 @@ pkg_check_modules(CURL REQUIRED libcurl)
 pkg_check_modules(SQLITE3 REQUIRED sqlite3)
 
 # Global include directories
-include_directories(${CMAKE_SOURCE_DIR}/src/measurement/include)
-include_directories(${CMAKE_SOURCE_DIR}/src/instrumentation/include)
+include_directories(${CMAKE_SOURCE_DIR}/codegreen/measurement/include)
+include_directories(${CMAKE_SOURCE_DIR}/codegreen/instrumentation/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include)
 
 
@@ -66,7 +66,7 @@ add_subdirectory(third_party/tree-sitter/lib)
 add_subdirectory(third_party/tree-sitter-python EXCLUDE_FROM_ALL)
 
 # Add measurement module
-add_subdirectory(src/measurement)
+add_subdirectory(codegreen/measurement)
 
 # Check if additional language parsers exist
 if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-c/src/parser.c")
@@ -112,11 +112,11 @@ endif()
 
 # Add instrumentation module
 # Instrumentation is now Python-based, no C++ build needed
-# add_subdirectory(src/instrumentation)
+# add_subdirectory(codegreen/instrumentation)
 
 # Main executable
 add_executable(codegreen 
-    src/measurement/main.cpp
+    codegreen/measurement/main.cpp
 )
 
 # Ensure instrumentation files are synced before building main executable
@@ -132,8 +132,8 @@ target_link_libraries(codegreen PRIVATE
 )
 
 target_include_directories(codegreen PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/measurement/include
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/include
+    ${CMAKE_SOURCE_DIR}/codegreen/measurement/include
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/include
     ${JSONCPP_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
 )
@@ -149,66 +149,66 @@ endif()
 
 # Copy runtime modules to build directory with dependency tracking
 file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime)
-file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation)
+file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation)
 
 # Define instrumentation source files for dependency tracking
 set(INSTRUMENTATION_SOURCES
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py
 )
 
 # Define target destination files
 set(RUNTIME_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime/codegreen_runtime.py)
-set(BRIDGE_ANALYZE_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/bridge_analyze.py)
-set(BRIDGE_INSTRUMENT_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/bridge_instrument.py)
-set(LANGUAGE_ENGINE_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/language_engine.py)
-set(AST_PROCESSOR_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/ast_processor.py)
-set(LANGUAGE_CONFIGS_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/language_configs.py)
+set(BRIDGE_ANALYZE_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/bridge_analyze.py)
+set(BRIDGE_INSTRUMENT_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/bridge_instrument.py)
+set(LANGUAGE_ENGINE_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/language_engine.py)
+set(AST_PROCESSOR_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/ast_processor.py)
+set(LANGUAGE_CONFIGS_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/language_configs.py)
 
 # Custom commands to copy files when source changes
 add_custom_command(
     OUTPUT ${RUNTIME_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py ${RUNTIME_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py ${RUNTIME_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
     COMMENT "Copying codegreen_runtime.py to build directory"
 )
 
 add_custom_command(
     OUTPUT ${BRIDGE_ANALYZE_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py ${BRIDGE_ANALYZE_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${BRIDGE_ANALYZE_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py
     COMMENT "Copying bridge_analyze.py to build directory"
 )
 
 add_custom_command(
     OUTPUT ${BRIDGE_INSTRUMENT_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py ${BRIDGE_INSTRUMENT_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${BRIDGE_INSTRUMENT_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py
     COMMENT "Copying bridge_instrument.py to build directory"
 )
 
 add_custom_command(
     OUTPUT ${LANGUAGE_ENGINE_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py ${LANGUAGE_ENGINE_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py ${LANGUAGE_ENGINE_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py
     COMMENT "Copying language_engine.py to build directory"
 )
 
 add_custom_command(
     OUTPUT ${AST_PROCESSOR_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py ${AST_PROCESSOR_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py ${AST_PROCESSOR_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py
     COMMENT "Copying ast_processor.py to build directory"
 )
 
 add_custom_command(
     OUTPUT ${LANGUAGE_CONFIGS_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py ${LANGUAGE_CONFIGS_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py ${LANGUAGE_CONFIGS_DEST}
+    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py
     COMMENT "Copying language_configs.py to build directory"
 )
 
@@ -221,8 +221,8 @@ add_custom_target(sync_instrumentation
         ${LANGUAGE_ENGINE_DEST}
         ${AST_PROCESSOR_DEST}
         ${LANGUAGE_CONFIGS_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/language_runtimes
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/configs ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/src/instrumentation/configs
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/language_runtimes
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen/instrumentation/configs
     COMMENT "Ensuring all instrumentation files are up to date"
 )
 
@@ -250,31 +250,31 @@ add_custom_target(dev-install ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.so ${CMAKE_SOURCE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/src/instrumentation
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/language_runtimes
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/src/instrumentation/configs
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/language_runtimes
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/codegreen/instrumentation/configs
     COMMENT "Copying binary and instrumentation files to development bin directory for CLI integration"
 )
 
 # Install runtime modules
-install(FILES ${CMAKE_SOURCE_DIR}/src/instrumentation/language_runtimes/python/codegreen_runtime.py
+install(FILES ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
     DESTINATION bin/runtime
     COMPONENT runtime
 )
 
 # Install Python instrumentation system
 install(FILES 
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_analyze.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/bridge_instrument.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_engine.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/ast_processor.py
-    ${CMAKE_SOURCE_DIR}/src/instrumentation/language_configs.py
-    DESTINATION bin/src/instrumentation
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py
+    DESTINATION bin/codegreen/instrumentation
     COMPONENT runtime
 )
 
