@@ -82,8 +82,10 @@ std::string PrecisionTimer::get_clock_source_name() const {
  switch (clock_source_) {
  case ClockSource::TSC_INVARIANT:
  return "TSC (Invariant Time Stamp Counter)";
+#ifdef __APPLE__
  case ClockSource::MACH_CONTINUOUS:
  return "mach_continuous_time (ARM Generic Timer)";
+#endif
  case ClockSource::MONOTONIC_RAW:
  return "CLOCK_MONOTONIC_RAW";
  case ClockSource::MONOTONIC:
@@ -97,8 +99,15 @@ std::string PrecisionTimer::get_clock_source_name() const {
 
 bool PrecisionTimer::initialize(ClockSource source) {
  if (source == ClockSource::TSC_INVARIANT) {
- return initialize(); // auto-select handles TSC
+ return initialize();
  }
+#ifdef __APPLE__
+ if (source == ClockSource::MACH_CONTINUOUS) {
+ if (!initialize_mach_continuous()) return false;
+ clock_source_ = ClockSource::MACH_CONTINUOUS;
+ return true;
+ }
+#endif
  clockid_t clock_id;
  switch (source) {
 #ifdef CLOCK_MONOTONIC_RAW

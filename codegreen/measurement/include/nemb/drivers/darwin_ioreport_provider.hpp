@@ -37,6 +37,7 @@ private:
     using IterateFn = void(*)(CFDictionaryRef, int(^)(CFDictionaryRef));
     using ChannelGetGroupFn = CFStringRef(*)(CFDictionaryRef);
     using ChannelGetChannelNameFn = CFStringRef(*)(CFDictionaryRef);
+    using ChannelGetUnitLabelFn = CFStringRef(*)(CFDictionaryRef);
     using SimpleGetIntegerValueFn = int64_t(*)(CFDictionaryRef, int32_t);
 
     CopyChannelsInGroupFn copy_channels_in_group_{nullptr};
@@ -46,6 +47,7 @@ private:
     IterateFn iterate_{nullptr};
     ChannelGetGroupFn channel_get_group_{nullptr};
     ChannelGetChannelNameFn channel_get_name_{nullptr};
+    ChannelGetUnitLabelFn channel_get_unit_{nullptr};
     SimpleGetIntegerValueFn simple_get_int_{nullptr};
 
     // Subscription state
@@ -54,7 +56,7 @@ private:
     CFDictionaryRef prev_sample_{nullptr};
 
     // Accumulated energy per domain
-    struct DomainAccumulator { double cumulative_mj{0.0}; };
+    struct DomainAccumulator { double cumulative_joules{0.0}; };
     std::map<std::string, DomainAccumulator> domains_;
     uint64_t last_ts_ns_{0};
     std::mutex reading_mutex_;

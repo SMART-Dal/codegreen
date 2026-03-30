@@ -14,20 +14,30 @@ static std::string cfstr_to_std(CFStringRef s) {
     return "";
 }
 
-// Map IOReport channel names to CodeGreen energy domains
-// Channels verified on M4 MacBook Pro (Mac16,1, macOS 25C56):
-//   "CPU Energy" = ECPU + PCPU total, "GPU" = GPU core, "ANE" = Neural Engine,
-//   "DRAM" = memory, "DISP" = display, "ECPU"/"PCPU" = per-cluster
+// Convert raw IOReport value to joules using per-channel unit label.
+// Verified on M4: most channels report "mJ", "GPU Energy" reports "nJ".
+// Future chips may use "uJ" or other units -- handle all known cases.
+static double to_joules(int64_t raw, const std::string& unit) {
+    if (unit == "mJ") return raw / 1e3;
+    if (unit == "uJ") return raw / 1e6;
+    if (unit == "nJ") return raw / 1e9;
+    if (unit == "J")  return static_cast<double>(raw);
+    return raw / 1e3; // conservative fallback: assume mJ
+}
+
+// Map IOReport channel names to CodeGreen energy domains.
+// Verified on M4 MacBook Pro (Mac16,1, macOS 25C56, 175 channels).
+// Only aggregate channels are mapped; per-core/SRAM/DTL/PCIe are skipped.
 static std::string channel_to_domain(const std::string& name) {
     if (name == "CPU Energy") return "cpu";
-    if (name == "GPU") return "gpu";
+    if (name == "GPU Energy") return "gpu";
     if (name == "ANE") return "ane";
     if (name == "DRAM") return "dram";
     if (name == "DISP") return "display";
     if (name == "ECPU") return "ecpu";
     if (name == "PCPU") return "pcpu";
-    if (name == "AMCC" || name == "DCS") return "memory_controller";
-    return ""; // skip per-core, SRAM, DTL, PCIe channels
+    if (name == "AMCC") return "memory_controller";
+    return "";
 }
 
 DarwinIOReportProvider::DarwinIOReportProvider() = default;
@@ -47,6 +57,7 @@ bool DarwinIOReportProvider::load_symbols() {
     iterate_ = (IterateFn)dlsym(lib_handle_, "IOReportIterate");
     channel_get_group_ = (ChannelGetGroupFn)dlsym(lib_handle_, "IOReportChannelGetGroup");
     channel_get_name_ = (ChannelGetChannelNameFn)dlsym(lib_handle_, "IOReportChannelGetChannelName");
+    channel_get_unit_ = (ChannelGetUnitLabelFn)dlsym(lib_handle_, "IOReportChannelGetUnitLabel");
     simple_get_int_ = (SimpleGetIntegerValueFn)dlsym(lib_handle_, "IOReportSimpleGetIntegerValue");
 
     const char* missing = nullptr;
@@ -125,34 +136,31 @@ EnergyReading DarwinIOReportProvider::get_reading() {
         return reading;
     }
 
-    // Values from IOReport "Energy Model" are in millijoules per delta interval
+    // Each channel has its own unit (mJ, uJ, nJ) read via IOReportChannelGetUnitLabel.
+    // Verified on M4: all channels "mJ" except "GPU Energy" which is "nJ".
+    double delta_total_j = 0;
     iterate_(delta, ^(CFDictionaryRef ch) {
         std::string name = cfstr_to_std(channel_get_name_(ch));
         std::string domain = channel_to_domain(name);
         if (domain.empty()) return 0;
 
-        int64_t val = simple_get_int_(ch, 0);
-        double delta_mj = static_cast<double>(val);
-        domains_[domain].cumulative_mj += delta_mj;
-        reading.domain_energy_joules[domain] = domains_[domain].cumulative_mj / 1000.0;
+        std::string unit = channel_get_unit_ ? cfstr_to_std(channel_get_unit_(ch)) : "mJ";
+        int64_t raw = simple_get_int_(ch, 0);
+        double delta_j = to_joules(raw, unit);
+
+        domains_[domain].cumulative_joules += delta_j;
+        reading.domain_energy_joules[domain] = domains_[domain].cumulative_joules;
+        delta_total_j += delta_j;
         return 0;
     });
 
     double total_j = 0;
-    for (auto& [d, acc] : domains_) total_j += acc.cumulative_mj;
-    reading.energy_joules = total_j / 1000.0;
+    for (auto& [d, acc] : domains_) total_j += acc.cumulative_joules;
+    reading.energy_joules = total_j;
 
     double dt_s = (reading.timestamp_ns - last_ts_ns_) / 1e9;
-    if (dt_s > 0) {
-        double delta_total_mj = 0;
-        for (auto& [d, acc] : domains_) {
-            double prev = reading.domain_energy_joules.count(d) ?
-                reading.domain_energy_joules[d] - acc.cumulative_mj / 1000.0 : 0;
-            // power computed from total, not per-domain
-        }
-        // Compute instantaneous power from delta energy / delta time
-        // We track total delta across all domains this sample
-    }
+    reading.average_power_watts = (dt_s > 0) ? delta_total_j / dt_s : 0;
+    reading.instantaneous_power_watts = reading.average_power_watts;
     reading.source_type = "hardware_counter";
     reading.confidence = 0.95;
     reading.uncertainty_percent = 2.0;

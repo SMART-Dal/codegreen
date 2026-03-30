@@ -254,7 +254,7 @@ add_custom_target(dev-install ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.so ${CMAKE_SOURCE_DIR}/lib/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb${CMAKE_SHARED_LIBRARY_SUFFIX} ${CMAKE_SOURCE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
