@@ -44,9 +44,7 @@ jobs:
         CIBW_BEFORE_BUILD: >
           cd {project} &&
           mkdir -p build && cd build &&
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib'
-            -DPython3_EXECUTABLE=$(which python) &&
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) &&
           cmake --build . --config Release -j$(nproc) &&
           echo "=== NEMB build artifacts ===" &&
           ls -la {project}/lib/libcodegreen-nemb.so {project}/build/bin/codegreen 2>/dev/null
