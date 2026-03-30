@@ -932,21 +932,35 @@ def _build_comprehensive_json(
     if measurement_result and measurement_result.get('checkpoints'):
         checkpoints = measurement_result['checkpoints']
         for cp in checkpoints:
-            fname = cp.get('name', 'unknown')
-            if fname not in per_func:
-                per_func[fname] = {"enter_j": None, "exit_j": None, "calls": 0}
-            ctype = cp.get('type', '')
+            # Parse type and name from checkpoint_id: "type:name:point_id#inv_N_tXXX"
+            cp_id = cp.get('checkpoint_id', '')
+            parts = cp_id.split(':')
+            ctype = parts[0] if len(parts) >= 1 else cp.get('type', '')
+            fname = parts[1] if len(parts) >= 2 else cp.get('name', 'unknown')
             joules = cp.get('joules', 0.0)
-            if 'enter' in ctype:
+            ts = cp.get('timestamp', 0)
+            if fname not in per_func:
+                per_func[fname] = {"enter_j": None, "exit_j": None, "enter_ts": 0, "exit_ts": 0, "calls": 0}
+            if ctype == 'enter':
                 per_func[fname]['enter_j'] = joules
+                per_func[fname]['enter_ts'] = ts
                 per_func[fname]['calls'] += 1
-            elif 'exit' in ctype or 'return' in ctype:
+            elif ctype == 'exit':
                 per_func[fname]['exit_j'] = joules
+                per_func[fname]['exit_ts'] = ts
     func_energy = {}
     for fname, data in per_func.items():
         if data['enter_j'] is not None and data['exit_j'] is not None:
             delta = data['exit_j'] - data['enter_j']
-            func_energy[fname] = {"energy_j": max(delta, 0.0), "calls": data['calls']}
+            wall_ns = data['exit_ts'] - data['enter_ts']
+            wall_s = wall_ns / 1e9 if wall_ns > 1e6 else wall_ns / 1e3
+            energy = max(delta, 0.0)
+            func_energy[fname] = {
+                "energy_j": round(energy, 6),
+                "wall_time_s": round(wall_s, 6),
+                "avg_power_w": round(energy / wall_s, 2) if wall_s > 0 else 0.0,
+                "calls": data['calls'],
+            }
     system = {"kernel": platform.release(), "cpu_model": "", "governor": ""}
     try:
         with open("/proc/cpuinfo") as f:
@@ -2158,69 +2172,101 @@ def run_measure_workload(
 
 @app.command("benchmark")
 def run_benchmark(
-    problems: Annotated[Optional[List[str]], typer.Option("--problem", "-p", help="Problems to run")] = None,
+    suite_name: Annotated[str, typer.Option("--suite", help="Benchmark suite: benchmarksgame, perfopt")] = "benchmarksgame",
+    problems: Annotated[Optional[List[str]], typer.Option("--problem", "-p", help="Problems/tasks to run")] = None,
     languages: Annotated[Optional[List[str]], typer.Option("--lang", "-l", help="Languages to test")] = None,
     sizes: Annotated[Optional[List[str]], typer.Option("--size", "-s", help="Problem sizes")] = None,
     profilers: Annotated[Optional[List[str]], typer.Option("--profiler", help="Profilers: codegreen, perf")] = None,
     repetitions: Annotated[int, typer.Option("--reps", "-r", help="Repetitions per test")] = 5,
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path("benchmark/results"),
+    compare: Annotated[bool, typer.Option("--compare", help="Show variant comparison (original vs patched)")] = False,
+    dataset_dir: Annotated[Optional[Path], typer.Option("--dataset-dir", help="Dataset directory (for perfopt)")] = None,
+    jars_dir: Annotated[Optional[Path], typer.Option("--jars-dir", help="Pre-built JARs directory (for perfopt)")] = None,
 ):
-    """Run benchmarks from benchmarksgame suite comparing codegreen vs perf RAPL."""
+    """Run benchmarks comparing codegreen vs perf RAPL.
+
+    Suites: benchmarksgame (default), perfopt (Java JMH benchmarks).
+
+    Examples:
+      codegreen benchmark                              # benchmarksgame defaults
+      codegreen benchmark -p nbody -l python --reps 5  # specific problem
+      codegreen benchmark --suite perfopt --dataset-dir ~/data/PerfOpt --jars-dir ~/data/jars -p 9bb2f78
+    """
+    from benchmark.suites import get_suite
     from benchmark.harness import BenchmarkHarness
+    from benchmark.results import ComparisonReport
 
     def progress_cb(msg: str):
         console.print(f"[dim]{msg}[/dim]")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    harness = BenchmarkHarness(progress_callback=progress_cb)
+
+    suite_kwargs = {}
+    if suite_name == "benchmarksgame":
+        suite_kwargs = {"languages": languages, "problems": problems, "sizes": sizes}
+    elif suite_name == "perfopt":
+        suite_kwargs = {"dataset_dir": dataset_dir, "jars_dir": jars_dir,
+                        "projects": languages, "tasks": problems}
+
+    suite = get_suite(suite_name, **suite_kwargs)
+    harness = BenchmarkHarness(suite=suite, repetitions=repetitions,
+                                progress_callback=progress_cb)
     profs = profilers or ["perf", "codegreen"]
 
     console.print(f"[bold]Running benchmarks[/bold]")
-    console.print(f"  Problems: {problems or 'defaults'}")
-    console.print(f"  Languages: {languages or 'all'}")
+    console.print(f"  Suite: {suite_name}")
     console.print(f"  Profilers: {profs}")
     console.print(f"  Repetitions: {repetitions}")
     console.print(f"  Output: {output_dir}")
 
     try:
-        collector = harness.run_suite(problems, languages, sizes, profs, repetitions)
-        summary = collector.summarize_all()
+        filters = {}
+        if problems:
+            filters["problems"] = problems
+        if languages:
+            filters["languages"] = languages
+
+        collector = harness.run_suite(profilers=profs, repetitions=repetitions,
+                                       filters=filters if filters else None)
 
         console.print(f"\n[bold green]Benchmark complete: {len(collector.results)} runs[/bold green]")
 
-        # Print comparison table
-        table = Table(title="Energy Measurement Comparison")
-        table.add_column("Problem")
-        table.add_column("Lang")
-        table.add_column("Size")
-        table.add_column("Perf (J)")
-        table.add_column("CodeGreen (J)")
-        table.add_column("Error %")
+        # Profiler comparison table (CodeGreen vs perf accuracy)
+        if "perf" in profs and "codegreen" in profs:
+            prof_comparisons = ComparisonReport.compare_profilers(collector)
+            if prof_comparisons:
+                table = Table(title="Profiler Accuracy: CodeGreen vs perf RAPL")
+                table.add_column("Task")
+                table.add_column("Perf (J)")
+                table.add_column("CodeGreen (J)")
+                table.add_column("Error %")
+                for c in prof_comparisons:
+                    table.add_row(c["task"], f"{c['baseline_mean_j']:.2f}",
+                                  f"{c['test_mean_j']:.2f}", f"{c['error_pct']:.1f}%")
+                console.print(table)
 
-        # Group results by problem/lang/size
-        grouped = {}
-        for key, stats in summary.items():
-            parts = key.split('/')
-            if len(parts) >= 4:
-                base_key = '/'.join(parts[:3])
-                profiler = parts[3]
-                if base_key not in grouped:
-                    grouped[base_key] = {}
-                energy_s = stats.get("energy", {})
-                e_mean = energy_s.get("mean", 0) if isinstance(energy_s, dict) else (energy_s.mean if energy_s else 0)
-                grouped[base_key][profiler] = e_mean
+        # Variant comparison table (original vs patched for PerfOpt)
+        if compare or suite_name == "perfopt":
+            var_comparisons = ComparisonReport.compare_variants(collector)
+            if var_comparisons:
+                table = Table(title="Energy: Original vs Patched")
+                table.add_column("Task")
+                table.add_column("Original (J)")
+                table.add_column("Patched (J)")
+                table.add_column("Delta %")
+                table.add_column("Significant")
+                for c in var_comparisons:
+                    b = c["baseline_energy"]
+                    p = c["candidate_energy"]
+                    b_str = f"{b.mean:.2f}" if hasattr(b, 'mean') else str(b)
+                    p_str = f"{p.mean:.2f}" if hasattr(p, 'mean') else str(p)
+                    sig = "Yes" if c["significant"] else "No"
+                    table.add_row(c["task"], b_str, p_str,
+                                  f"{c['delta_pct']:.1f}%", sig)
+                console.print(table)
 
-        for base_key, profs_data in grouped.items():
-            parts = base_key.split('/')
-            perf_e = profs_data.get("perf", 0)
-            cg_e = profs_data.get("codegreen", 0)
-            error = abs(perf_e - cg_e) / perf_e * 100 if perf_e > 0 else 0
-            table.add_row(parts[0], parts[1], parts[2], f"{perf_e:.2f}", f"{cg_e:.2f}", f"{error:.1f}%")
-
-        console.print(table)
-
-        json_file = output_dir / "benchmark_latest.json"
-        csv_file = output_dir / "benchmark_latest.csv"
+        json_file = output_dir / f"benchmark_{suite_name}_latest.json"
+        csv_file = output_dir / f"benchmark_{suite_name}_latest.csv"
         collector.to_json(json_file)
         collector.to_csv(csv_file)
         console.print(f"\n{collector.to_text()}")
@@ -2311,6 +2357,609 @@ def run_command(
                 raise typer.Exit(1)
             else:
                 console.print(f"[green]Within budget: {e_stats.mean:.4f}J <= {budget}J[/green]")
+
+
+def _load_language_config(language: str) -> dict:
+    """Load language config JSON. Single source of truth for language-specific settings."""
+    config_dir = Path(__file__).resolve().parent.parent / "instrumentation" / "configs"
+    config_file = config_dir / f"{language}.json"
+    if config_file.exists():
+        with open(config_file) as f:
+            return json.load(f)
+    return {}
+
+
+def _get_runtime_source_dir() -> Path:
+    """Get path to language_runtimes directory."""
+    return Path(__file__).resolve().parent.parent / "instrumentation" / "language_runtimes"
+
+
+def _inject_project_runtime(
+    proj_cfg: dict, backups: dict, project_dir: Path
+) -> list:
+    """Inject runtime files into project based on language config.
+    Returns list of created files/dirs for cleanup."""
+    rt_cfg = proj_cfg.get("runtime_injection", {})
+    rt_type = rt_cfg.get("type", "")
+    created = []
+
+    if rt_type == "source_copy":
+        # Copy actual runtime source files from language_runtimes/ into project
+        rt_source_dir = _get_runtime_source_dir() / rt_cfg.get("source_dir", "")
+        target_rel = rt_cfg.get("target_relative_path", "")
+        files = rt_cfg.get("files", [])
+
+        # Find source roots from instrumented files (config-driven markers)
+        src_roots = _find_source_roots(backups.keys(), proj_cfg)
+        for src_root in src_roots:
+            target_dir = src_root / target_rel
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for fname in files:
+                src = rt_source_dir / fname
+                dst = target_dir / fname
+                if src.exists():
+                    import shutil
+                    shutil.copy2(str(src), str(dst))
+                    created.append(dst)
+            # Track dirs for cleanup (deepest first)
+            p = target_dir
+            while p != src_root:
+                created.append(p)
+                p = p.parent
+
+    elif rt_type == "pythonpath":
+        rt_src = _get_runtime_path()
+        module = rt_cfg.get("module", "codegreen_runtime")
+        if rt_src:
+            rt_dest = project_dir / f"{module}.py"
+            if not rt_dest.exists():
+                import shutil
+                shutil.copy2(str(rt_src / f"{module}.py"), str(rt_dest))
+                created.append(rt_dest)
+
+    return created
+
+
+def _find_source_roots(file_paths, proj_cfg: dict) -> set:
+    """Find source root directories from file paths using config-driven markers.
+    Reads source_root_markers from project_config (e.g., ["src/main/java"] for Java)."""
+    markers = proj_cfg.get("source_root_markers", ["src"])
+    roots = set()
+    for f in file_paths:
+        path_str = str(Path(f))
+        for marker in markers:
+            marker_parts = marker.split("/")
+            parts = Path(f).parts
+            # Find the marker sequence in path parts
+            for i in range(len(parts) - len(marker_parts) + 1):
+                if list(parts[i:i+len(marker_parts)]) == marker_parts:
+                    roots.add(Path(*parts[:i+len(marker_parts)]))
+                    break
+    return roots
+
+
+def _rewrite_instrumented_for_standalone(code: str, rt_cfg: dict) -> str:
+    """Rewrite instrumented code to use standalone runtime instead of JNI runtime."""
+    rewrites = rt_cfg.get("import_rewrite", {})
+    if rewrites:
+        code = code.replace(rewrites.get("from", ""), rewrites.get("to", ""))
+    rewrites = rt_cfg.get("checkpoint_rewrite", {})
+    if rewrites:
+        code = code.replace(rewrites.get("from", ""), rewrites.get("to", ""))
+    return code
+
+
+@app.command("project")
+def project_energy(
+    language: Annotated[Language, typer.Argument(help="Project language")],
+    project_dir: Annotated[Path, typer.Argument(help="Project root directory")],
+    build_cmd: Annotated[str, typer.Option("--build-cmd", "-b", help="Build command (e.g., 'mvn package -DskipTests')")] = "",
+    run_cmd: Annotated[str, typer.Option("--run-cmd", "-r", help="Run command (e.g., 'java -jar target/benchmarks.jar')")] = "",
+    source_glob: Annotated[str, typer.Option("--source-glob", "-s", help="Source file glob pattern")] = "",
+    granularity: Annotated[Granularity, typer.Option("--granularity", "-g", help="Instrumentation level")] = Granularity.fine,
+    cores: Annotated[str, typer.Option("--cores", help="CPU cores for taskset (e.g., '0-7')")] = "",
+    repeat: Annotated[int, typer.Option("--repeat", "-n", help="Measurement repetitions")] = 1,
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+    no_cleanup: Annotated[bool, typer.Option("--no-cleanup", help="Keep instrumented files")] = False,
+    output_dir: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output directory for results")] = None,
+):
+    """Profile a project's energy consumption with per-function attribution.
+
+    Three-phase workflow:
+    1. DISCOVER: Find and analyze all source files, identify instrumentation points.
+    2. INSTRUMENT + BUILD: Instrument code, inject runtime, build with project's build system.
+    3. MEASURE: Run benchmark, collect per-function energy via checkpoints.
+
+    Examples:
+    - codegreen project java ./my-project --build-cmd "mvn package -DskipTests"
+      --run-cmd "java -jar target/benchmarks.jar" --cores 0-7
+    - codegreen project java . -b "./gradlew build -x test"
+      -r "java -jar jmh/build/libs/benchmarks.jar '.*MyBench.*' -wi 10 -i 50 -f 1"
+    - codegreen project python ./src --run-cmd "python main.py" --granularity fine
+    """
+    import subprocess, time, re, shutil, glob as globmod, tempfile
+
+    project_dir = project_dir.resolve()
+    if not project_dir.exists():
+        console.print(f"[red]Project directory not found: {project_dir}[/red]")
+        raise typer.Exit(1)
+
+    # Load project config from language JSON config (config-driven, not hardcoded)
+    _lang_config = _load_language_config(language.value)
+    proj_cfg = _lang_config.get("project_config", {})
+
+    # Source discovery: use config patterns or CLI override
+    source_patterns = [source_glob] if source_glob else proj_cfg.get("source_patterns", [f"**/*{_lang_config['extensions'][0]}"])
+    exclude_patterns = proj_cfg.get("exclude_patterns", [])
+
+    # Build system auto-detection from config
+    if not build_cmd:
+        for bs_name, bs_cfg in proj_cfg.get("build_systems", {}).items():
+            detect_file = bs_cfg.get("detect", "")
+            if detect_file and (project_dir / detect_file).exists():
+                build_cmd = bs_cfg.get("build_cmd", "")
+                # Handle wrapper scripts (e.g., gradlew)
+                wrapper = bs_cfg.get("wrapper", "")
+                if wrapper and (project_dir / wrapper).exists():
+                    build_cmd = build_cmd.replace(bs_name, f"./{wrapper}")
+                if not json_output:
+                    console.print(f"  Auto-detected build system: {bs_name} ({build_cmd})")
+                break
+
+    if not run_cmd:
+        console.print("[red]--run-cmd is required (the command to execute the benchmark)[/red]")
+        raise typer.Exit(1)
+
+    if output_dir:
+        output_dir = output_dir.resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ==========================================
+    # PRE-CLEANUP: Detect and remove stale instrumented files from previous runs
+    # ==========================================
+    _stale_marker = project_dir / ".codegreen_instrumented"
+    if _stale_marker.exists():
+        stale_files = _stale_marker.read_text().strip().splitlines()
+        if stale_files:
+            restored = 0
+            for fpath in stale_files:
+                p = Path(fpath)
+                if p.exists():
+                    # Restore via git checkout if in a git repo, else skip
+                    _git_restore = subprocess.run(
+                        ["git", "checkout", "--", str(p)],
+                        cwd=str(project_dir), capture_output=True, timeout=10)
+                    if _git_restore.returncode == 0:
+                        restored += 1
+            if not json_output and restored:
+                console.print(f"  [yellow]Cleaned {restored} stale instrumented files from previous run[/yellow]")
+        _stale_marker.unlink(missing_ok=True)
+
+    # ==========================================
+    # PHASE 1: DISCOVER
+    # ==========================================
+    if not json_output:
+        console.print(f"\n[bold cyan]Phase 1: Discovering source files...[/bold cyan]")
+
+    # Find source files: use Path.glob for each source pattern from config
+    extensions = set(_lang_config.get("extensions", []))
+    source_files_set = set()
+    for pattern in source_patterns:
+        # Path.rglob handles ** patterns natively
+        clean = pattern.lstrip("**/") if pattern.startswith("**/") else pattern
+        for f in project_dir.rglob(clean):
+            if f.is_file() and f.suffix in extensions:
+                source_files_set.add(f)
+    # If no pattern matched, fall back to finding all files by extension
+    if not source_files_set:
+        for ext in extensions:
+            source_files_set.update(project_dir.rglob(f"*{ext}"))
+
+    # Exclude: check if any path component matches an exclude directory name.
+    # Config patterns like "**/src/test/**" mean "exclude if 'test' appears as a
+    # child of 'src' anywhere in the path." We extract the meaningful directory
+    # segments and check if they appear consecutively in the file's path parts.
+    import fnmatch as _fnmatch
+
+    def _matches_exclude(filepath: Path, patterns: list) -> bool:
+        rel_str = str(filepath.relative_to(project_dir))
+        parts = filepath.relative_to(project_dir).parts
+        for pat in patterns:
+            # Extract consecutive directory segments from the pattern
+            # e.g., "**/src/test/**" -> ["src", "test"]
+            segments = [s for s in pat.replace("**", "").strip("/").split("/") if s and "*" not in s]
+            if not segments:
+                continue
+            # Check if these segments appear consecutively in the path parts
+            seg_len = len(segments)
+            for i in range(len(parts) - seg_len + 1):
+                if list(parts[i:i+seg_len]) == segments:
+                    return True
+        return False
+
+    # Safety invariant: NEVER instrument files that define the checkpoint runtime.
+    # Config-driven: instrumentation_config.runtime_guard_files lists filenames
+    # (e.g., ["CodeGreenRuntime.java", "CodeGreenStandaloneRuntime.java"]) that must
+    # never be instrumented. If instrumented, checkpoint() calls checkpoint() = infinite
+    # recursion + stack overflow at runtime.
+    # This guard works across all languages via config -- no hardcoded names.
+    inst_cfg = _lang_config.get("instrumentation_config", {})
+    _guard_filenames = set(inst_cfg.get("runtime_guard_files", []))
+
+    def _is_runtime_file(filepath: Path) -> bool:
+        """Returns True if this file is a CodeGreen runtime file (must not be instrumented)."""
+        return filepath.name in _guard_filenames
+
+    source_files = sorted(
+        f for f in source_files_set
+        if f.is_file()
+        and not _matches_exclude(f, exclude_patterns)
+        and not _is_runtime_file(f)
+    )
+
+    if not source_files:
+        console.print(f"[red]No {language.value} source files found matching {source_patterns}[/red]")
+        raise typer.Exit(1)
+
+    if not json_output:
+        console.print(f"  Found {len(source_files)} source files")
+
+    # Analyze each file for instrumentation points
+    from src.instrumentation.language_engine import LanguageEngine
+    engine = LanguageEngine()
+    analysis_results = {}
+    total_points = 0
+
+    for src_file in source_files:
+        try:
+            code = src_file.read_text(encoding='utf-8', errors='replace')
+            result = engine.analyze_code(code, language.value, filename=str(src_file))
+            if result and result.instrumentation_points:
+                points = result.instrumentation_points
+                if granularity == Granularity.coarse:
+                    points = _filter_main_entry_points(points, language.value)
+                analysis_results[src_file] = {"code": code, "points": points, "result": result}
+                total_points += len(points)
+        except Exception:
+            pass
+
+    if not json_output:
+        console.print(f"  Instrumentable files: {len(analysis_results)}/{len(source_files)}")
+        console.print(f"  Total instrumentation points: {total_points}")
+
+    if not analysis_results:
+        console.print("[red]No instrumentable code found[/red]")
+        raise typer.Exit(1)
+
+    # Build checkpoint_id prefix -> file_path map for accurate function-to-file resolution.
+    # Each instrumentation point has a unique ID containing the method name and line number.
+    # By mapping these IDs to files, we can resolve which file a checkpoint belongs to,
+    # even when multiple files have methods with the same name (e.g., update()).
+    checkpoint_id_to_file = {}  # checkpoint_id -> file_path
+    func_file_map = {}  # function_name -> file_path (best guess for single-name functions)
+    for src_file, data in analysis_results.items():
+        for point in data["points"]:
+            if point.type == "function_enter" and point.name:
+                # The checkpoint_id format is: function_enter_{name}_{line}_{idx}
+                checkpoint_id_to_file[point.id] = str(src_file)
+                # Also build simple name->file map using both bare and qualified names
+                func_file_map[point.name] = str(src_file)
+                qn = point.metadata.get('qualified_name', point.name)
+                if qn != point.name:
+                    func_file_map[qn] = str(src_file)
+
+    # ==========================================
+    # PHASE 2: INSTRUMENT + BUILD
+    # ==========================================
+    if not json_output:
+        console.print(f"\n[bold cyan]Phase 2: Instrumenting and building...[/bold cyan]")
+
+    # Create backup of original files
+    backups = {}
+    runtime_files_created = []
+
+    try:
+        # Instrument each file in-place
+        instrumented_count = 0
+        for src_file, data in analysis_results.items():
+            # Double-check: skip if file defines a checkpoint class (defense in depth)
+            if _is_runtime_file(src_file):
+                continue
+            try:
+                instrumented = engine.instrument_code(data["code"], data["points"], language.value)
+                if instrumented and instrumented != data["code"]:
+                    # Rewrite for standalone runtime if config specifies rewrites
+                    rt_cfg = proj_cfg.get("runtime_injection", {})
+                    instrumented = _rewrite_instrumented_for_standalone(instrumented, rt_cfg)
+                    backups[src_file] = data["code"]
+                    src_file.write_text(instrumented, encoding='utf-8')
+                    instrumented_count += 1
+            except Exception as e:
+                if not json_output:
+                    console.print(f"  [yellow]Skip {src_file.name}: {e}[/yellow]")
+
+        if not json_output:
+            console.print(f"  Instrumented: {instrumented_count} files")
+
+        # Write marker file listing instrumented files (for stale artifact cleanup)
+        _stale_marker = project_dir / ".codegreen_instrumented"
+        _stale_marker.write_text("\n".join(str(f) for f in backups.keys()))
+
+        # Inject runtime module ONLY into source roots that have instrumented files
+        runtime_files_created = _inject_project_runtime(proj_cfg, backups, project_dir)
+        if not json_output and runtime_files_created:
+            console.print(f"  Runtime files injected: {len([f for f in runtime_files_created if isinstance(f, Path) and f.is_file()])}")
+
+        # Build the project
+        if build_cmd:
+            if not json_output:
+                console.print(f"  Building: {build_cmd}")
+            build_result = subprocess.run(
+                build_cmd, shell=True, cwd=str(project_dir),
+                capture_output=True, text=True, timeout=600)
+            if build_result.returncode != 0:
+                error_output = (build_result.stderr or "") + (build_result.stdout or "")
+                console.print(f"[red]Build failed:[/red]")
+                console.print(error_output[-500:])
+                raise typer.Exit(1)
+            if not json_output:
+                console.print(f"  [green]Build successful[/green]")
+
+        # ==========================================
+        # PHASE 3: MEASURE
+        # ==========================================
+        if not json_output:
+            console.print(f"\n[bold cyan]Phase 3: Measuring energy...[/bold cyan]")
+
+        all_runs = []
+        for run_idx in range(repeat):
+            if not json_output and repeat > 1:
+                console.print(f"  Run {run_idx+1}/{repeat}")
+
+            # Construct the run command with optional taskset
+            full_cmd = run_cmd
+            if cores:
+                full_cmd = f"taskset -c {cores} {full_cmd}"
+
+            # Run with perf stat for total energy + capture stderr for checkpoints
+            perf_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+            checkpoint_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+
+            # Run: perf stat wrapping the command, stderr goes to checkpoint_file
+            perf_cmd = f"perf stat -e power/energy-pkg/ -o {perf_file} -- bash -c '{full_cmd} 2>{checkpoint_file}'"
+            start_time = time.perf_counter()
+            run_result = subprocess.run(
+                perf_cmd, shell=True, cwd=str(project_dir),
+                capture_output=True, text=True, timeout=3600)
+            wall_time = time.perf_counter() - start_time
+
+            # Parse perf stat for total energy
+            total_energy_j = 0.0
+            try:
+                perf_content = open(perf_file).read()
+                for m in re.finditer(r'([\d.,]+)\s+Joules', perf_content):
+                    total_energy_j += float(m.group(1).replace(',', ''))
+            except Exception:
+                pass
+            finally:
+                os.unlink(perf_file)
+
+            # Parse checkpoints with per-thread call stacks for inclusive/exclusive
+            func_data = {}  # name -> {inclusive_uj, exclusive_uj, time_ns, calls}
+            thread_stacks = {}  # tid -> [(name, enter_ts, enter_energy, callee_energy_sum)]
+            try:
+                with open(checkpoint_file) as cf:
+                    for line in cf:
+                        if not line.startswith("CG_CP|"):
+                            continue
+                        parts = line.strip().split("|")
+                        if len(parts) < 6:
+                            continue
+                        cp_type, cp_name = parts[1], parts[2]
+                        cp_id_str = parts[3] if len(parts) > 3 else ""
+                        cp_ts, cp_energy = int(parts[4]), int(parts[5])
+                        cp_tid = int(parts[6]) if len(parts) > 6 else 0
+
+                        # Resolve file from checkpoint_id (authoritative mapping)
+                        cp_file = checkpoint_id_to_file.get(cp_id_str, "")
+                        if cp_file:
+                            func_file_map[cp_name] = cp_file
+
+                        if cp_name not in func_data:
+                            func_data[cp_name] = {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0}
+
+                        if cp_tid not in thread_stacks:
+                            thread_stacks[cp_tid] = []
+                        stack = thread_stacks[cp_tid]
+
+                        if cp_type == "enter":
+                            stack.append([cp_name, cp_ts, cp_energy, 0])
+                        elif cp_type == "exit" and stack:
+                            # Pop matching frame (handle missing exits via stack search)
+                            frame = stack[-1]
+                            if frame[0] == cp_name:
+                                stack.pop()
+                            else:
+                                # Search for matching frame, unwinding abandoned frames
+                                found = False
+                                for si in range(len(stack) - 1, -1, -1):
+                                    if stack[si][0] == cp_name:
+                                        frame = stack[si]
+                                        del stack[si:]
+                                        found = True
+                                        break
+                                if not found:
+                                    continue
+
+                            dt = cp_ts - frame[1]
+                            inclusive = cp_energy - frame[2]
+                            callee_sum = frame[3]
+                            if dt > 0 and inclusive >= 0:
+                                exclusive = max(inclusive - callee_sum, 0)
+                                func_data[cp_name]["inclusive_uj"] += inclusive
+                                func_data[cp_name]["exclusive_uj"] += exclusive
+                                func_data[cp_name]["time_ns"] += dt
+                                func_data[cp_name]["calls"] += 1
+                                # Propagate inclusive to parent's callee_sum
+                                if stack:
+                                    stack[-1][3] += inclusive
+            except Exception:
+                pass
+            finally:
+                if not no_cleanup:
+                    os.unlink(checkpoint_file)
+                elif output_dir:
+                    shutil.copy2(checkpoint_file, str(output_dir / f"checkpoints_run{run_idx}.txt"))
+                    os.unlink(checkpoint_file)
+
+            # Compute per-function metrics (inclusive + exclusive)
+            func_energy = {}
+            total_inclusive = sum(d["inclusive_uj"] for d in func_data.values())
+            total_exclusive = sum(d["exclusive_uj"] for d in func_data.values())
+            for name, data in sorted(func_data.items(), key=lambda x: x[1]["exclusive_uj"], reverse=True):
+                inc_j = data["inclusive_uj"] / 1e6
+                exc_j = data["exclusive_uj"] / 1e6
+                time_s = data["time_ns"] / 1e9
+                calls = data["calls"]
+                inc_pct = (data["inclusive_uj"] / total_inclusive * 100) if total_inclusive > 0 else 0
+                exc_pct = (data["exclusive_uj"] / total_exclusive * 100) if total_exclusive > 0 else 0
+                self_ratio = data["exclusive_uj"] / data["inclusive_uj"] if data["inclusive_uj"] > 0 else 0
+                # Hotspot taxonomy (Types 1-5, see energy_agent_workflow.txt 9C)
+                # CodeGreen detects Types 1, 2, 5 from its data alone.
+                # Types 3, 4 need callgraph analysis (agent's job).
+                median_epc = sorted(
+                    [d["inclusive_uj"] / d["calls"] for d in func_data.values() if d["calls"] > 0]
+                )
+                med_epc = median_epc[len(median_epc) // 2] if median_epc else 1
+                epc = data["inclusive_uj"] / calls if calls > 0 else 0
+                efficiency_ratio = epc / med_epc if med_epc > 0 else 0
+                if self_ratio < 0.2 and inc_pct >= 5.0:
+                    verdict = "wrapper"
+                elif exc_pct >= 5.0 and efficiency_ratio > 3.0:
+                    verdict = "TYPE_2_INEFFICIENT"
+                elif exc_pct >= 10.0:
+                    verdict = "TYPE_1_DIRECT"
+                elif calls > 100000 and exc_pct >= 3.0 and efficiency_ratio < 1.5:
+                    verdict = "TYPE_5_FREQUENCY"
+                elif exc_pct >= 3.0:
+                    verdict = "TYPE_1_DIRECT"
+                else:
+                    verdict = "minor"
+                func_energy[name] = {
+                    "energy_j": round(inc_j, 6),
+                    "energy_pct": round(inc_pct, 2),
+                    "exclusive_energy_j": round(exc_j, 6),
+                    "exclusive_pct": round(exc_pct, 2),
+                    "self_ratio": round(self_ratio, 3),
+                    "verdict": verdict,
+                    "file": func_file_map.get(name, ""),
+                    "wall_time_s": round(time_s, 6),
+                    "avg_power_w": round(inc_j / time_s, 2) if time_s > 0 else 0,
+                    "calls": calls,
+                    "energy_per_call_uj": round(data["inclusive_uj"] / calls, 2) if calls > 0 else 0,
+                }
+
+            all_runs.append({
+                "run_idx": run_idx,
+                "total_energy_j": round(total_energy_j, 4),
+                "wall_time_s": round(wall_time, 3),
+                "avg_power_w": round(total_energy_j / wall_time, 2) if wall_time > 0 else 0,
+                "attributed_energy_j": round(total_inclusive / 1e6, 4),
+                "exclusive_energy_j": round(total_exclusive / 1e6, 4),
+                "attribution_pct": round(total_inclusive / 1e6 / total_energy_j * 100, 1) if total_energy_j > 0 else 0,
+                "functions": func_energy,
+                "total_checkpoints": sum(d["calls"] * 2 for d in func_data.values()),
+            })
+
+            if not json_output:
+                console.print(f"    Energy: {total_energy_j:.2f} J, "
+                              f"Attributed: {total_inclusive/1e6:.2f} J ({total_inclusive/1e6/total_energy_j*100:.0f}%), "
+                              f"Functions: {len(func_energy)}")
+
+            # Cooldown between runs
+            if run_idx < repeat - 1:
+                time.sleep(30)
+
+        # ==========================================
+        # OUTPUT RESULTS
+        # ==========================================
+
+        # Aggregate across runs (use last run for function list, average energy)
+        if all_runs:
+            avg_energy = sum(r["total_energy_j"] for r in all_runs) / len(all_runs)
+            last_funcs = all_runs[-1]["functions"]
+
+            # Hotspot ranking by exclusive energy (actual work, not wrappers)
+            hotspots = sorted(last_funcs.items(),
+                              key=lambda x: x[1].get("exclusive_pct", x[1]["energy_pct"]),
+                              reverse=True)
+
+            if json_output:
+                result = {
+                    "success": True,
+                    "project": str(project_dir),
+                    "language": language.value,
+                    "source_files": len(source_files),
+                    "instrumented_files": instrumented_count,
+                    "total_points": total_points,
+                    "runs": all_runs,
+                    "hotspots": [{"rank": i+1, "function": name, **data}
+                                 for i, (name, data) in enumerate(hotspots[:20])],
+                }
+                print(json.dumps(result, indent=2))
+            else:
+                console.print(f"\n[bold green]Results[/bold green]")
+                console.print(f"  Total energy: {avg_energy:.2f} J (avg over {len(all_runs)} runs)")
+                console.print(f"  Functions profiled: {len(last_funcs)}")
+                console.print(f"\n[bold]Top hotspots by exclusive energy:[/bold]")
+                console.print(f"  {'Rank':<5} {'Function':<35} {'Excl%':>7} {'Incl%':>7} {'Self':>6} "
+                              f"{'Verdict':>8} {'Calls':>8} {'uJ/call':>10}")
+                console.print("  " + "-" * 100)
+                for i, (name, data) in enumerate(hotspots[:15]):
+                    console.print(f"  {i+1:<5} {name:<35} {data.get('exclusive_pct', data['energy_pct']):>6.1f}% "
+                                  f"{data['energy_pct']:>6.1f}% {data.get('self_ratio', 1.0):>5.2f} "
+                                  f"{data.get('verdict', ''):>8} {data['calls']:>8} "
+                                  f"{data['energy_per_call_uj']:>10.1f}")
+
+            if output_dir:
+                with open(output_dir / "project_results.json", "w") as f:
+                    json.dump({"runs": all_runs, "hotspots": [
+                        {"rank": i+1, "function": name, **data}
+                        for i, (name, data) in enumerate(hotspots)]}, f, indent=2)
+                if not json_output:
+                    console.print(f"\n  Results saved to: {output_dir / 'project_results.json'}")
+
+    finally:
+        # ==========================================
+        # CLEANUP: Restore original files
+        # ==========================================
+        if not no_cleanup:
+            for src_file, original_code in backups.items():
+                try:
+                    src_file.write_text(original_code, encoding='utf-8')
+                except Exception:
+                    pass
+            for rf in reversed(runtime_files_created):
+                try:
+                    if rf.is_file():
+                        rf.unlink()
+                    elif rf.is_dir() and not any(rf.iterdir()):
+                        rf.rmdir()
+                except Exception:
+                    pass
+            # Remove stale artifact marker
+            _marker = project_dir / ".codegreen_instrumented"
+            if _marker.exists():
+                _marker.unlink(missing_ok=True)
+            if not json_output and backups:
+                console.print(f"\n  [dim]Restored {len(backups)} original files[/dim]")
+        else:
+            if not json_output:
+                console.print(f"\n  [yellow]Instrumented files preserved (--no-cleanup)[/yellow]")
+                console.print(f"  [yellow]Runtime files also preserved. To manually rebuild and run:[/yellow]")
+                console.print(f"  [dim]  1. {proj_cfg.get('build_systems', {}).get(list(proj_cfg.get('build_systems', {}).keys() or [''])[0], {}).get('build_cmd', 'Build the project')}[/dim]")
+                console.print(f"  [dim]  2. Run your benchmark, capturing stderr: <cmd> 2>checkpoints.txt[/dim]")
+                console.print(f"  [dim]  3. Restore with: git checkout -- {project_dir}[/dim]")
 
 
 @app.command("validate-accuracy")

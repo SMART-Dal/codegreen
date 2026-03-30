@@ -11,6 +11,10 @@ namespace codegreen::nemb {
 
 MeasurementCoordinator::MeasurementCoordinator(const CoordinatorConfig& config)
     : config_(config) {
+    std::cerr << "[NEMB] measurement_interval=" << config_.measurement_interval.count()
+              << "ms buffer_size=" << config_.measurement_buffer_size
+              << " cross_validation_threshold=" << config_.cross_validation_threshold
+              << std::endl;
 }
 
 MeasurementCoordinator::~MeasurementCoordinator() {

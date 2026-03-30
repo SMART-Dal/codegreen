@@ -20,8 +20,8 @@
         "loop_types": [
             "for_statement",
             "while_statement",
-            "for_in_statement",
-            "for_of_statement"
+            "do_statement",
+            "for_in_statement"
         ],
         "return_types": [
             "return_statement"
@@ -59,26 +59,40 @@
             }
         }
     },
+    "custom_queries": {
+        "definitions": "(function_declaration name: (identifier) @function_name) @function_def (method_definition name: (property_identifier) @function_name) @function_def",
+        "loops": "(for_statement) @loop.for (while_statement) @loop.while (do_statement) @loop.do (for_in_statement) @loop.for_in",
+        "returns": "(return_statement) @return"
+    },
     "query_config": {
         "capture_mapping": {
-            "function.definition": "function_enter",
-            "class.definition": "class_enter",
-            "class.name": "class_enter",
-            "return.statement": "function_exit",
+            "function_def": "function_enter",
+            "function_name": "function_enter",
+            "return": "function_exit",
             "loop.for": "loop_start",
             "loop.while": "loop_start",
-            "loop.for_in": "loop_start",
-            "loop.for_of": "loop_start"
+            "loop.do": "loop_start",
+            "loop.for_in": "loop_start"
         },
         "priority_order": [
-            "function.definition",
-            "class.definition",
-            "return.statement",
+            "function_def",
+            "function_name",
+            "return",
             "loop.for",
             "loop.while",
-            "loop.for_in",
-            "loop.for_of"
-        ]
+            "loop.do",
+            "loop.for_in"
+        ],
+        "deduplication_rules": {
+            "function_enter": {
+                "scope": "function",
+                "priority_order": [
+                    "function_def",
+                    "function_name"
+                ],
+                "max_per_function": 1
+            }
+        }
     },
     "instrumentation_config": {
         "import_statement": "import { CodeGreen } from 'codegreen-runtime';",
@@ -90,7 +104,11 @@
             "loop_exit": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'loop_exit');"
         },
         "statement_terminator": ";",
-        "comment_prefix": "//"
+        "comment_prefix": "//",
+        "runtime_guard_files": [
+            "codegreen-runtime.js",
+            "codegreen-runtime.mjs"
+        ]
     },
     "formatting_config": {
         "indent_size": 2,
@@ -147,14 +165,15 @@
         "debug_text_preview_length": 100,
         "debug_error_text_length": 200,
         "debug_significant_change_threshold": 100,
-        "default_indent_size": 4,
+        "default_indent_size": 2,
         "max_inheritance_depth": 5
     },
     "node_types": {
         "function_types": [
             "function_declaration",
             "arrow_function",
-            "function_expression"
+            "function_expression",
+            "method_definition"
         ],
         "body_types": [
             "statement_block"
@@ -162,8 +181,8 @@
         "loop_types": [
             "for_statement",
             "while_statement",
-            "for_in_statement",
-            "for_of_statement"
+            "do_statement",
+            "for_in_statement"
         ],
         "class_types": [
             "class_declaration"
@@ -173,6 +192,51 @@
         ],
         "return_types": [
             "return_statement"
-        ]
+        ],
+        "throw_types": [
+            "throw_statement"
+        ],
+        "constructor_invocation_types": [],
+        "import_after_node_types": [],
+        "terminating_types": [
+            "return_statement",
+            "throw_statement",
+            "break_statement",
+            "continue_statement"
+        ],
+        "identifier_types": [
+            "identifier",
+            "property_identifier"
+        ],
+        "definition_types": [
+            "function_declaration",
+            "arrow_function",
+            "function_expression",
+            "class_declaration",
+            "method_definition"
+        ],
+        "if_statement_types": [
+            "if_statement"
+        ],
+        "else_clause_types": [
+            "else_clause"
+        ],
+        "elif_clause_types": [],
+        "try_statement_types": [
+            "try_statement"
+        ],
+        "catch_clause_types": [
+            "catch_clause"
+        ],
+        "finally_clause_types": [
+            "finally_clause"
+        ],
+        "for_statement_types": [
+            "for_statement"
+        ],
+        "docstring_node_types": [],
+        "docstring_delimiters": [],
+        "comment_prefix": "//",
+        "indentation_sensitive": false
     }
 }

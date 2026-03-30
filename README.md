@@ -84,11 +84,40 @@ Adding a new language requires only a JSON config file in `src/instrumentation/c
 
 Currently supported: Python, C, C++, JavaScript, Java.
 
+## Benchmarking
+
+```bash
+# Compare CodeGreen accuracy against perf RAPL ground truth
+codegreen benchmark --suite benchmarksgame -l python --reps 5
+
+# Run PerfOpt Java benchmark suite (JMH, original vs patched comparison)
+codegreen benchmark --suite perfopt --dataset-dir /path/to/PerfOpt --jars-dir /path/to/jars
+
+# Generate comparison artifacts for documentation
+bash scripts/generate_comparison_artifacts.sh docs/benchmarks/
+```
+
+## Energy Flow Graph (EFG)
+
+CodeGreen includes an Energy Flow Graph module (`src/analysis/cfg/`) that builds energy-annotated control flow graphs from source code:
+
+```python
+from src.analysis.cfg.builder import build_per_method_cfgs
+from src.analysis.cfg.energy_flow import build_efg, efg_to_dot, efg_to_text
+
+cfgs = build_per_method_cfgs(java_source_code)
+efg = build_efg(cfg_nodes, cfg_edges, "ClassName.method", "File.java", codegreen_data)
+print(efg_to_text(efg))  # compact format for LLM prompts
+```
+
+Features: Ball & Larus branch heuristics, SCC-based hot path computation, three-level accuracy annotations (MEASURED/ESTIMATED/INFERRED), configurable via `EFGConfig`.
+
 ## Architecture
 
-- **C++ NEMB backend**: RAPL energy reading with sub-microsecond timestamping
+- **C++ NEMB backend**: RAPL energy reading with sub-microsecond timestamping, configurable polling interval
 - **Python instrumentation**: tree-sitter AST analysis, config-driven checkpoint insertion
-- **Benchmark harness**: statistical analysis with t-distribution CI, IQR outlier detection, perf RAPL ground truth validation
+- **Energy Flow Graph**: CFG + energy annotation for path-dependent analysis
+- **Benchmark harness**: multi-suite support (benchmarksgame, PerfOpt), statistical analysis with t-distribution CI, IQR outlier detection, profiler comparison
 
 ## CI/CD integration
 

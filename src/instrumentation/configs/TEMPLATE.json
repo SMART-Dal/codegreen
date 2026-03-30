@@ -59,7 +59,11 @@
         "function_types": ["function_definition", "method_definition"],
         "body_types": ["block", "compound_statement"],
         "class_types": ["class_definition"],
-        "return_types": ["return_statement"]
+        "return_types": ["return_statement"],
+        "throw_types": ["raise_statement"],
+        "constructor_invocation_types": [],
+        "import_after_node_types": [],
+        "terminating_types": ["return_statement", "break_statement", "continue_statement"]
     },
     "processing_limits": {
         "max_captures_per_query": 1000,

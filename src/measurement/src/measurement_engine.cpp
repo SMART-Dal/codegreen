@@ -27,6 +27,7 @@ MeasurementEngine::MeasurementEngine() {
     
     // Convert to coordinator config
     nemb::CoordinatorConfig coordinator_config;
+    coordinator_config.measurement_interval = std::chrono::milliseconds(nemb_config.coordinator.measurement_interval_ms);
     coordinator_config.temporal_alignment_tolerance_ms = nemb_config.coordinator.temporal_alignment_tolerance_ms;
     coordinator_config.cross_validation_threshold = nemb_config.coordinator.cross_validation_threshold;
     coordinator_config.measurement_buffer_size = nemb_config.coordinator.measurement_buffer_size;

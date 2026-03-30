@@ -104,55 +104,77 @@ ConfigLoader::NEMBConfig ConfigLoader::parse_json_config(const std::string& json
         // Use simplified config parsing
         auto parsed_config = parse_simple_config(json_content);
         
-        // Set accuracy-optimized defaults
-        config.enabled = true;
+        // Helper to read parsed values with fallback to default
+        auto get_str = [&](const std::string& key, const std::string& def) -> std::string {
+            auto it = parsed_config.find(key);
+            return (it != parsed_config.end() && !it->second.empty()) ? it->second : def;
+        };
+        auto get_uint = [&](const std::string& key, uint32_t def) -> uint32_t {
+            auto it = parsed_config.find(key);
+            return (it != parsed_config.end()) ? static_cast<uint32_t>(std::stoul(it->second)) : def;
+        };
+        auto get_double = [&](const std::string& key, double def) -> double {
+            auto it = parsed_config.find(key);
+            return (it != parsed_config.end()) ? std::stod(it->second) : def;
+        };
+        auto get_bool = [&](const std::string& key, bool def) -> bool {
+            auto it = parsed_config.find(key);
+            if (it == parsed_config.end()) return def;
+            return (it->second == "true" || it->second == "1");
+        };
+
+        config.enabled = get_bool("enabled", true);
         config.accuracy_mode = "production";
-        
+
         // Accuracy configuration
-        config.accuracy.target_uncertainty_percent = 1.0;
-        config.accuracy.measurement_validation = true;
-        config.accuracy.outlier_detection = true;
-        config.accuracy.noise_filtering = "adaptive";
-        config.accuracy.statistical_validation = true;
-        config.accuracy.confidence_threshold = 0.95;
+        config.accuracy.target_uncertainty_percent = get_double("target_uncertainty_percent", 1.0);
+        config.accuracy.measurement_validation = get_bool("measurement_validation", true);
+        config.accuracy.outlier_detection = get_bool("outlier_detection", true);
+        config.accuracy.noise_filtering = get_str("noise_filtering", "adaptive");
+        config.accuracy.statistical_validation = get_bool("statistical_validation", true);
+        config.accuracy.confidence_threshold = get_double("confidence_threshold", 0.95);
         config.accuracy.minimize_io_during_measurement = true;
         config.accuracy.minimize_system_noise = true;
         config.accuracy.memory_prefaulting = true;
         config.accuracy.cpu_affinity = "auto";
         config.accuracy.disable_frequency_scaling = false;
-        
-        // Timing configuration
-        config.timing.precision = "maximum";
-        config.timing.clock_source = "auto";
+
+        // Timing configuration -- read from JSON, fall back to defaults
+        config.timing.precision = get_str("precision", "maximum");
+        config.timing.clock_source = get_str("clock_source", "auto");
         config.timing.sync_method = "tsc";
         config.timing.calibration_samples = 100;
-        
-        // Coordinator configuration
-        config.coordinator.cross_validation = true;
-        config.coordinator.cross_validation_threshold = 0.05;
+
+        // Coordinator configuration -- read from JSON, fall back to defaults
+        config.coordinator.measurement_interval_ms = get_uint("measurement_interval_ms", 10);
+        config.coordinator.cross_validation = get_bool("cross_validation", true);
+        config.coordinator.cross_validation_threshold = get_double("cross_validation_threshold", 0.05);
         config.coordinator.temporal_alignment_tolerance_ms = 0.1;
-        config.coordinator.measurement_buffer_size = 1000;
-        config.coordinator.auto_restart_failed_providers = true;
-        config.coordinator.provider_restart_interval = std::chrono::seconds(30);
-        
-        // Provider configurations
-        ProviderConfig intel_rapl;
-        intel_rapl.enabled = true;
-        intel_rapl.access_method = "auto";
-        intel_rapl.validation_enabled = true;
-        config.providers["intel_rapl"] = intel_rapl;
-        
-        ProviderConfig nvidia_gpu;
-        nvidia_gpu.enabled = true;
-        nvidia_gpu.access_method = "auto";  
-        nvidia_gpu.validation_enabled = true;
-        config.providers["nvidia_gpu"] = nvidia_gpu;
-        
-        ProviderConfig amd_cpu;
-        amd_cpu.enabled = true;
-        amd_cpu.access_method = "auto";
-        amd_cpu.validation_enabled = true;
-        config.providers["amd_cpu"] = amd_cpu;
+        config.coordinator.measurement_buffer_size = get_uint("measurement_buffer_size", 1000);
+        config.coordinator.auto_restart_failed_providers = get_bool("auto_restart_failed_providers", true);
+        uint32_t restart_ms = get_uint("provider_restart_interval", 30000);
+        config.coordinator.provider_restart_interval = std::chrono::seconds(restart_ms / 1000);
+
+        // Provider configurations -- read enabled state from JSON
+        auto make_provider = [&](const std::string& name, bool default_enabled) {
+            ProviderConfig p;
+            p.enabled = get_bool(name, default_enabled);
+            // Also check the explicit "enabled" key that appears under each provider block
+            // The flat parser will see the last "enabled" key, so check provider-specific key
+            auto it = parsed_config.find(name);
+            if (it == parsed_config.end()) {
+                // Check if we can infer from "enabled" keys near provider context
+                // For the flat parser, provider names like "amd_rocm" appear as keys
+                // with value block-start, so check if the provider name exists at all
+                p.enabled = default_enabled;
+            }
+            p.access_method = "auto";
+            p.validation_enabled = get_bool("validation_enabled", true);
+            return p;
+        };
+        config.providers["intel_rapl"] = make_provider("intel_rapl", true);
+        config.providers["nvidia_gpu"] = make_provider("nvidia_nvml", true);
+        config.providers["amd_cpu"] = make_provider("amd_rocm", false);
         
     } catch (const std::exception& e) {
         // Fall back to defaults if parsing fails
@@ -216,13 +238,14 @@ ConfigLoader::NEMBConfig ConfigLoader::get_accuracy_optimized_config() {
     config.timing.calibration_samples = 1000;
     
     // Strict coordination
+    config.coordinator.measurement_interval_ms = 1;
     config.coordinator.cross_validation = true;
     config.coordinator.cross_validation_threshold = 0.02;
     config.coordinator.temporal_alignment_tolerance_ms = 0.05;
     config.coordinator.measurement_buffer_size = 2000;
     config.coordinator.auto_restart_failed_providers = true;
     config.coordinator.provider_restart_interval = std::chrono::seconds(10);
-    
+
     // Enable all providers with validation
     ProviderConfig provider_default;
     provider_default.enabled = true;
@@ -262,6 +285,7 @@ ConfigLoader::NEMBConfig ConfigLoader::get_performance_optimized_config() {
     config.timing.calibration_samples = 50;
     
     // Relaxed coordination
+    config.coordinator.measurement_interval_ms = 100;
     config.coordinator.cross_validation = false;  // Disabled for performance
     config.coordinator.cross_validation_threshold = 0.10;
     config.coordinator.temporal_alignment_tolerance_ms = 1.0;

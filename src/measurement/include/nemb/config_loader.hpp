@@ -47,6 +47,7 @@ public:
     };
     
     struct CoordinatorConfig {
+        uint32_t measurement_interval_ms{10};
         bool cross_validation{true};
         double cross_validation_threshold{0.05};
         double temporal_alignment_tolerance_ms{0.1};

@@ -50,7 +50,9 @@
         },
         "nvidia_nvml": {
           "enabled": true,
-          "device_indices": [0],
+          "device_indices": [
+            0
+          ],
           "validation_enabled": true
         },
         "amd_rocm": {
@@ -112,28 +114,50 @@
     "python": {
       "executable": "python3",
       "runtime_module": "codegreen_runtime.py",
-      "extensions": [".py", ".pyw", ".pyi"]
+      "extensions": [
+        ".py",
+        ".pyw",
+        ".pyi"
+      ]
     },
     "c": {
       "executable": "gcc",
-      "compiler_flags": ["-O0", "-g"],
-      "extensions": [".c", ".h"]
+      "compiler_flags": [
+        "-O0",
+        "-g"
+      ],
+      "extensions": [
+        ".c",
+        ".h"
+      ]
     },
     "cpp": {
       "executable": "g++",
-      "compiler_flags": ["-O0", "-g", "-std=c++17"],
-      "extensions": [".cpp", ".cxx", ".cc", ".hpp", ".h"]
+      "compiler_flags": [
+        "-O0",
+        "-g",
+        "-std=c++17"
+      ],
+      "extensions": [
+        ".cpp",
+        ".cxx",
+        ".cc",
+        ".hpp",
+        ".h"
+      ]
     },
     "java": {
       "executable": "java",
       "compiler": "javac",
-      "extensions": [".java"]
+      "extensions": [
+        ".java"
+      ]
     }
   },
   "developer": {
-    "debug_mode": false,
-    "verbose_logging": false,
-    "preserve_temp_files": false,
+    "debug_mode": true,
+    "verbose_logging": true,
+    "preserve_temp_files": true,
     "measurement_validation": true,
     "performance_profiling": false
   },

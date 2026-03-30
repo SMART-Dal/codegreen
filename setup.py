@@ -77,7 +77,8 @@ class BinaryDistribution(Distribution):
 
 PACKAGES = [
     "src", "src.cli", "src.analyzer", "src.instrumentation", "src.utils",
-    "benchmark", "benchmark.validation",
+    "src.analysis", "src.analysis.cfg",
+    "benchmark", "benchmark.validation", "benchmark.suites",
 ]
 
 setup(
@@ -90,6 +91,12 @@ setup(
             "language_runtimes/python/*.py",
             "language_runtimes/c/*.h",
             "language_runtimes/cpp/*.h",
+            "language_runtimes/java/**/*.java",
+        ],
+        "src": [
+            "lib/*.so",
+            "lib/runtime/**/*.h",
+            "bin/codegreen",
         ],
     },
     zip_safe=False,

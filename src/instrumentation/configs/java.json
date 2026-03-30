@@ -16,6 +16,8 @@
             "interface_declaration",
             "enum_declaration"
         ],
+        "namespace_types": [],
+        "scope_separator": ".",
         "loop_types": [
             "for_statement",
             "while_statement",
@@ -26,7 +28,9 @@
             "return_statement"
         ],
         "comment_types": [
-            "comment"
+            "comment",
+            "line_comment",
+            "block_comment"
         ],
         "docstring_types": [],
         "insertion_rules": {
@@ -73,7 +77,10 @@
         "deduplication_rules": {
             "function_enter": {
                 "scope": "function",
-                "priority_order": ["method_def", "method_name"],
+                "priority_order": [
+                    "method_def",
+                    "method_name"
+                ],
                 "max_per_function": 1
             }
         }
@@ -81,14 +88,18 @@
     "instrumentation_config": {
         "import_statement": "import codegreen.runtime.CodeGreenRuntime;",
         "templates": {
-            "function_enter": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"enter\");",
-            "function_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
-            "function_return": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
+            "function_enter": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"enter\");",
+            "function_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
+            "function_return": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
             "loop_start": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
             "loop_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
         },
         "statement_terminator": ";",
-        "comment_prefix": "//"
+        "comment_prefix": "//",
+        "runtime_guard_files": [
+            "CodeGreenRuntime.java",
+            "CodeGreenStandaloneRuntime.java"
+        ]
     },
     "formatting_config": {
         "indent_size": 4,
@@ -165,10 +176,105 @@
             "enhanced_for_statement"
         ],
         "comment_types": [
-            "comment"
+            "comment",
+            "line_comment",
+            "block_comment"
         ],
         "return_types": [
             "return_statement"
+        ],
+        "throw_types": [
+            "throw_statement"
+        ],
+        "constructor_invocation_types": [
+            "explicit_constructor_invocation"
+        ],
+        "import_after_node_types": [
+            "package_declaration"
+        ],
+        "terminating_types": [
+            "return_statement",
+            "throw_statement",
+            "break_statement",
+            "continue_statement"
+        ],
+        "identifier_types": [
+            "identifier",
+            "type_identifier"
+        ],
+        "definition_types": [
+            "method_declaration",
+            "constructor_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration"
+        ],
+        "if_statement_types": [
+            "if_statement"
+        ],
+        "else_clause_types": [],
+        "elif_clause_types": [],
+        "try_statement_types": [
+            "try_statement",
+            "try_with_resources_statement"
+        ],
+        "catch_clause_types": [
+            "catch_clause"
+        ],
+        "finally_clause_types": [
+            "finally_clause"
+        ],
+        "for_statement_types": [
+            "for_statement"
+        ],
+        "docstring_node_types": [],
+        "docstring_delimiters": [],
+        "comment_prefix": "//",
+        "indentation_sensitive": false
+    },
+    "project_config": {
+        "source_patterns": [
+            "**/src/main/java/**/*.java"
+        ],
+        "exclude_patterns": [
+            "**/src/test/**",
+            "**/src/it/**",
+            "**/build/**",
+            "**/target/**",
+            "**/.git/**",
+            "**/generated/**",
+            "**/examples/**",
+            "**/codegreen/runtime/**"
+        ],
+        "build_systems": {
+            "maven": {
+                "detect": "pom.xml",
+                "build_cmd": "mvn package -DskipTests"
+            },
+            "gradle": {
+                "detect": "build.gradle",
+                "build_cmd": "./gradlew build -x test",
+                "wrapper": "gradlew"
+            }
+        },
+        "runtime_injection": {
+            "type": "source_copy",
+            "source_dir": "java/codegreen/runtime",
+            "files": [
+                "CodeGreenStandaloneRuntime.java"
+            ],
+            "target_relative_path": "codegreen/runtime",
+            "import_rewrite": {
+                "from": "import codegreen.runtime.CodeGreenRuntime;",
+                "to": "import codegreen.runtime.CodeGreenStandaloneRuntime;"
+            },
+            "checkpoint_rewrite": {
+                "from": "CodeGreenRuntime.checkpoint",
+                "to": "CodeGreenStandaloneRuntime.checkpoint"
+            }
+        },
+        "source_root_markers": [
+            "src/main/java"
         ]
     }
 }

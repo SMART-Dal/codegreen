@@ -52,6 +52,9 @@ class LanguageConfig:
     # Custom queries
     custom_queries: Dict[str, str] = field(default_factory=dict)
 
+    # Project-level configuration (source patterns, build systems, runtime injection)
+    project_config: Dict[str, Any] = field(default_factory=dict)
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'LanguageConfig':
         """Create a LanguageConfig from a dictionary, filtering out comment keys."""

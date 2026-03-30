@@ -284,6 +284,8 @@ class LanguageAgnosticInstrumentationGenerator:
         # to avoid issues with literal braces in templates (like Java class_enter)
         instrumentation_code = template
         instrumentation_code = instrumentation_code.replace("{checkpoint_id}", point.id)
+        qualified = point.metadata.get('qualified_name', point.name)
+        instrumentation_code = instrumentation_code.replace("{qualified_name}", qualified)
         instrumentation_code = instrumentation_code.replace("{name}", point.name)
         instrumentation_code = instrumentation_code.replace("{function_name}", point.name)
         instrumentation_code = instrumentation_code.replace("{loop_name}", point.name)
@@ -403,9 +405,7 @@ class LanguageEngine:
                 
                 if not self._queries[lang_id]:
                     msg = f"No valid queries compiled for {lang_id}"
-                    logger.error(f" {msg}")
-                    if strict_mode:
-                        raise RuntimeError(msg)
+                    logger.debug(f" {msg}")  # debug, not error -- other languages may not have queries
                 
             except ImportError as e:
                 msg = f"Missing tree-sitter language support for {lang_id}: {e}"
@@ -461,6 +461,18 @@ class LanguageEngine:
                 error=f"Unsupported language: {language or 'unknown'}"
             )
         
+        # Guard: refuse to analyze files that define the checkpoint runtime.
+        # If instrumented, checkpoint() would call itself = infinite recursion.
+        # Detection: check if the file defines any function named in the checkpoint template.
+        lang_config = self._config_manager.get_config(language)
+        guard_files = lang_config.instrumentation_config.get("runtime_guard_files", [])
+        if filename and any(filename.endswith(g) for g in guard_files):
+            return AnalysisResult(
+                language=language, success=False, instrumentation_points=[],
+                optimization_suggestions=[], metadata={"skipped": "runtime_guard"},
+                error=f"Skipped: {filename} is a CodeGreen runtime file (instrumentation would cause recursion)"
+            )
+
         # Get configurable encoding
         global_config = self._config_manager.get_global_config()
         encoding = global_config.get('default_encoding', 'utf-8')
@@ -725,78 +737,166 @@ class LanguageEngine:
             logger.info(f" Tree-sitter analysis complete: {len(points)} instrumentation points found")
             return points
 
-    def _node_terminates_control_flow(self, node: 'Node') -> bool:
+    def _node_terminates_control_flow(self, node: 'Node', language: str = None) -> bool:
         """
-        Check if a node terminates the control flow (e.g. ends with return/raise).
-        This is used to determine if an implicit function exit checkpoint is reachable.
+        Check if a node terminates the control flow (e.g. ends with return/throw).
+        Uses config-driven terminating_types and body_types so this works
+        for any language without hardcoded node names.
         """
         if not node:
             return False
-            
-        # Basic terminating statements for various languages
-        terminating_types = [
+
+        # Read terminating and body types from config (with safe defaults)
+        if language:
+            node_types = self._config_manager.get_node_types(language)
+        else:
+            node_types = {}
+        terminating = set(node_types.get('terminating_types', [
             'return_statement', 'raise_statement', 'throw_statement',
             'break_statement', 'continue_statement'
-        ]
-        if node.type in terminating_types:
+        ]))
+        body_types = set(node_types.get('body_types', [
+            'block', 'compound_statement', 'constructor_body'
+        ]))
+
+        if node.type in terminating:
             return True
-            
-        # If it's a block, check its last named child
-        if node.type in ['block', 'compound_statement']:
-            if not node.named_children:
+
+        # Block/body containers: check last non-comment named child
+        comment_types = set(node_types.get('comment_types', ['comment', 'line_comment', 'block_comment']))
+        if node.type in body_types:
+            # Skip trailing comments to find the actual last statement
+            last_stmt = None
+            for child in reversed(node.named_children):
+                if child.type not in comment_types:
+                    last_stmt = child
+                    break
+            if not last_stmt:
                 return False
-            return self._node_terminates_control_flow(node.named_children[-1])
-            
-        # If it's an if statement, it only terminates if it has an else AND all branches terminate
-        if node.type == 'if_statement':
+            return self._node_terminates_control_flow(last_stmt, language)
+
+        if_types = set(node_types.get('if_statement_types', ['if_statement']))
+        else_types = set(node_types.get('else_clause_types', []))
+        elif_types = set(node_types.get('elif_clause_types', []))
+
+        if node.type in if_types:
+            # Generic approach: use tree-sitter field API (consequence/alternative)
+            # Covers Java/C/C++ where if_statement has named fields for branches.
+            consequence = node.child_by_field_name('consequence')
+            alternative = node.child_by_field_name('alternative')
+            if consequence and alternative:
+                return (self._node_terminates_control_flow(consequence, language) and
+                        self._node_terminates_control_flow(alternative, language))
+            # Fallback for languages with explicit else/elif clause nodes
             has_else = False
             branches_terminate = True
-            
-            # Count blocks to handle if/elif/else
             blocks_checked = 0
-            
             for child in node.children:
-                if child.type == 'block':
+                if child.type in body_types:
                     blocks_checked += 1
-                    if not self._node_terminates_control_flow(child):
+                    if not self._node_terminates_control_flow(child, language):
                         branches_terminate = False
-                elif child.type == 'elif_clause':
-                    # Recurse into elif
+                elif elif_types and child.type in elif_types:
                     for sub in child.children:
-                        if sub.type == 'block':
+                        if sub.type in body_types:
                             blocks_checked += 1
-                            if not self._node_terminates_control_flow(sub):
+                            if not self._node_terminates_control_flow(sub, language):
                                 branches_terminate = False
-                elif child.type == 'else_clause':
+                elif else_types and child.type in else_types:
                     has_else = True
                     for sub in child.children:
-                        if sub.type == 'block':
+                        if sub.type in body_types:
                             blocks_checked += 1
-                            if not self._node_terminates_control_flow(sub):
+                            if not self._node_terminates_control_flow(sub, language):
                                 branches_terminate = False
-            
             return has_else and branches_terminate and blocks_checked > 0
 
-        if node.type == 'try_statement':
-            blocks_terminate = True
-            has_except = False
+        # Try/catch: terminates if both try body AND all catch/except clauses terminate.
+        # Uses config-driven types: try_statement_types, catch_clause_types, finally_clause_types.
+        try_types = set(node_types.get('try_statement_types', ['try_statement', 'try_with_resources_statement']))
+        catch_types = set(node_types.get('catch_clause_types', ['catch_clause', 'except_clause']))
+        finally_types = set(node_types.get('finally_clause_types', ['finally_clause']))
+
+        if node.type in try_types:
+            try_body_terminates = False
+            all_catch_terminate = True
+            has_catch = False
             for child in node.children:
-                if child.type in ('block', 'finally_clause'):
+                if child.type in body_types:
+                    # This is the try body
+                    try_body_terminates = self._node_terminates_control_flow(child, language)
+                elif child.type in catch_types:
+                    has_catch = True
+                    # Check if the catch clause's body terminates
+                    catch_body = None
                     for sub in child.children:
-                        if sub.type == 'block':
-                            if not self._node_terminates_control_flow(sub):
-                                blocks_terminate = False
-                    if child.type == 'block' and not self._node_terminates_control_flow(child):
-                        blocks_terminate = False
-                elif child.type == 'except_clause':
-                    has_except = True
+                        if sub.type in body_types:
+                            catch_body = sub
+                    if catch_body and not self._node_terminates_control_flow(catch_body, language):
+                        all_catch_terminate = False
+                    elif not catch_body:
+                        all_catch_terminate = False
+                elif child.type in finally_types:
+                    # Finally with a terminating body makes the whole try terminate
                     for sub in child.children:
-                        if sub.type == 'block':
-                            if not self._node_terminates_control_flow(sub):
-                                blocks_terminate = False
-            return has_except and blocks_terminate
+                        if sub.type in body_types:
+                            if self._node_terminates_control_flow(sub, language):
+                                return True
+            return try_body_terminates and has_catch and all_catch_terminate
+
+        # Infinite loops: while(true), for(;;) -- code after them is unreachable.
+        # Detection: check if the loop condition is a literal 'true' (possibly
+        # wrapped in parenthesized_expression, as Java tree-sitter does).
+        loop_types = set(node_types.get('loop_types', ['while_statement', 'for_statement']))
+        if node.type in loop_types:
+            condition = node.child_by_field_name('condition')
+            if condition:
+                # Unwrap parenthesized_expression to find the actual condition
+                inner = condition
+                while inner and inner.type == 'parenthesized_expression' and inner.named_children:
+                    inner = inner.named_children[0]
+                cond_text = inner.text.decode('utf-8') if hasattr(inner, 'text') else ''
+                if inner.type == 'true' or cond_text == 'true':
+                    return True
+            # for(;;) -- no condition means infinite
+            for_types = set(node_types.get('for_statement_types', ['for_statement']))
+            if node.type in for_types and not condition:
+                return True
+
+        # Generic fallback for wrapper nodes (e.g. else_clause in C/C++):
+        # If the node has named children, check whether its last child terminates.
+        if node.named_children:
+            return self._node_terminates_control_flow(node.named_children[-1], language)
 
         return False
+
+    def _get_qualified_name(self, node: 'Node', name: str, source_code: str, language: str) -> str:
+        """Build qualified name by walking up enclosing scopes (classes, namespaces).
+
+        Produces ClassName.methodName for Java, Module.ClassName.method for Python,
+        Namespace::Class::func for C++, bare name for C.
+        Configured per-language via class_types/namespace_types/scope_separator in ast_config.
+        """
+        ast_cfg = self._config_manager.get_ast_config(language)
+        scope_types = set(
+            ast_cfg.get('class_types', []) +
+            ast_cfg.get('namespace_types', [])
+        )
+        if not scope_types:
+            return name
+        sep = ast_cfg.get('scope_separator', '.')
+        parts = [name]
+        current = node.parent if node is not None else None
+        while current:
+            if current.type in scope_types:
+                scope_name = self._get_node_name(current, source_code, language)
+                if scope_name:
+                    parts.append(scope_name)
+            current = current.parent
+        if len(parts) == 1:
+            return name
+        parts.reverse()
+        return sep.join(parts)
 
     def _find_parent_definition(self, node: 'Node', language: str) -> Optional['Node']:
         """Find the parent function or class definition node"""
@@ -929,7 +1029,8 @@ class LanguageEngine:
                 name = self._get_node_name(node, source_code, language)
             else:
                 # Check if it's a name node itself
-                if node.type in ['identifier', 'type_identifier', 'field_identifier', 'name']:
+                identifier_types = set(node_types.get('identifier_types', ['identifier']))
+                if node.type in identifier_types:
                     parent = self._find_parent_definition(node, language)
                     if parent:
                         target_def_node = parent
@@ -946,7 +1047,10 @@ class LanguageEngine:
                 logger.debug(f"    Invalid name '{name}' for capture '{capture_name}', skipping")
                 return None
             
-            logger.debug(f"   Point name determined: '{name}'")
+            # Compute qualified name (ClassName.methodName) for disambiguation
+            qualified_name = self._get_qualified_name(
+                target_def_node or original_node, name, source_code, language)
+            logger.debug(f"   Point name determined: '{name}' (qualified: '{qualified_name}')")
 
             # Extract node information - only override for entry points
             node = target_def_node if capture_config['type'] in ['function_enter', 'class_enter'] else original_node
@@ -1006,11 +1110,21 @@ class LanguageEngine:
             # Get configurable line offset
             global_config = self._config_manager.get_global_config()
             line_offset = global_config.get('line_offset', 1)
-            
+
             if insertion_byte is None:
                 insertion_byte = self._line_column_to_byte_offset(source_code, insertion_point[0] + line_offset, insertion_point[1] + line_offset)
-            
-            # Create the instrumentation point with priority
+
+            # Detect braceless if/else returns: if a return/throw is a direct child
+            # of a control-flow node (not wrapped in a body_types block), the standard
+            # immediately_before insertion would break semantics. Switch to wrap mode.
+            effective_mode = capture_config['insertion_mode']
+            if effective_mode == 'immediately_before' and node.parent:
+                body_types = set(node_types.get('body_types', []))
+                if node.parent.type not in body_types:
+                    effective_mode = 'wrap_with_braces'
+                    insertion_byte = node.start_byte
+                    logger.debug(f"   Braceless control-flow detected, using wrap_with_braces for '{name}'")
+
             point = InstrumentationPoint(
                 id=f"{capture_config['type']}_{name}_{insertion_point[0] + line_offset}_{insertion_point[1] + line_offset}",
                 type=capture_config['type'],
@@ -1019,11 +1133,12 @@ class LanguageEngine:
                 line=insertion_point[0] + line_offset,
                 column=insertion_point[1] + line_offset,
                 context=f"{capture_config['subtype'].title()} {capture_config['type']}: {name}",
-                metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
+                metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter',
+                          'qualified_name': qualified_name},
                 byte_offset=insertion_byte,
                 node_start_byte=node.start_byte,
                 node_end_byte=node.end_byte,
-                insertion_mode=capture_config['insertion_mode'],
+                insertion_mode=effective_mode,
                 node=node,
                 priority=capture_config.get('priority', 999)
             )
@@ -1037,37 +1152,40 @@ class LanguageEngine:
                     body_node = self._find_function_body(function_node, language)
                     if body_node:
                         # Check if the function always terminates (unreachable end)
-                        terminates = self._node_terminates_control_flow(body_node)
+                        terminates = self._node_terminates_control_flow(body_node, language)
                         
-                        # Only create implicit exit if function doesn't end with return/raise
                         if not terminates:
-                            # Use AST processor to find correct insertion point
                             ast_processor = ASTProcessor(language, source_code, tree)
                             exit_byte = ast_processor.find_insertion_point(body_node, 'inside_end')
-                            
+
                             exit_line = body_node.end_point.row + line_offset
                             exit_column = body_node.start_point.column + line_offset
-                            
+
                             if exit_byte is None:
                                 exit_byte = self._line_column_to_byte_offset(source_code, exit_line, exit_column)
-                                
-                            exit_point = InstrumentationPoint(
-                                id=f"function_exit_{name}_implicit_{exit_line}",
-                                type='function_exit',
-                                subtype='implicit',
-                                name=name,
-                                line=exit_line,
-                                column=exit_column,
-                                context=f"Function implicit exit: {name}",
-                                metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
-                                byte_offset=exit_byte,
-                                node_start_byte=body_node.start_byte,
-                                node_end_byte=body_node.end_byte,
-                                insertion_mode='inside_end',
-                                node=body_node,
-                                priority=999  # Low priority so explicit returns win deduplication
-                            )
-                            result_points.append(exit_point)
+
+                            # Skip exit if it would land at or before the enter point
+                            # (degenerate case: body has no instrumentable statements)
+                            if exit_byte <= point.byte_offset:
+                                logger.debug(f"   Skipping implicit exit for {name}: exit_byte {exit_byte} <= enter_byte {point.byte_offset}")
+                            else:
+                                exit_point = InstrumentationPoint(
+                                    id=f"function_exit_{name}_implicit_{exit_line}",
+                                    type='function_exit',
+                                    subtype='implicit',
+                                    name=name,
+                                    line=exit_line,
+                                    column=exit_column,
+                                    context=f"Function implicit exit: {name}",
+                                    metadata={'capture_name': capture_name, 'analysis_method': 'tree_sitter'},
+                                    byte_offset=exit_byte,
+                                    node_start_byte=body_node.start_byte,
+                                    node_end_byte=body_node.end_byte,
+                                    insertion_mode='inside_end',
+                                    node=body_node,
+                                    priority=999
+                                )
+                                result_points.append(exit_point)
                 
                 return result_points
             
@@ -1864,21 +1982,42 @@ class LanguageEngine:
         return self._parsers.get(language)
     
     def _find_import_insertion_point(self, source_code: str, language: str) -> Optional[int]:
-        """Find the correct byte offset for inserting import statements"""
+        """Find the correct byte offset for inserting import statements.
+        Uses tree-sitter AST when import_after_node_types is configured,
+        falling back to line-based scanning otherwise."""
+        config = self._config_manager.get_config(language)
+        node_types = self._config_manager.get_node_types(language)
+
+        # AST-based: if import_after_node_types is specified, use tree-sitter to
+        # find the last such node and insert after it. This handles package
+        # declarations, existing imports, etc. correctly for any language.
+        import_after = node_types.get('import_after_node_types', [])
+        if import_after and language in self._parsers:
+            parser = self._parsers[language]
+            tree = parser.parse(source_code.encode('utf-8'))
+            if tree:
+                last_end = 0
+                for child in tree.root_node.children:
+                    if child.type in import_after:
+                        last_end = child.end_byte
+                if last_end > 0:
+                    # Move past any trailing whitespace/newline after the node
+                    pos = last_end
+                    while pos < len(source_code) and source_code[pos] in ' \t':
+                        pos += 1
+                    if pos < len(source_code) and source_code[pos] == '\n':
+                        pos += 1
+                    return pos
+
         lines = source_code.split('\n')
         insert_line = 0
         in_docstring = False
         docstring_marker = None
-        
-        # Get configurable line offset (needed for all languages)
+
         global_config = self._config_manager.get_global_config()
         line_offset = global_config.get('line_offset', 1)
-        
-        # Config-driven import insertion
-        config = self._config_manager.get_config(language)
-        detection_patterns = config.detection_patterns if config else {}
 
-        # Determine header patterns from config
+        detection_patterns = config.detection_patterns if config else {}
         header_prefixes = detection_patterns.get('include_directives', []) or detection_patterns.get('package_declaration', [])
 
         if header_prefixes:
@@ -1939,12 +2078,13 @@ class LanguageEngine:
         return byte_offset
     
     def _deduplicate_checkpoints(self, points: List[InstrumentationPoint]) -> List[InstrumentationPoint]:
-        """Deduplicate instrumentation points based on location and type"""
+        """Deduplicate instrumentation points based on location and type.
+        Uses (line, column, type, name) so multiple returns on one line are kept."""
         if not points:
             return []
         unique_points = {}
         for point in points:
-            key = (point.line, point.type, point.name)
+            key = (point.line, point.column, point.type, point.name)
             if key in unique_points:
                 existing = unique_points[key]
                 if point.priority < existing.priority:
