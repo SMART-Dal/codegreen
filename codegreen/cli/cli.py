@@ -531,7 +531,7 @@ def generate_optimized_config(
         "timestamp": datetime.now().isoformat(),
         "environment_type": environment_info["type"],
         "detected_sensors": list(sensor_info.keys()),
-        "version": "0.1.0"
+        "version": codegreen.__version__
     }
     
     # Environment-specific optimizations
@@ -699,7 +699,7 @@ def main(
     - [dim]codegreen config --show[/dim] - View/edit configuration
     """
     if version:
-        console.print("[bold green]CodeGreen version 0.1.0[/bold green]")
+        console.print(f"[bold green]CodeGreen version {codegreen.__version__}[/bold green]")
         raise typer.Exit()
     
     # If no command is provided and version is not requested, show help
