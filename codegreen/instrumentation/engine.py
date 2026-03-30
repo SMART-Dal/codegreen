@@ -57,15 +57,11 @@ class MeasurementEngine:
         import shutil
         
         # Check multiple possible locations
+        pkg_root = Path(__file__).resolve().parent.parent
         possible_paths = [
-            # Package installation
-            Path(__file__).parents[1] / "bin" / "codegreen",
-            Path(__file__).parents[1] / "bin" / f"{platform.system().lower()}-{platform.machine().lower()}" / "codegreen",
-            
-            # Development build
-            Path(__file__).parents[2] / "build" / "bin" / "codegreen",
-            
-            # System installation
+            pkg_root / "bin" / "codegreen",
+            pkg_root / "bin" / f"{platform.system().lower()}-{platform.machine().lower()}" / "codegreen",
+            pkg_root.parent / "build" / "bin" / "codegreen",
             shutil.which("codegreen"),
         ]
         

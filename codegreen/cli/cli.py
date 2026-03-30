@@ -93,11 +93,12 @@ def get_binary_path() -> Optional[Path]:
         Path to the binary if found, None otherwise
     """
     # Check multiple possible locations for the binary
+    pkg_root = Path(__file__).resolve().parent.parent
+    repo_root = pkg_root.parent
     possible_paths = [
-        Path(__file__).parents[2] / "bin" / "codegreen",
-        Path(__file__).parents[2] / "build" / "bin" / "codegreen",
-        Path(__file__).parent.parent / "bin" / "codegreen",
-        Path(__file__).parent / "bin" / "codegreen",
+        repo_root / "bin" / "codegreen",
+        repo_root / "build" / "bin" / "codegreen",
+        pkg_root / "bin" / "codegreen",
         shutil.which("codegreen"),
     ]
     
@@ -109,25 +110,24 @@ def get_binary_path() -> Optional[Path]:
 
 def get_config_path() -> Optional[Path]:
     """Get the path to the default configuration file."""
+    pkg_root = Path(__file__).resolve().parent.parent
     possible_paths = [
-        Path(__file__).parents[2] / "config" / "codegreen.json",
-        Path(__file__).parents[2] / "build" / "bin" / "config" / "codegreen.json",
-        Path(__file__).parent / "bin" / "config" / "codegreen.json",
-        Path.home() / ".codegreen" / "codegreen.json",
+        pkg_root / "config.json",                              # pip install (inside codegreen/)
+        pkg_root.parent / "config" / "codegreen.json",         # dev: repo_root/config/codegreen.json
+        Path.home() / ".codegreen" / "codegreen.json",         # user override
     ]
-    
     for path in possible_paths:
         if path.exists():
             return path
-    
     return None
 
 def _get_runtime_path() -> Optional[Path]:
     """Get path to runtime module directory"""
+    pkg_root = Path(__file__).resolve().parent.parent
     runtime_paths = [
-        Path(__file__).parents[2] / "codegreen" / "instrumentation" / "language_runtimes" / "python",
-        Path(__file__).parents[2] / "bin" / "runtime",
-        Path(__file__).parents[2] / "codegreen" / "bin" / "runtime",
+        pkg_root / "instrumentation" / "language_runtimes" / "python",
+        pkg_root / "bin" / "runtime",
+        pkg_root.parent / "bin" / "runtime",
     ]
     for path in runtime_paths:
         if path.exists() and (path / "codegreen_runtime.py").exists():
@@ -136,18 +136,7 @@ def _get_runtime_path() -> Optional[Path]:
 
 def ensure_runtime_available() -> bool:
     """Ensure the Python runtime module is available."""
-    runtime_paths = [
-        Path(__file__).parent.parent / "instrumentation" / "language_runtimes" / "python" / "codegreen_runtime.py",
-        Path(__file__).parents[2] / "codegreen" / "instrumentation" / "language_runtimes" / "python" / "codegreen_runtime.py",
-        Path(__file__).parents[2] / "bin" / "runtime" / "codegreen_runtime.py",
-        Path(__file__).parents[2] / "build" / "bin" / "runtime" / "codegreen_runtime.py",
-    ]
-
-    for path in runtime_paths:
-        if path.exists():
-            return True
-
-    return False
+    return _get_runtime_path() is not None
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """Load configuration from file."""
@@ -529,8 +518,8 @@ def generate_optimized_config(
     """Generate an optimized configuration based on detected system capabilities."""
     
     # Start with base configuration from existing config file
-    base_config_path = Path(__file__).parents[2] / "config" / "codegreen.json"
-    if base_config_path.exists():
+    base_config_path = get_config_path()
+    if base_config_path and base_config_path.exists():
         with open(base_config_path, 'r') as f:
             config = json.load(f)
     else:
@@ -1029,21 +1018,16 @@ def _parse_runtime_measurements(output: str) -> List[Dict[str, Any]]:
 
 def _get_c_runtime_paths(language: str = "c") -> tuple:
     """Get include path and lib path for C/C++ runtime."""
-    project_root = Path(__file__).resolve().parent.parent.parent
-    runtime_base = project_root / "codegreen" / "instrumentation" / "language_runtimes"
-    include_path = runtime_base / language
-    # Search order: project/lib -> build/lib -> installed package lib
-    for candidate in [project_root / "lib",
-                      project_root / "build" / "lib",
-                      Path(__file__).parent.parent / "lib"]:
+    pkg_root = Path(__file__).resolve().parent.parent
+    repo_root = pkg_root.parent
+    include_path = _get_runtime_source_dir() / language
+    for candidate in [repo_root / "lib", repo_root / "build" / "lib", pkg_root / "lib"]:
         if candidate.exists() and any(candidate.glob("libcodegreen-nemb*")):
-            lib_path = candidate
-            # Check for runtime headers in installed package
             pkg_rt = candidate / "runtime" / language
             if pkg_rt.exists():
                 include_path = pkg_rt
-            return include_path, lib_path
-    return include_path, project_root / "lib"
+            return include_path, candidate
+    return include_path, repo_root / "lib"
 
 
 def _compile_instrumented(instrumented_path: Path, language: Language, verbose: bool) -> Optional[Path]:
@@ -1061,8 +1045,7 @@ def _compile_instrumented(instrumented_path: Path, language: Language, verbose: 
         cmd = ["g++", "-O2", f"-I{include_path}", str(instrumented_path),
                f"-L{lib_path}", "-lcodegreen-nemb", "-lpthread", "-o", str(binary)]
     elif language == Language.java:
-        project_root = Path(__file__).resolve().parent.parent.parent
-        java_runtime = project_root / "codegreen" / "instrumentation" / "language_runtimes" / "java"
+        java_runtime = _get_runtime_source_dir() / "java"
         cmd = ["javac", "-cp", str(java_runtime), "-d", str(build_dir), str(instrumented_path)]
         binary = build_dir / f"{stem}.class"
     else:
@@ -1132,8 +1115,7 @@ def _run_energy_measurement(
             return {'success': False, 'error': 'Java compilation failed'}
         class_name = instrumented_path.stem
         build_dir = instrumented_path.parent
-        project_root = Path(__file__).resolve().parent.parent.parent
-        java_runtime = project_root / "codegreen" / "instrumentation" / "language_runtimes" / "java"
+        java_runtime = _get_runtime_source_dir() / "java"
         _, lib_path = _get_c_runtime_paths("java")
         cp = f"{build_dir}:{java_runtime}"
         cmd = ['java', '-cp', cp,
@@ -1477,7 +1459,7 @@ def comprehensive_init(
     
     # Auto-run permission setup if requested and needed
     if setup_permissions and not permission_info.get("rapl_cpu", {}).get("accessible", False):
-        install_dir = Path(__file__).parents[2] / "install"
+        install_dir = Path(__file__).resolve().parent.parent.parent / "install"
         setup_script = install_dir / "setup_permissions.sh"
         
         if install_dir.exists() and setup_script.exists():
@@ -1547,7 +1529,7 @@ def comprehensive_init(
         console.print("\n[bold]Configuration Confirmation[/bold]")
         
         # Environment-specific setup recommendations
-        install_dir = Path(__file__).parents[2] / "install"
+        install_dir = Path(__file__).resolve().parent.parent.parent / "install"
         
         if not permission_info.get("rapl_cpu", {}).get("accessible", False):
             console.print("[yellow]RAPL Permission Setup Required[/yellow]")
@@ -1870,7 +1852,7 @@ def validate_accuracy(
     - [cyan]sudo codegreen validate --duration 15[/cyan] - Extended validation
     """
     
-    validation_script = Path(__file__).parents[2] / "test_nemb_validation.sh"
+    validation_script = Path(__file__).resolve().parent.parent.parent / "test_nemb_validation.sh"
     
     if not validation_script.exists():
         console.print("[red]Error: Validation script not found![/red]")

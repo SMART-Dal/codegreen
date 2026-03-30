@@ -98,7 +98,7 @@ setup(
             "lib/*.so",
             "lib/runtime/**/*.h",
             "bin/codegreen",
-            "../config/codegreen.json",
+            "config.json",
         ],
     },
     zip_safe=False,

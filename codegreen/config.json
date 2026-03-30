@@ -1,0 +1,177 @@
+{
+  "version": "0.1.0",
+  "paths": {
+    "runtime_modules": {
+      "python": "runtime/codegreen_runtime.py",
+      "base_directory": "${EXECUTABLE_DIR}/runtime"
+    },
+    "temp_directory": {
+      "base": "${SYSTEM_TEMP}",
+      "prefix": "codegreen_",
+      "cleanup_on_exit": true,
+      "max_age_hours": 24
+    },
+    "database": {
+      "default_path": "${USER_HOME}/.codegreen/energy_data.db",
+      "backup_enabled": true,
+      "max_size_mb": 1024
+    },
+    "logs": {
+      "directory": "${USER_HOME}/.codegreen/logs",
+      "level": "INFO",
+      "max_files": 10,
+      "max_size_mb": 50
+    }
+  },
+  "measurement": {
+    "nemb": {
+      "enabled": true,
+      "coordinator": {
+        "measurement_interval_ms": 1,
+        "measurement_buffer_size": 100000,
+        "auto_restart_failed_providers": true,
+        "provider_restart_interval": 5000,
+        "cross_validation": true,
+        "cross_validation_threshold": 0.05
+      },
+      "timing": {
+        "precision": "high",
+        "clock_source": "auto"
+      },
+      "providers": {
+        "intel_rapl": {
+          "enabled": true,
+          "domains": [
+            "package",
+            "pp0",
+            "dram"
+          ],
+          "validation_enabled": true
+        },
+        "nvidia_nvml": {
+          "enabled": true,
+          "device_indices": [
+            0
+          ],
+          "validation_enabled": true
+        },
+        "amd_rocm": {
+          "enabled": false
+        }
+      },
+      "accuracy": {
+        "target_uncertainty_percent": 1.0,
+        "measurement_validation": true,
+        "outlier_detection": true,
+        "noise_filtering": "adaptive",
+        "statistical_validation": true,
+        "confidence_threshold": 0.95
+      }
+    }
+  },
+  "instrumentation": {
+    "checkpoint_strategy": "functions",
+    "track_invocations": true,
+    "track_threads": true,
+    "language_specific": {
+      "python": {
+        "instrument_loops": false,
+        "max_recursion_depth": 100
+      },
+      "cpp": {
+        "instrument_loops": false,
+        "track_templates": true
+      },
+      "java": {
+        "instrument_loops": false,
+        "track_lambdas": true
+      }
+    }
+  },
+  "performance": {
+    "string_optimization": {
+      "cache_checkpoint_calls": true,
+      "precompile_templates": true,
+      "max_cache_size": 1000
+    },
+    "database": {
+      "batch_operations": true,
+      "transaction_size": 1000,
+      "connection_pool_size": 5,
+      "prepare_statements": true
+    },
+    "threading": {
+      "max_worker_threads": 4,
+      "measurement_thread_priority": "high"
+    }
+  },
+  "security": {
+    "sql_injection_protection": true,
+    "path_validation": true,
+    "temp_file_permissions": "0600"
+  },
+  "languages": {
+    "python": {
+      "executable": "python3",
+      "runtime_module": "codegreen_runtime.py",
+      "extensions": [
+        ".py",
+        ".pyw",
+        ".pyi"
+      ]
+    },
+    "c": {
+      "executable": "gcc",
+      "compiler_flags": [
+        "-O0",
+        "-g"
+      ],
+      "extensions": [
+        ".c",
+        ".h"
+      ]
+    },
+    "cpp": {
+      "executable": "g++",
+      "compiler_flags": [
+        "-O0",
+        "-g",
+        "-std=c++17"
+      ],
+      "extensions": [
+        ".cpp",
+        ".cxx",
+        ".cc",
+        ".hpp",
+        ".h"
+      ]
+    },
+    "java": {
+      "executable": "java",
+      "compiler": "javac",
+      "extensions": [
+        ".java"
+      ]
+    }
+  },
+  "developer": {
+    "debug_mode": true,
+    "verbose_logging": true,
+    "preserve_temp_files": true,
+    "measurement_validation": true,
+    "performance_profiling": false
+  },
+  "initialization": {
+    "completed": true,
+    "timestamp": "2025-09-03T14:59:43.100634",
+    "environment_type": "personal",
+    "detected_sensors": [
+      "intel_rapl",
+      "amd_cpu",
+      "nvidia_gpu",
+      "amd_gpu",
+      "external_sensors"
+    ],
+    "version": "0.1.0"
+  }
+}

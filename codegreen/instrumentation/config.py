@@ -27,9 +27,10 @@ class Config:
             return Path(env_config)
         
         # Package-distributed config
+        pkg_root = Path(__file__).resolve().parent.parent
         package_configs = [
-            Path(__file__).parents[1] / "bin" / "config" / "codegreen.json",
-            Path(__file__).parents[2] / "config" / "codegreen.json",
+            pkg_root / "config.json",
+            pkg_root.parent / "config" / "codegreen.json",
         ]
         
         for config_path in package_configs:

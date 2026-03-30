@@ -24,17 +24,11 @@ def find_binary() -> Optional[Path]:
     binary_name = get_binary_name()
     
     # Search locations in priority order
+    pkg_root = Path(__file__).resolve().parent.parent
     search_paths = [
-        # 1. Package installation directory
-        Path(__file__).parents[1] / "bin" / binary_name,
-        
-        # 2. Platform-specific package directory
-        Path(__file__).parents[1] / "bin" / f"{platform.system().lower()}-{platform.machine().lower()}" / binary_name,
-        
-        # 3. Development build directory
-        Path(__file__).parents[2] / "build" / "bin" / binary_name,
-        
-        # 4. System PATH
+        pkg_root / "bin" / binary_name,
+        pkg_root / "bin" / f"{platform.system().lower()}-{platform.machine().lower()}" / binary_name,
+        pkg_root.parent / "build" / "bin" / binary_name,
         shutil.which("codegreen"),
     ]
     

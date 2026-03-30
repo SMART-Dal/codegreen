@@ -103,6 +103,7 @@ find = {where = ["."], include = [
 # Native binaries are copied by setup.py BuildWithCMake, but we also
 # declare them here so setuptools knows the wheel is platform-specific.
 "codegreen" = [
+    "config.json",
     "lib/*.so",
     "lib/runtime/**/*.h",
     "bin/codegreen",
