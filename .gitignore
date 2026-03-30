@@ -86,7 +86,6 @@ packages/
 *.backup
 
 # Generated binaries and sync files
-codegreen
 ./codegreen/lib/pkgconfig/tree-sitter.pc
 codegreen/bin/codegreen
 

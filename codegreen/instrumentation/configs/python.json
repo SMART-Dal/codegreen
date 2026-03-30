@@ -1,0 +1,266 @@
+{
+    "name": "python",
+    "extensions": [
+        ".py",
+        ".pyw"
+    ],
+    "tree_sitter_name": "python",
+    "ast_config": {
+        "body_field": "body",
+        "block_type": "block",
+        "function_types": [
+            "function_definition"
+        ],
+        "class_types": [
+            "class_definition"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement"
+        ],
+        "return_types": [
+            "return_statement"
+        ],
+        "comment_types": [
+            "comment"
+        ],
+        "docstring_types": [
+            "expression_statement"
+        ],
+        "body_types": [
+            "block"
+        ],
+        "insertion_queries": {
+            "function_body_start": "\n                        (function_definition\n                          body: (block\n                            (expression_statement (string))?\n                            .\n                            (_) @target\n                          )\n                        )\n                    ",
+            "class_body_start": "\n                        (class_definition\n                          body: (block\n                            .\n                            (_) @target\n                          )\n                        )\n                    "
+        },
+        "insertion_rules": {
+            "function_enter": {
+                "mode": "inside_start",
+                "find_first_statement": true,
+                "skip_docstrings": true
+            },
+            "function_exit": {
+                "mode": "inside_end",
+                "find_last_statement": true
+            },
+            "before": {
+                "mode": "before"
+            },
+            "after": {
+                "mode": "after"
+            }
+        }
+    },
+    "custom_queries": {
+        "definitions": "(function_definition name: (identifier) @function_name body: (block) @function_body) @function_def",
+        "loops": "(for_statement) @loop.for (while_statement) @loop.while",
+        "returns": "(return_statement) @return"
+    },
+    "query_config": {
+        "capture_mapping": {
+            "function_def": "function_enter",
+            "function_name": "function_enter",
+            "return": "function_exit"
+        },
+        "priority_order": [
+            "function_def",
+            "function_name",
+            "return"
+        ],
+        "deduplication_rules": {
+            "function_exit": {
+                "scope": "function",
+                "priority_order": [
+                    "return"
+                ],
+                "max_per_function": 1
+            },
+            "function_enter": {
+                "scope": "function",
+                "priority_order": [
+                    "function_def",
+                    "function_name"
+                ],
+                "max_per_function": 1
+            }
+        }
+    },
+    "instrumentation_config": {
+        "import_statement": "import codegreen_runtime as _codegreen_rt",
+        "templates": {
+            "function_enter": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'enter')",
+            "function_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'exit')",
+            "loop_start": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_start')",
+            "loop_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_exit')"
+        },
+        "statement_terminator": "",
+        "comment_prefix": "#",
+        "runtime_guard_files": [
+            "codegreen_runtime.py"
+        ]
+    },
+    "formatting_config": {
+        "indent_size": 4,
+        "indent_char": " ",
+        "line_ending": "\n",
+        "extra_indent_for_inside": 4
+    },
+    "rules": {
+        "skip_docstrings": true,
+        "skip_comments": true,
+        "handle_async": true,
+        "handle_decorators": true,
+        "handle_generators": true,
+        "special_exit_functions": [
+            "__init__",
+            "__enter__",
+            "__exit__",
+            "__call__",
+            "__iter__",
+            "__next__"
+        ]
+    },
+    "analysis_patterns": {
+        "function_def": "^\\s*def\\s+(\\w+)",
+        "class_def": "^\\s*class\\s+(\\w+)",
+        "for_loop": "^\\s*for\\s+",
+        "while_loop": "^\\s*while\\s+",
+        "list_comp": "\\[.*for.*in.*\\]",
+        "lambda_expr": "lambda\\s+",
+        "import_star": "from\\s+\\w+\\s+import\\s+\\*",
+        "nested_loops": "^\\s*for.*:\\s*\\n.*for"
+    },
+    "detection_patterns": {
+        "shebang": "#!/usr/bin/env python",
+        "import_keywords": [
+            "import",
+            "from"
+        ],
+        "syntax_keywords": [
+            "def ",
+            "class ",
+            "if __name__"
+        ],
+        "regex": "^\\s*(def|class|import|from)\\s+"
+    },
+    "processing_limits": {
+        "max_captures_per_query": 10000,
+        "max_lines_for_processing": 50000,
+        "max_function_name_length": 100,
+        "max_identifier_length": 50,
+        "max_safety_counter": 10,
+        "max_search_window": 50,
+        "max_body_text_check": 200,
+        "max_function_body_search_lines": 10,
+        "max_file_size_mb": 100,
+        "parser_timeout_ms": 30000,
+        "max_parent_search_levels": 10,
+        "debug_text_preview_length": 100,
+        "debug_error_text_length": 200,
+        "debug_significant_change_threshold": 100,
+        "default_indent_size": 4,
+        "max_inheritance_depth": 5
+    },
+    "node_types": {
+        "function_types": [
+            "function_definition"
+        ],
+        "body_types": [
+            "block"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement"
+        ],
+        "class_types": [
+            "class_definition"
+        ],
+        "comment_types": [
+            "comment"
+        ],
+        "return_types": [
+            "return_statement"
+        ],
+        "throw_types": [
+            "raise_statement"
+        ],
+        "constructor_invocation_types": [],
+        "import_after_node_types": [],
+        "terminating_types": [
+            "return_statement",
+            "raise_statement",
+            "break_statement",
+            "continue_statement"
+        ],
+        "identifier_types": [
+            "identifier"
+        ],
+        "definition_types": [
+            "function_definition",
+            "class_definition",
+            "decorated_definition"
+        ],
+        "if_statement_types": [
+            "if_statement"
+        ],
+        "else_clause_types": [
+            "else_clause"
+        ],
+        "elif_clause_types": [
+            "elif_clause"
+        ],
+        "try_statement_types": [
+            "try_statement"
+        ],
+        "catch_clause_types": [
+            "except_clause"
+        ],
+        "finally_clause_types": [
+            "finally_clause"
+        ],
+        "for_statement_types": [
+            "for_statement"
+        ],
+        "docstring_node_types": [
+            "expression_statement"
+        ],
+        "docstring_delimiters": ["\"\"\"", "'''"],
+        "comment_prefix": "#",
+        "indentation_sensitive": true
+    },
+    "project_config": {
+        "source_patterns": [
+            "**/*.py"
+        ],
+        "exclude_patterns": [
+            "**/test/**",
+            "**/tests/**",
+            "**/.git/**",
+            "**/__pycache__/**",
+            "**/build/**",
+            "**/dist/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/node_modules/**",
+            "**/.tox/**"
+        ],
+        "build_systems": {
+            "pip": {
+                "detect": "setup.py",
+                "build_cmd": "pip install -e ."
+            },
+            "poetry": {
+                "detect": "pyproject.toml",
+                "build_cmd": "poetry install"
+            }
+        },
+        "runtime_injection": {
+            "type": "pythonpath",
+            "module": "codegreen_runtime"
+        },
+        "source_root_markers": [
+            "src"
+        ]
+    }
+}

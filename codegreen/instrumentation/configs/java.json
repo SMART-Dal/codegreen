@@ -1,0 +1,280 @@
+{
+    "name": "java",
+    "extensions": [
+        ".java"
+    ],
+    "tree_sitter_name": "java",
+    "ast_config": {
+        "body_field": "body",
+        "block_type": "block",
+        "function_types": [
+            "method_declaration",
+            "constructor_declaration"
+        ],
+        "class_types": [
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration"
+        ],
+        "namespace_types": [],
+        "scope_separator": ".",
+        "loop_types": [
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "enhanced_for_statement"
+        ],
+        "return_types": [
+            "return_statement"
+        ],
+        "comment_types": [
+            "comment",
+            "line_comment",
+            "block_comment"
+        ],
+        "docstring_types": [],
+        "insertion_rules": {
+            "function_enter": {
+                "mode": "inside_start",
+                "find_first_statement": false,
+                "skip_docstrings": false,
+                "skip_comments": true
+            },
+            "function_exit": {
+                "mode": "inside_end"
+            },
+            "function_return": {
+                "mode": "immediately_before"
+            },
+            "before": {
+                "mode": "before"
+            },
+            "after": {
+                "mode": "after"
+            }
+        }
+    },
+    "custom_queries": {
+        "definitions": "(method_declaration) @method_def (constructor_declaration) @method_def",
+        "loops": "(for_statement) @loop.for (while_statement) @loop.while (do_statement) @loop.do (enhanced_for_statement) @loop.enhanced_for",
+        "returns": "(return_statement) @return"
+    },
+    "query_config": {
+        "capture_mapping": {
+            "method_def": "function_enter",
+            "method_name": "function_enter",
+            "function.method": "function_enter",
+            "local.definition.method": "function_enter",
+            "return": "function_return"
+        },
+        "priority_order": [
+            "method_def",
+            "method_name",
+            "function.method",
+            "local.definition.method",
+            "return"
+        ],
+        "deduplication_rules": {
+            "function_enter": {
+                "scope": "function",
+                "priority_order": [
+                    "method_def",
+                    "method_name"
+                ],
+                "max_per_function": 1
+            }
+        }
+    },
+    "instrumentation_config": {
+        "import_statement": "import codegreen.runtime.CodeGreenRuntime;",
+        "templates": {
+            "function_enter": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"enter\");",
+            "function_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
+            "function_return": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
+            "loop_start": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
+            "loop_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
+        },
+        "statement_terminator": ";",
+        "comment_prefix": "//",
+        "runtime_guard_files": [
+            "CodeGreenRuntime.java",
+            "CodeGreenStandaloneRuntime.java"
+        ]
+    },
+    "formatting_config": {
+        "indent_size": 4,
+        "indent_char": " ",
+        "line_ending": "\n",
+        "extra_indent_for_inside": 4
+    },
+    "rules": {
+        "skip_docstrings": false,
+        "skip_comments": true,
+        "handle_async": false,
+        "handle_decorators": false,
+        "handle_generators": false,
+        "special_exit_functions": []
+    },
+    "analysis_patterns": {
+        "method_def": "^\\s*(?:(?:public|private|protected|static|final|abstract|synchronized)\\s+)*(?:\\w+\\s+)?(\\w+)\\s*\\([^)]*\\)\\s*(?:throws\\s+\\w+(?:,\\s*\\w+)*)?\\s*\\{?\\s*$",
+        "class_def": "^\\s*(?:(?:public|private|protected|static|final|abstract)\\s+)*class\\s+(\\w+)",
+        "interface_def": "^\\s*(?:(?:public|private|protected)\\s+)*interface\\s+(\\w+)",
+        "for_loop": "^\\s*for\\s*\\(",
+        "while_loop": "^\\s*while\\s*\\(",
+        "lambda_expr": "\\([^)]*\\)\\s*->",
+        "stream_op": "\\.(stream|map|filter|reduce|collect|forEach|parallel)\\s*\\("
+    },
+    "detection_patterns": {
+        "package_declaration": [
+            "package ",
+            "import "
+        ],
+        "syntax_keywords": [
+            "public class",
+            "private ",
+            "public static void main"
+        ],
+        "regex": "^\\s*(package\\s+\\w+|import\\s+\\w+|public\\s+class\\s+\\w+)"
+    },
+    "processing_limits": {
+        "max_captures_per_query": 10000,
+        "max_lines_for_processing": 50000,
+        "max_function_name_length": 100,
+        "max_identifier_length": 50,
+        "max_safety_counter": 10,
+        "max_search_window": 50,
+        "max_body_text_check": 200,
+        "max_function_body_search_lines": 10,
+        "max_file_size_mb": 100,
+        "parser_timeout_ms": 30000,
+        "max_parent_search_levels": 10,
+        "debug_text_preview_length": 100,
+        "debug_error_text_length": 200,
+        "debug_significant_change_threshold": 100,
+        "default_indent_size": 4,
+        "max_inheritance_depth": 5
+    },
+    "node_types": {
+        "function_types": [
+            "method_declaration",
+            "constructor_declaration"
+        ],
+        "body_types": [
+            "block",
+            "constructor_body",
+            "class_body"
+        ],
+        "class_types": [
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration"
+        ],
+        "loop_types": [
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "enhanced_for_statement"
+        ],
+        "comment_types": [
+            "comment",
+            "line_comment",
+            "block_comment"
+        ],
+        "return_types": [
+            "return_statement"
+        ],
+        "throw_types": [
+            "throw_statement"
+        ],
+        "constructor_invocation_types": [
+            "explicit_constructor_invocation"
+        ],
+        "import_after_node_types": [
+            "package_declaration"
+        ],
+        "terminating_types": [
+            "return_statement",
+            "throw_statement",
+            "break_statement",
+            "continue_statement"
+        ],
+        "identifier_types": [
+            "identifier",
+            "type_identifier"
+        ],
+        "definition_types": [
+            "method_declaration",
+            "constructor_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration"
+        ],
+        "if_statement_types": [
+            "if_statement"
+        ],
+        "else_clause_types": [],
+        "elif_clause_types": [],
+        "try_statement_types": [
+            "try_statement",
+            "try_with_resources_statement"
+        ],
+        "catch_clause_types": [
+            "catch_clause"
+        ],
+        "finally_clause_types": [
+            "finally_clause"
+        ],
+        "for_statement_types": [
+            "for_statement"
+        ],
+        "docstring_node_types": [],
+        "docstring_delimiters": [],
+        "comment_prefix": "//",
+        "indentation_sensitive": false
+    },
+    "project_config": {
+        "source_patterns": [
+            "**/src/main/java/**/*.java"
+        ],
+        "exclude_patterns": [
+            "**/src/test/**",
+            "**/src/it/**",
+            "**/build/**",
+            "**/target/**",
+            "**/.git/**",
+            "**/generated/**",
+            "**/examples/**",
+            "**/codegreen/runtime/**"
+        ],
+        "build_systems": {
+            "maven": {
+                "detect": "pom.xml",
+                "build_cmd": "mvn package -DskipTests"
+            },
+            "gradle": {
+                "detect": "build.gradle",
+                "build_cmd": "./gradlew build -x test",
+                "wrapper": "gradlew"
+            }
+        },
+        "runtime_injection": {
+            "type": "source_copy",
+            "source_dir": "java/codegreen/runtime",
+            "files": [
+                "CodeGreenStandaloneRuntime.java"
+            ],
+            "target_relative_path": "codegreen/runtime",
+            "import_rewrite": {
+                "from": "import codegreen.runtime.CodeGreenRuntime;",
+                "to": "import codegreen.runtime.CodeGreenStandaloneRuntime;"
+            },
+            "checkpoint_rewrite": {
+                "from": "CodeGreenRuntime.checkpoint",
+                "to": "CodeGreenStandaloneRuntime.checkpoint"
+            }
+        },
+        "source_root_markers": [
+            "src/main/java"
+        ]
+    }
+}

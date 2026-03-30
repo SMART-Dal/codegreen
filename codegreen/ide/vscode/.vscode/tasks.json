@@ -1,0 +1,11 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "No Build Required",
+            "type": "shell",
+            "command": "echo 'JavaScript extension - no build needed'",
+            "problemMatcher": []
+        }
+    ]
+}

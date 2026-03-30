@@ -1,0 +1,118 @@
+{
+  "name": "codegreen-energy-analyzer",
+  "displayName": "CodeGreen Energy Analyzer",
+  "description": "Visualize energy consumption hotspots in your code with CodeGreen integration",
+  "version": "0.1.0",
+  "publisher": "codegreen",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other",
+    "Linters",
+    "Debuggers"
+  ],
+  "keywords": [
+    "energy",
+    "performance",
+    "optimization",
+    "sustainability",
+    "green-coding"
+  ],
+  "activationEvents": [
+    "onCommand:codegreen.analyzeEnergy",
+    "onCommand:codegreen.clearHotspots",
+    "onCommand:codegreen.showReport",
+    "onCommand:codegreen.optimizeFunction"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codegreen.analyzeEnergy",
+        "title": "Analyze Energy Consumption",
+        "category": "CodeGreen",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "codegreen.clearHotspots",
+        "title": "Clear Energy Hotspots",
+        "category": "CodeGreen",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codegreen.showReport",
+        "title": "Show Energy Report",
+        "category": "CodeGreen",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codegreen.toggleAutoAnalysis",
+        "title": "Toggle Auto Analysis",
+        "category": "CodeGreen",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codegreen.optimizeFunction",
+        "title": "Optimize This Function",
+        "category": "CodeGreen"
+      },
+      {
+        "command": "codegreen.predictEnergy",
+        "title": "Predict Energy Impact",
+        "category": "CodeGreen",
+        "icon": "$(graph-line)"
+      }
+    ],
+    "configuration": {
+      "title": "CodeGreen",
+      "properties": {
+        "codegreen.autoAnalysis": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically analyze energy consumption on file save"
+        },
+        "codegreen.energyThreshold": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Energy threshold (in Joules) for highlighting hotspots"
+        },
+        "codegreen.codegreenPath": {
+          "type": "string",
+          "default": "codegreen",
+          "description": "Path to the CodeGreen executable"
+        }
+      }
+    },
+    "menus": {
+      "editor/gutter/context": [
+        {
+          "command": "codegreen.optimizeFunction",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codegreen.predictEnergy"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/glob": "^7.2.0",
+    "@types/mocha": "^5.2.7",
+    "@types/node": "10.x",
+    "@types/vscode": "^1.74.0",
+    "glob": "^7.2.0",
+    "mocha": "^5.2.0",
+    "typescript": "^5.9.3"
+  }
+}
