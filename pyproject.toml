@@ -76,7 +76,7 @@ Repository = "https://github.com/SMART-Dal/codegreen"
 "Bug Tracker" = "https://github.com/SMART-Dal/codegreen/issues"
 
 [project.scripts]
-codegreen = "src.cli.entrypoint:main_cli_wrapper"
+codegreen = "codegreen.cli.entrypoint:main_cli_wrapper"
 
 # Setuptools configuration
 # NOTE: setup.py handles the actual build (cmake for C++ NEMB backend).
@@ -85,13 +85,13 @@ codegreen = "src.cli.entrypoint:main_cli_wrapper"
 # wheel by setup.py's BuildWithCMake command.
 [tool.setuptools.packages]
 find = {where = ["."], include = [
-    "src", "src.cli", "src.analyzer", "src.instrumentation", "src.utils",
-    "src.analysis", "src.analysis.cfg",
+    "codegreen", "codegreen.cli", "codegreen.analyzer", "codegreen.instrumentation", "codegreen.utils",
+    "codegreen.analysis", "codegreen.analysis.cfg",
     "benchmark", "benchmark.validation", "benchmark.suites",
 ]}
 
 [tool.setuptools.package-data]
-"src.instrumentation" = [
+"codegreen.instrumentation" = [
     "configs/*.json",
     "language_runtimes/python/*.py",
     "language_runtimes/c/*.h",
@@ -100,7 +100,7 @@ find = {where = ["."], include = [
 ]
 # Native binaries are copied by setup.py BuildWithCMake, but we also
 # declare them here so setuptools knows the wheel is platform-specific.
-"src" = [
+"codegreen" = [
     "lib/*.so",
     "lib/runtime/**/*.h",
     "bin/codegreen",

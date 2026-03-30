@@ -38,7 +38,7 @@ class BuildWithCMake(build_py):
         if not self.build_lib:
             return
 
-        build_src = Path(self.build_lib) / "src"
+        build_src = Path(self.build_lib) / "codegreen"
 
         # Remove unwanted directories that setuptools auto-included
         for d in _EXCLUDE_DIRS:
@@ -61,7 +61,7 @@ class BuildWithCMake(build_py):
                 self.copy_file(str(bin_file), str(dest_bin / "codegreen"))
                 os.chmod(str(dest_bin / "codegreen"), 0o755)
 
-            rt_base = source_dir / "src" / "instrumentation" / "language_runtimes"
+            rt_base = source_dir / "codegreen" / "instrumentation" / "language_runtimes"
             for lang in ("c", "cpp"):
                 header = rt_base / lang / "codegreen_runtime.h"
                 if header.exists():
@@ -76,8 +76,8 @@ class BinaryDistribution(Distribution):
 
 
 PACKAGES = [
-    "src", "src.cli", "src.analyzer", "src.instrumentation", "src.utils",
-    "src.analysis", "src.analysis.cfg",
+    "codegreen", "codegreen.cli", "codegreen.analyzer", "codegreen.instrumentation", "codegreen.utils",
+    "codegreen.analysis", "codegreen.analysis.cfg",
     "benchmark", "benchmark.validation", "benchmark.suites",
 ]
 
@@ -86,14 +86,14 @@ setup(
     packages=PACKAGES,
     cmdclass={"build_py": BuildWithCMake},
     package_data={
-        "src.instrumentation": [
+        "codegreen.instrumentation": [
             "configs/*.json",
             "language_runtimes/python/*.py",
             "language_runtimes/c/*.h",
             "language_runtimes/cpp/*.h",
             "language_runtimes/java/**/*.java",
         ],
-        "src": [
+        "codegreen": [
             "lib/*.so",
             "lib/runtime/**/*.h",
             "bin/codegreen",

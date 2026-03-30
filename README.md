@@ -102,8 +102,8 @@ bash scripts/generate_comparison_artifacts.sh docs/benchmarks/
 CodeGreen includes an Energy Flow Graph module (`src/analysis/cfg/`) that builds energy-annotated control flow graphs from source code:
 
 ```python
-from src.analysis.cfg.builder import build_per_method_cfgs
-from src.analysis.cfg.energy_flow import build_efg, efg_to_dot, efg_to_text
+from codegreen.analysis.cfg.builder import build_per_method_cfgs
+from codegreen.analysis.cfg.energy_flow import build_efg, efg_to_dot, efg_to_text
 
 cfgs = build_per_method_cfgs(java_source_code)
 efg = build_efg(cfg_nodes, cfg_edges, "ClassName.method", "File.java", codegreen_data)

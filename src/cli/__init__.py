@@ -1,1 +1,0 @@
-"""CodeGreen CLI module"""

@@ -54,7 +54,7 @@ jobs:
         CIBW_TEST_COMMAND: >
           python -c "
           import importlib, pathlib, sys;
-          pkg = pathlib.Path(importlib.import_module('src').__file__).parent;
+          pkg = pathlib.Path(importlib.import_module('codegreen').__file__).parent;
           so = pkg / 'lib' / 'libcodegreen-nemb.so';
           binary = pkg / 'bin' / 'codegreen';
           assert so.exists(), f'NEMB .so not found at {so}';
@@ -112,7 +112,7 @@ jobs:
         # 2. Verify NEMB binary is in the installed package
         python -c "
         import importlib, pathlib
-        pkg = pathlib.Path(importlib.import_module('src').__file__).parent
+        pkg = pathlib.Path(importlib.import_module('codegreen').__file__).parent
         so = pkg / 'lib' / 'libcodegreen-nemb.so'
         binary = pkg / 'bin' / 'codegreen'
         assert so.exists(), f'NEMB .so missing at {so}'
@@ -142,7 +142,7 @@ jobs:
         # 4. Verify all language configs load
         python -c "
         import json, pathlib, importlib
-        pkg = pathlib.Path(importlib.import_module('src.instrumentation').__file__).parent
+        pkg = pathlib.Path(importlib.import_module('codegreen.instrumentation').__file__).parent
         configs = list((pkg / 'configs').glob('*.json'))
         assert len(configs) >= 4, f'Expected >= 4 language configs, got {len(configs)}'
         for c in configs:
