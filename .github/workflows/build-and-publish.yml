@@ -52,18 +52,9 @@ jobs:
           LD_LIBRARY_PATH={project}/lib:$LD_LIBRARY_PATH
         # Thorough smoke test: verify binary exists, loads, and CLI works
         CIBW_TEST_COMMAND: >
-          python -c "
-          import importlib, pathlib, sys;
-          pkg = pathlib.Path(importlib.import_module('codegreen').__file__).parent;
-          so = pkg / 'lib' / 'libcodegreen-nemb.so';
-          binary = pkg / 'bin' / 'codegreen';
-          assert so.exists(), f'NEMB .so not found at {so}';
-          assert binary.exists(), f'codegreen binary not found at {binary}';
-          print(f'NEMB binary OK: {so} ({so.stat().st_size} bytes)');
-          print(f'CLI binary OK: {binary} ({binary.stat().st_size} bytes)');
-          " &&
-          codegreen --help &&
-          codegreen analyze python -c "print('hello')" --json 2>/dev/null || true
+          python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;so=pkg/'lib'/'libcodegreen-nemb.so';b=pkg/'bin'/'codegreen';assert so.exists(),f'NEMB .so missing at {so}';assert b.exists(),f'CLI missing at {b}';print(f'NEMB OK: {so} ({so.stat().st_size}B)');print(f'CLI OK: {b} ({b.stat().st_size}B)')"
+          && codegreen --help
+          && codegreen analyze python -c "print('hello')" --json 2>/dev/null || true
 
     - uses: actions/upload-artifact@v4
       with:
@@ -164,8 +155,8 @@ jobs:
         include:
           - runner: macos-latest
             arch: Apple Silicon
-          - runner: macos-13
-            arch: Intel
+          - runner: macos-14
+            arch: Apple Silicon (macOS 14)
     steps:
     - uses: actions/setup-python@v5
       with:
