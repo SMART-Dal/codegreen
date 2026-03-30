@@ -34,7 +34,7 @@ jobs:
         # Build for manylinux x86_64 only (RAPL = Linux + x86/AMD64)
         CIBW_BUILD: "cp39-manylinux_x86_64 cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
         CIBW_SKIP: "*-musllinux*"
-        CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+        CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/pypa/manylinux_2_28_x86_64
         # Install C++ build deps inside manylinux container
         CIBW_BEFORE_ALL_LINUX: >
           yum install -y epel-release &&
