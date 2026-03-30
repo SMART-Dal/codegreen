@@ -216,3 +216,19 @@ jobs:
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: final_dist/
+
+  create-release:
+    name: Create GitHub Release
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Create release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        TAG=${GITHUB_REF#refs/tags/}
+        gh release create "$TAG" --title "$TAG" --latest --generate-notes
