@@ -78,15 +78,21 @@ bool compile_code(const std::string& source_file, std::string& out_binary, const
     
     std::string cmd;
     if (language == "c") {
-        std::filesystem::path include_dir = exe_dir / "../src/instrumentation/language_runtimes/c";
+        std::filesystem::path include_dir = exe_dir / "../codegreen/instrumentation/language_runtimes/c";
+        if (!std::filesystem::exists(include_dir))
+            include_dir = exe_dir / "python/instrumentation/language_runtimes/c";
         out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".bin";
         cmd = "gcc -O2 -o " + out_binary + " " + source_file + " -I" + include_dir.string() + " -L" + lib_dir.string() + " -lcodegreen-nemb -Wl,-rpath," + lib_dir.string() + " -lm";
     } else if (language == "cpp") {
-        std::filesystem::path include_dir = exe_dir / "../src/instrumentation/language_runtimes/cpp";
+        std::filesystem::path include_dir = exe_dir / "../codegreen/instrumentation/language_runtimes/cpp";
+        if (!std::filesystem::exists(include_dir))
+            include_dir = exe_dir / "python/instrumentation/language_runtimes/cpp";
         out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".bin";
         cmd = "g++ -O2 -std=c++17 -o " + out_binary + " " + source_file + " -I" + include_dir.string() + " -L" + lib_dir.string() + " -lcodegreen-nemb -Wl,-rpath," + lib_dir.string() + " -lm";
     } else if (language == "java") {
-        std::filesystem::path src_dir = exe_dir.parent_path() / "src/instrumentation/language_runtimes/java";
+        std::filesystem::path src_dir = exe_dir / "../codegreen/instrumentation/language_runtimes/java";
+        if (!std::filesystem::exists(src_dir))
+            src_dir = exe_dir / "python/instrumentation/language_runtimes/java";
         std::filesystem::path runtime_java = src_dir / "codegreen/runtime/CodeGreenRuntime.java";
         out_binary = source_file.substr(0, source_file.find_last_of('.')) + ".class";
         // Compile both runtime and source
@@ -355,7 +361,10 @@ bool MeasurementEngine::execute_instrumented_code(const std::string& temp_file, 
         std::string lib_path = "-Djava.library.path=" + lib_dir.string();
         
         // Classpath: current temp dir + runtime dir
-        std::string classpath = "-cp " + path.parent_path().string() + ":" + (exe_dir / "../src/instrumentation/language_runtimes/java").string();
+        std::filesystem::path java_rt = exe_dir / "../codegreen/instrumentation/language_runtimes/java";
+        if (!std::filesystem::exists(java_rt))
+            java_rt = exe_dir / "python/instrumentation/language_runtimes/java";
+        std::string classpath = "-cp " + path.parent_path().string() + ":" + java_rt.string();
         
         // Split classpath args (hacky, better to add to exec_args individually if no spaces)
         // For safety, let's just assume we need to run it properly
@@ -364,7 +373,7 @@ bool MeasurementEngine::execute_instrumented_code(const std::string& temp_file, 
         // Simplified: set CLASSPATH env var? No, passed as args.
         // We'll just construct the args for java
         exec_args.push_back("-cp");
-        std::string cp_str = path.parent_path().string() + ":" + (exe_dir / "../src/instrumentation/language_runtimes/java").string();
+        std::string cp_str = path.parent_path().string() + ":" + java_rt.string();
         // Leak memory for safety in execvp (execvp replaces process anyway)
         exec_args.push_back(strdup(cp_str.c_str())); 
         

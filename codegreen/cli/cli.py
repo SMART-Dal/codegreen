@@ -125,7 +125,7 @@ def get_config_path() -> Optional[Path]:
 def _get_runtime_path() -> Optional[Path]:
     """Get path to runtime module directory"""
     runtime_paths = [
-        Path(__file__).parents[2] / "src" / "instrumentation" / "language_runtimes" / "python",
+        Path(__file__).parents[2] / "codegreen" / "instrumentation" / "language_runtimes" / "python",
         Path(__file__).parents[2] / "bin" / "runtime",
         Path(__file__).parents[2] / "codegreen" / "bin" / "runtime",
     ]
@@ -137,15 +137,16 @@ def _get_runtime_path() -> Optional[Path]:
 def ensure_runtime_available() -> bool:
     """Ensure the Python runtime module is available."""
     runtime_paths = [
-        Path(__file__).parents[2] / "src" / "instrumentation" / "language_runtimes" / "python" / "codegreen_runtime.py",
+        Path(__file__).parent.parent / "instrumentation" / "language_runtimes" / "python" / "codegreen_runtime.py",
+        Path(__file__).parents[2] / "codegreen" / "instrumentation" / "language_runtimes" / "python" / "codegreen_runtime.py",
         Path(__file__).parents[2] / "bin" / "runtime" / "codegreen_runtime.py",
         Path(__file__).parents[2] / "build" / "bin" / "runtime" / "codegreen_runtime.py",
     ]
-    
+
     for path in runtime_paths:
         if path.exists():
             return True
-    
+
     return False
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -1029,7 +1030,7 @@ def _parse_runtime_measurements(output: str) -> List[Dict[str, Any]]:
 def _get_c_runtime_paths(language: str = "c") -> tuple:
     """Get include path and lib path for C/C++ runtime."""
     project_root = Path(__file__).resolve().parent.parent.parent
-    runtime_base = project_root / "src" / "instrumentation" / "language_runtimes"
+    runtime_base = project_root / "codegreen" / "instrumentation" / "language_runtimes"
     include_path = runtime_base / language
     # Search order: project/lib -> build/lib -> installed package lib
     for candidate in [project_root / "lib",
@@ -1061,7 +1062,7 @@ def _compile_instrumented(instrumented_path: Path, language: Language, verbose: 
                f"-L{lib_path}", "-lcodegreen-nemb", "-lpthread", "-o", str(binary)]
     elif language == Language.java:
         project_root = Path(__file__).resolve().parent.parent.parent
-        java_runtime = project_root / "src" / "instrumentation" / "language_runtimes" / "java"
+        java_runtime = project_root / "codegreen" / "instrumentation" / "language_runtimes" / "java"
         cmd = ["javac", "-cp", str(java_runtime), "-d", str(build_dir), str(instrumented_path)]
         binary = build_dir / f"{stem}.class"
     else:
@@ -1132,7 +1133,7 @@ def _run_energy_measurement(
         class_name = instrumented_path.stem
         build_dir = instrumented_path.parent
         project_root = Path(__file__).resolve().parent.parent.parent
-        java_runtime = project_root / "src" / "instrumentation" / "language_runtimes" / "java"
+        java_runtime = project_root / "codegreen" / "instrumentation" / "language_runtimes" / "java"
         _, lib_path = _get_c_runtime_paths("java")
         cp = f"{build_dir}:{java_runtime}"
         cmd = ['java', '-cp', cp,

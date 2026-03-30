@@ -96,6 +96,8 @@ find = {where = ["."], include = [
     "language_runtimes/python/*.py",
     "language_runtimes/c/*.h",
     "language_runtimes/cpp/*.h",
+    "language_runtimes/cpp/*.hpp",
+    "language_runtimes/cpp/**/*.hpp",
     "language_runtimes/java/**/*.java",
 ]
 # Native binaries are copied by setup.py BuildWithCMake, but we also

@@ -11,8 +11,9 @@ namespace codegreen {
 PythonBridgeAdapter::PythonBridgeAdapter(const std::string& language_id) : language_id_(language_id) {
     // Get the path to the instrumentation system
     auto exe_path = std::filesystem::canonical("/proc/self/exe").parent_path();
-    // The binary is in bin/, and instrumentation is in bin/src/instrumentation
-    instrumentation_path_ = exe_path / "src" / "instrumentation";
+    instrumentation_path_ = exe_path / "python" / "instrumentation";
+    if (!std::filesystem::exists(instrumentation_path_))
+        instrumentation_path_ = exe_path.parent_path() / "codegreen" / "instrumentation";
     
     std::cout << "Python instrumentation path: " << instrumentation_path_ << std::endl;
 }
