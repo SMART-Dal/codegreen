@@ -125,3 +125,5 @@ third_party/vhs/
 *copy*
 benchmark/results/
 dist/
+codegreen/ide/vscode/node_modules/
+codegreen/ide/vscode/out/
