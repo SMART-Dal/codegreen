@@ -20,6 +20,7 @@ class PrecisionTimer {
 public:
     enum class ClockSource {
         TSC_INVARIANT,      ///< Time Stamp Counter (x86 only, highest precision)
+        MACH_CONTINUOUS,    ///< mach_continuous_time (macOS ARM/Intel, ~42ns)
         MONOTONIC_RAW,      ///< Raw monotonic clock (no NTP adjustments)
         MONOTONIC,          ///< Standard monotonic clock
         REALTIME            ///< System realtime clock (last resort)
@@ -128,13 +129,20 @@ private:
     bool detect_tsc_invariant();
     uint64_t measure_tsc_frequency();
     double measure_clock_resolution(clockid_t clock_id);
-    
+
     // TSC access methods
     uint64_t read_tsc() const;
     uint64_t tsc_to_nanoseconds(uint64_t tsc_value) const;
-    
-    // POSIX clock methods  
+
+    // POSIX clock methods
     uint64_t read_posix_clock_ns(clockid_t clock_id) const;
+
+#ifdef __APPLE__
+    bool initialize_mach_continuous();
+    uint64_t read_mach_continuous_ns() const;
+    uint32_t mach_timebase_numer_{1};
+    uint32_t mach_timebase_denom_{1};
+#endif
 };
 
 /**

@@ -12,6 +12,10 @@
 #include <x86intrin.h>
 #endif
 
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#endif
+
 namespace codegreen::nemb::utils {
 
 PrecisionTimer::PrecisionTimer() = default;
@@ -28,6 +32,15 @@ bool PrecisionTimer::initialize() {
  return true;
  }
  
+#ifdef __APPLE__
+ if (initialize_mach_continuous()) {
+ clock_source_ = ClockSource::MACH_CONTINUOUS;
+ std::cout << " Using mach_continuous_time (ARM generic timer)" << std::endl;
+ std::cout << " Resolution: " << resolution_ns_ << " ns" << std::endl;
+ return true;
+ }
+#endif
+
  // Fallback to POSIX clocks
  if (initialize_posix_clock()) {
  std::cout << " Using " << get_clock_source_name() << std::endl;
@@ -43,9 +56,16 @@ uint64_t PrecisionTimer::get_timestamp_ns() const {
  switch (clock_source_) {
  case ClockSource::TSC_INVARIANT:
  return tsc_to_nanoseconds(read_tsc());
- 
+
+#ifdef __APPLE__
+ case ClockSource::MACH_CONTINUOUS:
+ return read_mach_continuous_ns();
+#endif
+
+#ifdef CLOCK_MONOTONIC_RAW
  case ClockSource::MONOTONIC_RAW:
  return read_posix_clock_ns(CLOCK_MONOTONIC_RAW);
+#endif
  
  case ClockSource::MONOTONIC:
  return read_posix_clock_ns(CLOCK_MONOTONIC);
@@ -62,6 +82,8 @@ std::string PrecisionTimer::get_clock_source_name() const {
  switch (clock_source_) {
  case ClockSource::TSC_INVARIANT:
  return "TSC (Invariant Time Stamp Counter)";
+ case ClockSource::MACH_CONTINUOUS:
+ return "mach_continuous_time (ARM Generic Timer)";
  case ClockSource::MONOTONIC_RAW:
  return "CLOCK_MONOTONIC_RAW";
  case ClockSource::MONOTONIC:
@@ -79,7 +101,9 @@ bool PrecisionTimer::initialize(ClockSource source) {
  }
  clockid_t clock_id;
  switch (source) {
+#ifdef CLOCK_MONOTONIC_RAW
  case ClockSource::MONOTONIC_RAW: clock_id = CLOCK_MONOTONIC_RAW; break;
+#endif
  case ClockSource::MONOTONIC: clock_id = CLOCK_MONOTONIC; break;
  case ClockSource::REALTIME: clock_id = CLOCK_REALTIME; break;
  default: return false;
@@ -92,9 +116,21 @@ bool PrecisionTimer::initialize(ClockSource source) {
 }
 
 uint64_t PrecisionTimer::monotonic_timestamp_ns() {
+#ifdef __APPLE__
+ // mach_continuous_time is monotonic, doesn't pause during sleep, no syscall
+ static uint32_t numer = 0, denom = 0;
+ if (!numer) {
+ mach_timebase_info_data_t info;
+ mach_timebase_info(&info);
+ numer = info.numer;
+ denom = info.denom;
+ }
+ return mach_continuous_time() * numer / denom;
+#else
  struct timespec ts;
  clock_gettime(CLOCK_MONOTONIC, &ts);
  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
+#endif
 }
 
 bool PrecisionTimer::is_tsc_available() {
@@ -141,7 +177,9 @@ bool PrecisionTimer::initialize_tsc() {
 bool PrecisionTimer::initialize_posix_clock() {
  // Try clocks in order of preference
  std::vector<std::pair<clockid_t, ClockSource>> clocks = {
+#ifdef CLOCK_MONOTONIC_RAW
  {CLOCK_MONOTONIC_RAW, ClockSource::MONOTONIC_RAW},
+#endif
  {CLOCK_MONOTONIC, ClockSource::MONOTONIC},
  {CLOCK_REALTIME, ClockSource::REALTIME}
  };
@@ -226,6 +264,21 @@ uint64_t PrecisionTimer::read_posix_clock_ns(clockid_t clock_id) const {
  
  return ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
+
+#ifdef __APPLE__
+bool PrecisionTimer::initialize_mach_continuous() {
+ mach_timebase_info_data_t info;
+ if (mach_timebase_info(&info) != KERN_SUCCESS) return false;
+ mach_timebase_numer_ = info.numer;
+ mach_timebase_denom_ = info.denom;
+ resolution_ns_ = static_cast<double>(info.numer) / info.denom;
+ return true;
+}
+
+uint64_t PrecisionTimer::read_mach_continuous_ns() const {
+ return mach_continuous_time() * mach_timebase_numer_ / mach_timebase_denom_;
+}
+#endif
 
 // ScopedTimer implementation
 ScopedTimer::ScopedTimer(const std::string& name) 

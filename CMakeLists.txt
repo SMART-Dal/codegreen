@@ -16,7 +16,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Find required packages
-find_package(PkgConfig REQUIRED)
+find_package(PkgConfig)
 find_package(Threads REQUIRED)
 
 # Optional GPU library support
@@ -47,10 +47,16 @@ else()
     set(HAVE_ROCM_SMI OFF)
 endif()
 
-# Find system libraries
-pkg_check_modules(JSONCPP REQUIRED jsoncpp)
-pkg_check_modules(CURL REQUIRED libcurl)
-pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+# System libraries (required for legacy core on Linux, not for NEMB-only macOS builds)
+if(NOT APPLE)
+    pkg_check_modules(JSONCPP REQUIRED jsoncpp)
+    pkg_check_modules(CURL REQUIRED libcurl)
+    pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+else()
+    pkg_check_modules(JSONCPP jsoncpp)
+    pkg_check_modules(CURL libcurl)
+    pkg_check_modules(SQLITE3 sqlite3)
+endif()
 
 # Global include directories
 include_directories(${CMAKE_SOURCE_DIR}/codegreen/measurement/include)

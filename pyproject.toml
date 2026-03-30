@@ -105,6 +105,7 @@ find = {where = ["."], include = [
 "codegreen" = [
     "config.json",
     "lib/*.so",
+    "lib/*.dylib",
     "lib/runtime/**/*.h",
     "bin/codegreen",
 ]

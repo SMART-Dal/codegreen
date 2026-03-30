@@ -38,6 +38,13 @@ set(NEMB_DRIVERS_SOURCES
     src/nemb/drivers/amd_rapl_provider.cpp
 )
 
+if(APPLE)
+    list(APPEND NEMB_DRIVERS_SOURCES
+        src/nemb/drivers/darwin_ioreport_provider.cpp
+        src/nemb/drivers/darwin_kpc_provider.cpp
+    )
+endif()
+
 set(NEMB_CONFIG_SOURCES
     src/nemb/config_loader.cpp
     src/nemb/codegreen_energy.cpp
@@ -97,8 +104,18 @@ target_link_libraries(codegreen-core
 # Link libraries for NEMB
 target_link_libraries(codegreen-nemb
     Threads::Threads
-    m  # Math library for sqrt, etc.
+    m
 )
+
+if(APPLE)
+    find_library(CORE_FOUNDATION CoreFoundation REQUIRED)
+    target_link_libraries(codegreen-nemb ${CORE_FOUNDATION} "-ldl")
+    target_compile_definitions(codegreen-nemb PRIVATE CODEGREEN_DARWIN)
+    set_target_properties(codegreen-nemb PROPERTIES
+        SUFFIX ".dylib"
+        INSTALL_RPATH "@loader_path"
+    )
+endif()
 
 # Install targets
 install(TARGETS codegreen-core codegreen-nemb
