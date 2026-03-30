@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 BASE = Path(__file__).parent.parent
 LIB_PATH = BASE / "codegreen" / "lib"
 RUNTIME_PATH = BASE / "codegreen" / "bin" / "runtime"
-JAVA_RT = BASE / "src" / "instrumentation" / "language_runtimes" / "java"
+JAVA_RT = BASE / "codegreen" / "instrumentation" / "language_runtimes" / "java"
 BENCH_PATH = BASE / "benchmark" / "benchmarksgame"
 SLEEP_BETWEEN = 2
 

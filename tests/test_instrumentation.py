@@ -315,7 +315,7 @@ class TestConfigDriven:
 
     def test_all_configs_loadable(self):
         """All language configs must load without errors and have required keys."""
-        configs_dir = Path(__file__).parent.parent / "src" / "instrumentation" / "configs"
+        configs_dir = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "configs"
         for config_file in configs_dir.glob("*.json"):
             if config_file.name == "TEMPLATE.json":
                 continue
@@ -330,7 +330,7 @@ class TestConfigDriven:
 
     def test_no_hardcoded_language_checks_in_engine(self):
         """Engine code must not have if language == 'X' patterns."""
-        engine_path = Path(__file__).parent.parent / "src" / "instrumentation" / "language_engine.py"
+        engine_path = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "language_engine.py"
         if not engine_path.exists():
             pytest.skip("language_engine.py not found")
         code = engine_path.read_text()
