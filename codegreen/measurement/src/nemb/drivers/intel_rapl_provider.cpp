@@ -463,7 +463,8 @@ bool IntelRAPLProvider::take_initial_readings() {
 
 bool IntelRAPLProvider::query_energy_unit_from_hardware() {
     // Try to read energy unit from sysfs first (more reliable than MSR)
-    const std::string energy_unit_path = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj";
+    // Use the same path format as detect_rapl_domains() for consistency
+    const std::string energy_unit_path = "/sys/class/powercap/intel-rapl:0/energy_uj";
     
     if (std::filesystem::exists(energy_unit_path)) {
         // For sysfs interface, energy values are already in microjoules
