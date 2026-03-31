@@ -60,7 +60,7 @@ namespace {
                 replacement = env_value;
             } else if (var_name == "EXECUTABLE_DIR") {
                 // Fallback for executable directory
-                replacement = std::filesystem::current_path();
+                replacement = std::filesystem::current_path().string();
             } else if (var_name == "USER_HOME") {
                 const char* home = std::getenv("HOME");
                 replacement = home ? home : "/tmp";

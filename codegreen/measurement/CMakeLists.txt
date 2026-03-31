@@ -19,22 +19,27 @@ set(NEMB_UTILS_SOURCES
     src/nemb/utils/non_blocking_file_reader.cpp
 )
 
+# Platform-conditional drivers: each platform only compiles its own providers
 set(NEMB_DRIVERS_SOURCES
-    src/nemb/drivers/intel_rapl_provider.cpp
     src/nemb/drivers/nvidia_gpu_provider.cpp
-    src/nemb/drivers/amd_gpu_provider.cpp
-    src/nemb/drivers/arm_energy_provider.cpp
-    src/nemb/drivers/amd_rapl_provider.cpp
 )
 
-if(APPLE)
+if(WIN32)
+    list(APPEND NEMB_DRIVERS_SOURCES
+        src/nemb/drivers/windows_emi_provider.cpp
+    )
+elseif(APPLE)
     list(APPEND NEMB_DRIVERS_SOURCES
         src/nemb/drivers/darwin_ioreport_provider.cpp
         src/nemb/drivers/darwin_kpc_provider.cpp
     )
-elseif(WIN32)
+else()
+    # Linux/POSIX: all RAPL + ARM providers
     list(APPEND NEMB_DRIVERS_SOURCES
-        src/nemb/drivers/windows_emi_provider.cpp
+        src/nemb/drivers/intel_rapl_provider.cpp
+        src/nemb/drivers/amd_rapl_provider.cpp
+        src/nemb/drivers/amd_gpu_provider.cpp
+        src/nemb/drivers/arm_energy_provider.cpp
     )
 endif()
 
@@ -65,10 +70,10 @@ endif()
 
 target_compile_definitions(codegreen-nemb PRIVATE NEMB_EXPORTS)
 
-target_link_libraries(codegreen-nemb
-    Threads::Threads
-    m
-)
+target_link_libraries(codegreen-nemb Threads::Threads)
+if(NOT WIN32)
+    target_link_libraries(codegreen-nemb m)
+endif()
 
 if(APPLE)
     find_library(CORE_FOUNDATION CoreFoundation REQUIRED)
@@ -80,7 +85,7 @@ if(APPLE)
     )
 elseif(WIN32)
     target_link_libraries(codegreen-nemb pdh)
-    target_compile_definitions(codegreen-nemb PRIVATE CODEGREEN_WINDOWS)
+    target_compile_definitions(codegreen-nemb PRIVATE CODEGREEN_WINDOWS NOMINMAX)
 endif()
 
 install(TARGETS codegreen-nemb

@@ -371,7 +371,7 @@ double validate_measurement_accuracy(double d) { return 0.99; }
 extern "C" {
     static std::unique_ptr<codegreen::EnergyMeter> c_api_meter;
     static std::mutex c_api_mutex;
-    static pid_t c_api_init_pid = 0;
+    static int c_api_init_pid = 0;
     static bool c_api_is_forked_child = false;
 
     // Fork safety: abandon NEMB resources in child without destructing.
