@@ -425,12 +425,19 @@ extern "C" {
         std::lock_guard<std::mutex> l(c_api_mutex);
         return c_api_meter ? c_api_meter->start_session(n?n:"") : 0;
     }
+    // Store last session diff for domain breakdown retrieval
+    static codegreen::EnergyDifference last_session_diff;
+
     int nemb_stop_session(uint64_t i, double* e, double* p) {
         if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) return 0;
-        auto res = c_api_meter->end_session(i);
-        if(res.is_valid) { if(e)*e=res.energy_joules; if(p)*p=res.average_power_watts; return 1; }
+        last_session_diff = c_api_meter->end_session(i);
+        if(last_session_diff.is_valid) {
+            if(e)*e=last_session_diff.energy_joules;
+            if(p)*p=last_session_diff.average_power_watts;
+            return 1;
+        }
         return 0;
     }
     int nemb_read_current(double* e, double* p) {
@@ -521,22 +528,22 @@ extern "C" {
         return s.length();
     }
 
+    // Returns per-domain energy DELTA from the last nemb_stop_session call.
+    // This is the energy consumed by the workload per domain, not cumulative.
     int nemb_get_domain_energy_json(char* b, int m) {
         std::lock_guard<std::mutex> l(c_api_mutex);
-        if(!c_api_meter) return 0;
-        auto result = c_api_meter->read();
         std::ostringstream ss;
         ss << std::setprecision(10) << "{";
         bool first = true;
-        for(auto& [domain, joules] : result.components) {
+        for(auto& [domain, joules] : last_session_diff.component_energy) {
             if(!first) ss << ", ";
             ss << "\"" << domain << "\": " << joules;
             first = false;
         }
         ss << "}";
         std::string s = ss.str();
-        if(s.length() >= (size_t)m) return -s.length();
+        if(s.length() >= (size_t)m) return -(int)s.length();
         std::copy(s.begin(), s.end(), b); b[s.length()] = '\0';
-        return s.length();
+        return (int)s.length();
     }
 }
