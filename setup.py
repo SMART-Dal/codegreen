@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """CodeGreen setup with C++ backend compilation for wheel builds."""
 
+from __future__ import annotations
+
 import os
 import platform
 import shutil
