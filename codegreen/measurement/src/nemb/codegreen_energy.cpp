@@ -16,6 +16,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #ifdef _WIN32
 #include <process.h>
 static int _nemb_getpid() { return _getpid(); }
@@ -120,13 +121,16 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
     coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
     coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
     
-    // Suppress verbose init logging from providers and coordinator.
-    // Providers on wrong platforms print expected failures (e.g., "No RAPL" on macOS).
-    // Only errors after initialization are printed.
+    // Suppress verbose init logging unless debug mode is enabled.
+    // Check both config flag and CODEGREEN_DEBUG env var (set by CLI --verbose).
+    bool debug_logging = config.enable_debug_logging;
+    const char* debug_env = std::getenv("CODEGREEN_DEBUG");
+    if (debug_env && std::string(debug_env) == "1") debug_logging = true;
+
     std::streambuf* saved_cout = std::cout.rdbuf();
     std::streambuf* saved_cerr = std::cerr.rdbuf();
     std::ostringstream suppressed;
-    if (!config.enable_debug_logging) {
+    if (!debug_logging) {
         std::cout.rdbuf(suppressed.rdbuf());
         std::cerr.rdbuf(suppressed.rdbuf());
     }
@@ -147,7 +151,7 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
 #endif
 
     // Restore output
-    if (!config.enable_debug_logging) {
+    if (!debug_logging) {
         std::cout.rdbuf(saved_cout);
         std::cerr.rdbuf(saved_cerr);
     }
