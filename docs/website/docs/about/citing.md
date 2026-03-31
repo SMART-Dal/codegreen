@@ -1,10 +1,23 @@
 # Citing CodeGreen
 
-If you use CodeGreen in your research or project, please cite the following papers which describe the underlying methodology and energy measurement techniques.
+If you use CodeGreen in your research or project, please cite the following papers.
 
 ## Primary Citation
 
-For the fine-grained energy measurement methodology and the core concepts behind CodeGreen:
+For the CodeGreen tool -- precision, portability, and cross-platform energy measurement:
+
+```bibtex
+@article{rajput2026codegreen,
+  title={CodeGreen: Towards Improving Precision and Portability in Software Energy Measurement},
+  author={Rajput, Saurabhsingh and Sharma, Tushar},
+  journal={arXiv preprint arXiv:2603.17924},
+  year={2026}
+}
+```
+
+## Related Research
+
+For the fine-grained energy measurement methodology:
 
 ```bibtex
 @article{rajput2024enhancing,
@@ -18,8 +31,6 @@ For the fine-grained energy measurement methodology and the core concepts behind
   publisher={ACM New York, NY}
 }
 ```
-
-## Related Research
 
 For the API energy footprint analysis and the GreenLight tool concepts:
 

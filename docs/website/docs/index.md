@@ -130,7 +130,7 @@ Pre-built wheels for Linux x86_64 and macOS ARM64. Windows and other platforms: 
 
 If you use CodeGreen in your research, please cite:
 
-> Rajput, S., Widmayer, T., Shang, Z., Kechagia, M., Sarro, F., & Sharma, T. (2024). Enhancing energy-awareness in deep learning through fine-grained energy measurement. *ACM Transactions on Software Engineering and Methodology*, 33(8), 1-34.
+> Rajput, S., & Sharma, T. (2026). CodeGreen: Towards Improving Precision and Portability in Software Energy Measurement. *arXiv preprint arXiv:2603.17924*.
 
 [:octicons-arrow-right-24: Full citation & BibTeX](about/citing.md)
 

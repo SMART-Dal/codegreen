@@ -153,13 +153,11 @@ cd codegreen && git pull && ./install.sh --upgrade   # source
 ## Citation
 
 ```bibtex
-@software{Rajput_CodeGreen_2026,
-  author = {Rajput, Saurabhsingh},
-  doi = {10.5281/zenodo.18371772},
-  title = {{CodeGreen: Per-Function Energy Measurement for Multi-Language Software}},
-  url = {https://smart-dal.github.io/codegreen/},
-  version = {v0.2.0},
-  year = {2026}
+@article{rajput2026codegreen,
+  title={CodeGreen: Towards Improving Precision and Portability in Software Energy Measurement},
+  author={Rajput, Saurabhsingh and Sharma, Tushar},
+  journal={arXiv preprint arXiv:2603.17924},
+  year={2026}
 }
 ```
 
