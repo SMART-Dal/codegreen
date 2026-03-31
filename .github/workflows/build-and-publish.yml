@@ -49,7 +49,7 @@ jobs:
           yum install -y cmake gcc-c++ make pkgconfig &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(nproc) && cmake --install . --config Release && ls -la {project}/lib/libcodegreen-nemb.so
+          cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build {project}/build --config Release -j$(nproc) && cmake --install {project}/build --config Release && ls -la {project}/lib/libcodegreen-nemb.so
         CIBW_ENVIRONMENT: >
           LD_LIBRARY_PATH={project}/lib:$LD_LIBRARY_PATH
         CIBW_TEST_COMMAND: >
@@ -67,7 +67,7 @@ jobs:
           yum install -y cmake gcc-c++ make pkgconfig &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(nproc) && cmake --install . --config Release && ls -la {project}/lib/libcodegreen-nemb.so
+          cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build {project}/build --config Release -j$(nproc) && cmake --install {project}/build --config Release && ls -la {project}/lib/libcodegreen-nemb.so
         CIBW_ENVIRONMENT: >
           LD_LIBRARY_PATH={project}/lib:$LD_LIBRARY_PATH
         CIBW_TEST_COMMAND: >
@@ -83,7 +83,7 @@ jobs:
           brew install cmake pkg-config &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(sysctl -n hw.ncpu) && cmake --install . --config Release && ls -la {project}/lib/libcodegreen-nemb.dylib
+          cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build {project}/build --config Release -j$(sysctl -n hw.ncpu) && cmake --install {project}/build --config Release && ls -la {project}/lib/libcodegreen-nemb.dylib
         CIBW_TEST_COMMAND: >
           python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;print(f'dylib={(pkg/\"lib\"/\"libcodegreen-nemb.dylib\").exists()}')" && codegreen --help && codegreen doctor || true
 
@@ -93,7 +93,7 @@ jobs:
       env:
         CIBW_BUILD: "cp310-win_amd64 cp311-win_amd64 cp312-win_amd64 cp313-win_amd64"
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir build & cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} && cmake --build . --config Release -j %NUMBER_OF_PROCESSORS% && cmake --install . --config Release && dir {project}\lib\codegreen-nemb.dll
+          cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} && cmake --build {project}/build --config Release && cmake --install {project}/build --config Release && dir {project}\lib\codegreen-nemb.dll
         CIBW_TEST_COMMAND: >
           python -c "import importlib;pkg=importlib.import_module('codegreen');print(f'CodeGreen {pkg.__version__}')" && codegreen --help
 
@@ -250,6 +250,9 @@ jobs:
 
         python -c "open('test.py','w').write('def fib(n): return fib(n-1)+fib(n-2) if n>1 else n\n')"
         codegreen analyze python test.py --json
+
+        python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;dll=pkg/'lib'/'codegreen-nemb.dll';print(f'NEMB DLL: {dll} exists={dll.exists()}')"
+
         codegreen doctor
 
   publish-pypi:
