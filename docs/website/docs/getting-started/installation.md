@@ -94,8 +94,8 @@ CodeGreen's NEMB (Native Energy Measurement Backend) auto-detects available ener
 
 | Sensor | Requirements | Description |
 |--------|--------------|-------------|
-| **Intel RAPL** | Intel/AMD CPU | CPU package, core, DRAM energy via `/sys/class/powercap` |
-| **AMD RAPL** | AMD CPU | CPU energy via RAPL interface |
+| **Intel RAPL** | Intel CPU | CPU package, core, DRAM energy via `/sys/class/powercap` |
+| **AMD RAPL** | AMD CPU (EPYC, Ryzen) | CPU package energy via RAPL interface (no separate DRAM counter on AMD) |
 | **NVIDIA NVML** | NVIDIA GPU + drivers 450.80+ | GPU power via NVML library |
 | **AMD ROCm** | AMD GPU + ROCm | GPU power via ROCm SMI |
 

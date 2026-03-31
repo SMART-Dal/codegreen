@@ -35,6 +35,7 @@ except ImportError:
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from codegreen import __version__ as _VERSION
 from rich.text import Text
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -531,7 +532,7 @@ def generate_optimized_config(
         "timestamp": datetime.now().isoformat(),
         "environment_type": environment_info["type"],
         "detected_sensors": list(sensor_info.keys()),
-        "version": codegreen.__version__
+        "version": _VERSION
     }
     
     # Environment-specific optimizations
@@ -699,7 +700,7 @@ def main(
     - [dim]codegreen config --show[/dim] - View/edit configuration
     """
     if version:
-        console.print(f"[bold green]CodeGreen version {codegreen.__version__}[/bold green]")
+        console.print(f"[bold green]CodeGreen version {_VERSION}[/bold green]")
         raise typer.Exit()
     
     # If no command is provided and version is not requested, show help
@@ -1700,7 +1701,7 @@ def show_info(
     # Package information
     try:
         import codegreen
-        table.add_row("Version", "[ok]", f"CodeGreen {codegreen.__version__}")
+        table.add_row("Version", "[ok]", f"CodeGreen {_VERSION}")
     except:
         table.add_row("Version", "-", "Unknown")
     
