@@ -14,6 +14,7 @@ _EXCLUDE_DIRS = {"ide", "measurement", "optimizer"}
 _NATIVE_LIB = {
     "Darwin": "libcodegreen-nemb.dylib",
     "Linux": "libcodegreen-nemb.so",
+    "Windows": "codegreen-nemb.dll",
 }
 
 
@@ -116,8 +117,10 @@ setup(
         "codegreen": [
             "lib/*.so",
             "lib/*.dylib",
+            "lib/*.dll",
             "lib/runtime/**/*.h",
             "bin/codegreen",
+            "bin/codegreen.exe",
             "config.json",
         ],
     },

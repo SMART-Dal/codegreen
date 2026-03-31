@@ -16,6 +16,10 @@
 #include <mach/mach_time.h>
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace codegreen::nemb::utils {
 
 PrecisionTimer::PrecisionTimer() = default;
@@ -126,7 +130,6 @@ bool PrecisionTimer::initialize(ClockSource source) {
 
 uint64_t PrecisionTimer::monotonic_timestamp_ns() {
 #ifdef __APPLE__
- // mach_continuous_time is monotonic, doesn't pause during sleep, no syscall
  static uint32_t numer = 0, denom = 0;
  if (!numer) {
  mach_timebase_info_data_t info;
@@ -135,6 +138,12 @@ uint64_t PrecisionTimer::monotonic_timestamp_ns() {
  denom = info.denom;
  }
  return mach_continuous_time() * numer / denom;
+#elif defined(_WIN32)
+ static LARGE_INTEGER freq = {0};
+ if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+ LARGE_INTEGER count;
+ QueryPerformanceCounter(&count);
+ return (uint64_t)(count.QuadPart * 1000000000ULL / freq.QuadPart);
 #else
  struct timespec ts;
  clock_gettime(CLOCK_MONOTONIC, &ts);

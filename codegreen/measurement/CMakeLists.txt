@@ -43,6 +43,10 @@ if(APPLE)
         src/nemb/drivers/darwin_ioreport_provider.cpp
         src/nemb/drivers/darwin_kpc_provider.cpp
     )
+elseif(WIN32)
+    list(APPEND NEMB_DRIVERS_SOURCES
+        src/nemb/drivers/windows_emi_provider.cpp
+    )
 endif()
 
 set(NEMB_CONFIG_SOURCES
@@ -105,6 +109,9 @@ if(APPLE)
         SUFFIX ".dylib"
         INSTALL_RPATH "@loader_path"
     )
+elseif(WIN32)
+    target_link_libraries(codegreen-nemb pdh)
+    target_compile_definitions(codegreen-nemb PRIVATE CODEGREEN_WINDOWS)
 endif()
 
 # Install targets

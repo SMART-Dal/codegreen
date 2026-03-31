@@ -107,8 +107,10 @@ find = {where = ["."], include = [
     "config.json",
     "lib/*.so",
     "lib/*.dylib",
+    "lib/*.dll",
     "lib/runtime/**/*.h",
     "bin/codegreen",
+    "bin/codegreen.exe",
 ]
 
 [tool.setuptools.exclude-package-data]
