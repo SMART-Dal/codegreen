@@ -17,7 +17,7 @@ CodeGreen is a comprehensive tool for fine-grained energy profiling and optimiza
 pip install codegreen
 ```
 
-Requires Linux with RAPL support. The wheel includes the pre-built C++ measurement backend.
+Pre-built wheels available for Linux x86_64 and macOS ARM64 (Apple Silicon). Includes the native NEMB energy measurement backend.
 
 ### From source (recommended for development)
 
@@ -26,18 +26,28 @@ git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
 ./install.sh
 
-# For RAPL sensor access (one-time, requires sudo):
+# Linux: RAPL sensor access (one-time, requires sudo):
 sudo ./install.sh   # or: sudo codegreen init-sensors
-# Then log out and back in for group permissions
+
+# macOS: energy measurement requires sudo (IOReport access):
+sudo codegreen run -- python script.py
 ```
+
+### Platform support
+
+| Platform | pip install | Energy measurement | Backend |
+|----------|------------|-------------------|---------|
+| Linux x86_64 (Intel/AMD) | Pre-built wheel | Full | RAPL via NEMB |
+| macOS ARM64 (Apple Silicon) | Pre-built wheel | Full | IOReport + kpc via NEMB |
+| macOS Intel | From source | Full | IOReport via NEMB |
+| Other | From source | Time-only | Fallback |
 
 ### Requirements
 
-- Linux (kernel 5.0+, Ubuntu 20.04+, Debian 11+, Fedora 35+, MacOS)
 - Python 3.9+
-- CMake 3.16+, g++ 9+ (for source builds only)
-- Intel or AMD CPU with RAPL support
-- `perf` (for `codegreen run` and benchmark validation)
+- Linux: kernel 5.0+, Intel/AMD CPU with RAPL support
+- macOS: Apple Silicon (M1-M5) or Intel, sudo for energy measurement
+- Source builds: CMake 3.16+, C++17 compiler
 
 ## Usage
 
@@ -80,7 +90,7 @@ JSON (default for `--json`), CSV, Markdown table, and text summary. The JSON out
 
 ## Language support
 
-Adding a new language requires only a JSON config file in `src/instrumentation/configs/` plus the tree-sitter grammar. No Python code changes needed.
+Adding a new language requires only a JSON config file in `codegreen/instrumentation/configs/` plus the tree-sitter grammar. No Python code changes needed.
 
 Currently supported: Python, C, C++, JavaScript, Java.
 
@@ -99,7 +109,7 @@ bash scripts/generate_comparison_artifacts.sh docs/benchmarks/
 
 ## Energy Flow Graph (EFG)
 
-CodeGreen includes an Energy Flow Graph module (`src/analysis/cfg/`) that builds energy-annotated control flow graphs from source code:
+CodeGreen includes an Energy Flow Graph module (`codegreen/analysis/cfg/`) that builds energy-annotated control flow graphs from source code:
 
 ```python
 from codegreen.analysis.cfg.builder import build_per_method_cfgs
@@ -114,7 +124,7 @@ Features: Ball & Larus branch heuristics, SCC-based hot path computation, three-
 
 ## Architecture
 
-- **C++ NEMB backend**: RAPL energy reading with sub-microsecond timestamping, configurable polling interval
+- **C++ NEMB backend**: platform-aware energy measurement (RAPL on Linux, IOReport on macOS), sub-microsecond timestamping, background polling with lock-free ring buffers
 - **Python instrumentation**: tree-sitter AST analysis, config-driven checkpoint insertion
 - **Energy Flow Graph**: CFG + energy annotation for path-dependent analysis
 - **Benchmark harness**: multi-suite support (benchmarksgame, PerfOpt), statistical analysis with t-distribution CI, IQR outlier detection, profiler comparison

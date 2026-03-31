@@ -255,7 +255,7 @@ pip install codegreen
 sudo codegreen init-sensors
 ```
 
-The PyPI wheel includes the pre-compiled C++ NEMB backend. No cmake, g++, or manual compilation needed. Works on Linux x86_64 with Python 3.9-3.13.
+Pre-built wheels include the NEMB energy measurement backend. No cmake or compilation needed. Available for Linux x86_64 and macOS ARM64 (Apple Silicon) with Python 3.9-3.13.
 
 ---
 
@@ -341,13 +341,13 @@ The source distribution (sdist) is a fallback: if a user's platform has no pre-b
 
 ### Platform Support
 
-| Platform | Pre-built wheel | From source | Energy measurement |
-|----------|----------------|-------------|-------------------|
-| Linux x86_64 (Intel/AMD) | Yes (pip install) | Yes | Full (RAPL + NVML + ROCm) |
-| Linux ARM64 | No | Yes (needs cmake + deps) | RAPL if available |
-| macOS (Intel) | No | Partial (NEMB won't build) | No (different energy API) |
-| macOS (Apple Silicon) | No | Partial | No |
-| Windows | No | No | No |
+| Platform | Pre-built wheel | From source | Energy measurement | Backend |
+|----------|----------------|-------------|-------------------|---------|
+| Linux x86_64 (Intel/AMD) | Yes | Yes | Full | RAPL + NVML + ROCm |
+| Linux ARM64 | No | Yes (cmake + deps) | RAPL if available | RAPL |
+| macOS ARM64 (Apple Silicon) | Yes | Yes (brew + cmake) | Full | IOReport + kpc |
+| macOS Intel | No | Yes (brew + cmake) | Full | IOReport |
+| Windows | No | No | Time-only | Fallback |
 
 ### Common CI/CD Failures
 

@@ -88,16 +88,25 @@ pre-commit install
 
 ## Hardware Requirements
 
-CodeGreen's NEMB (Native Energy Measurement Backend) supports the following hardware sensors on **Linux**:
+CodeGreen's NEMB (Native Energy Measurement Backend) auto-detects available energy sensors per platform:
+
+### Linux
 
 | Sensor | Requirements | Description |
 |--------|--------------|-------------|
 | **Intel RAPL** | Intel/AMD CPU | CPU package, core, DRAM energy via `/sys/class/powercap` |
+| **AMD RAPL** | AMD CPU | CPU energy via RAPL interface |
 | **NVIDIA NVML** | NVIDIA GPU + drivers 450.80+ | GPU power via NVML library |
 | **AMD ROCm** | AMD GPU + ROCm | GPU power via ROCm SMI |
-| **AMD RAPL** | AMD CPU | CPU energy via RAPL interface |
 
-**Note:** CodeGreen supports Linux, macOS, and Windows. Hardware sensor availability varies by platform.
+### macOS
+
+| Sensor | Requirements | Description |
+|--------|--------------|-------------|
+| **IOReport** | Apple Silicon or Intel Mac, sudo | CPU, GPU, ANE, DRAM energy via `libIOReport.dylib` |
+| **kpc/kperf** | Apple Silicon, sudo | Exact hardware perf counters (cycles, IPC, cache misses) at ~200ns |
+
+Energy measurement on macOS requires `sudo` for IOReport and kpc access. The auto-detection backend chain is: NEMB (in-process) > perf (Linux) > powermetrics (macOS) > time-only.
 
 ## Troubleshooting
 
