@@ -10,11 +10,16 @@ on:
 
 jobs:
   build-wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-22.04]  # Linux-only (RAPL requires Linux kernel)
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+          - os: macos-latest
+            platform: macos
 
     steps:
     - uses: actions/checkout@v4
@@ -23,38 +28,42 @@ jobs:
 
     - uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
 
     - name: Install cibuildwheel
       run: pip install cibuildwheel==2.22.0
 
-    - name: Build wheels
+    - name: Build wheels (Linux)
+      if: matrix.platform == 'linux'
       run: cibuildwheel --output-dir wheelhouse
       env:
-        # Build for manylinux x86_64 only (RAPL = Linux + x86/AMD64)
         CIBW_BUILD: "cp39-manylinux_x86_64 cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
         CIBW_SKIP: "*-musllinux*"
         CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
-        # Install C++ build deps inside manylinux container
         CIBW_BEFORE_ALL_LINUX: >
           yum install -y epel-release &&
           yum install -y cmake gcc-c++ make pkgconfig jsoncpp-devel libcurl-devel sqlite-devel &&
           git submodule update --init --recursive
-        # Build C++ NEMB backend before wheel packaging
         CIBW_BEFORE_BUILD: >
-          cd {project} &&
-          mkdir -p build && cd build &&
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) &&
-          cmake --build . --config Release -j$(nproc) &&
-          echo "=== NEMB build artifacts ===" &&
-          ls -la {project}/lib/libcodegreen-nemb.so {project}/build/bin/codegreen 2>/dev/null
+          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(nproc) && ls -la {project}/lib/libcodegreen-nemb.so {project}/build/bin/codegreen 2>/dev/null
         CIBW_ENVIRONMENT: >
           LD_LIBRARY_PATH={project}/lib:$LD_LIBRARY_PATH
-        # Thorough smoke test: verify binary exists, loads, and CLI works
         CIBW_TEST_COMMAND: >
-          python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;so=pkg/'lib'/'libcodegreen-nemb.so';b=pkg/'bin'/'codegreen';assert so.exists(),f'NEMB .so missing at {so}';assert b.exists(),f'CLI missing at {b}';print(f'NEMB OK: {so} ({so.stat().st_size}B)');print(f'CLI OK: {b} ({b.stat().st_size}B)')"
-          && codegreen --help
-          && codegreen analyze python -c "print('hello')" --json 2>/dev/null || true
+          python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;so=pkg/'lib'/'libcodegreen-nemb.so';b=pkg/'bin'/'codegreen';assert so.exists(),f'NEMB .so missing at {so}';assert b.exists(),f'CLI missing at {b}';print(f'NEMB OK: {so} ({so.stat().st_size}B)');print(f'CLI OK: {b} ({b.stat().st_size}B)')" && codegreen --help
+
+    - name: Build wheels (macOS)
+      if: matrix.platform == 'macos'
+      run: cibuildwheel --output-dir wheelhouse
+      env:
+        CIBW_BUILD: "cp310-macosx_arm64 cp311-macosx_arm64 cp312-macosx_arm64 cp313-macosx_arm64"
+        CIBW_ARCHS_MACOS: arm64
+        CIBW_BEFORE_ALL_MACOS: >
+          brew install cmake pkg-config jsoncpp curl sqlite &&
+          git submodule update --init --recursive
+        CIBW_BEFORE_BUILD: >
+          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(sysctl -n hw.ncpu) && ls -la {project}/lib/libcodegreen-nemb.dylib {project}/build/bin/codegreen 2>/dev/null || echo "NEMB build failed, Python-only wheel"
+        CIBW_TEST_COMMAND: >
+          python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;print(f'dylib={(pkg/\"lib\"/\"libcodegreen-nemb.dylib\").exists()}')" && codegreen --help && codegreen doctor || true
 
     - uses: actions/upload-artifact@v4
       with:
@@ -70,7 +79,7 @@ jobs:
         submodules: recursive
     - uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
     - run: pip install build
     - run: python -m build --sdist
     - uses: actions/upload-artifact@v4
@@ -78,8 +87,8 @@ jobs:
         name: sdist
         path: dist/*.tar.gz
 
-  test-wheel:
-    name: Test wheel installation (${{ matrix.python-version }})
+  test-linux-wheel:
+    name: Test Linux wheel (${{ matrix.python-version }})
     needs: build-wheels
     runs-on: ubuntu-latest
     strategy:
@@ -97,10 +106,8 @@ jobs:
       run: |
         pip install wheelhouse/*cp$(echo ${{ matrix.python-version }} | tr -d '.')*manylinux*.whl
 
-        # 1. Verify CLI works
         codegreen --help
 
-        # 2. Verify NEMB binary is in the installed package
         python -c "
         import importlib, pathlib
         pkg = pathlib.Path(importlib.import_module('codegreen').__file__).parent
@@ -112,7 +119,6 @@ jobs:
         print(f'CLI:  {binary} ({binary.stat().st_size} bytes)')
         "
 
-        # 3. Verify instrumentation works (no execution, no RAPL needed)
         cat > /tmp/cg_test.py << 'PYEOF'
         def fibonacci(n):
             if n <= 1: return n
@@ -130,7 +136,6 @@ jobs:
         print(f'Instrumentation: {len(pts)} points found')
         "
 
-        # 4. Verify all language configs load
         python -c "
         import json, pathlib, importlib
         pkg = pathlib.Path(importlib.import_module('codegreen.instrumentation').__file__).parent
@@ -142,65 +147,55 @@ jobs:
         print(f'Configs: {len(configs)} language configs valid')
         "
 
-        # 5. Verify doctor reports system status
         codegreen doctor || true
 
-  test-macos:
-    name: Test macOS install (${{ matrix.runner }})
-    needs: build-sdist
-    runs-on: ${{ matrix.runner }}
+  test-macos-wheel:
+    name: Test macOS wheel (${{ matrix.python-version }})
+    needs: build-wheels
+    runs-on: macos-latest
     strategy:
-      fail-fast: false
       matrix:
-        include:
-          - runner: macos-latest
-            arch: Apple Silicon
-          - runner: macos-14
-            arch: Apple Silicon (macOS 14)
+        python-version: ['3.11', '3.12']
     steps:
     - uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: ${{ matrix.python-version }}
     - uses: actions/download-artifact@v4
       with:
-        name: sdist
-        path: sdist/
-    - name: Install from sdist
+        name: wheels-macos-latest
+        path: wheelhouse/
+    - name: Install and test
       run: |
-        pip install sdist/*.tar.gz
-    - name: Verify CLI and instrumentation
-      run: |
+        pip install wheelhouse/*cp$(echo ${{ matrix.python-version }} | tr -d '.')*macosx*.whl || pip install wheelhouse/*.whl
+
         codegreen --version
         codegreen --help
+
         echo 'def f(n): return f(n-1) if n > 0 else 0' > /tmp/t.py
         codegreen analyze python /tmp/t.py --json | python -c "
         import json, sys
         d = json.load(sys.stdin)
         pts = d.get('instrumentation_points', [])
-        print(f'Instrumentation: {len(pts)} points on macOS (${{ matrix.arch }})')
+        print(f'Instrumentation: {len(pts)} points on macOS ARM64')
         assert len(pts) >= 1
         "
-    - name: Verify doctor (no NEMB expected without cmake deps)
-      run: codegreen doctor || true
-    - name: Verify architecture
-      run: |
-        python -c "import platform; print(f'Platform: {platform.machine()} / {platform.system()}')"
+
         python -c "
-        import importlib, pathlib
+        import platform, importlib, pathlib
+        print(f'Platform: {platform.machine()} / {platform.system()}')
         pkg = pathlib.Path(importlib.import_module('codegreen').__file__).parent
         dylib = pkg / 'lib' / 'libcodegreen-nemb.dylib'
-        so = pkg / 'lib' / 'libcodegreen-nemb.so'
         if dylib.exists():
             print(f'NEMB: {dylib} ({dylib.stat().st_size} bytes)')
-        elif so.exists():
-            print(f'NEMB: {so} ({so.stat().st_size} bytes)')
         else:
-            print('NEMB: not built (Python-only install, expected on macOS without cmake deps)')
+            print('NEMB: not built (Python-only wheel)')
         "
+
+        codegreen doctor || true
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist, test-wheel, test-macos]
+    needs: [build-wheels, build-sdist, test-linux-wheel, test-macos-wheel]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
