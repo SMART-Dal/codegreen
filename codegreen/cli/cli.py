@@ -2272,49 +2272,40 @@ def run_command(
     - codegreen run --repeat 20 ./my_binary arg1 arg2
     - codegreen run --budget 10.0 python train.py
     """
-    import subprocess, time, re, tempfile, math
+    import subprocess, time, math
     from benchmark.results import StatisticalAnalysis
+
+    backend = _get_energy_backend()
+    if not json_output:
+        console.print(f"[dim]Energy backend: {backend.name}[/dim]")
 
     for i in range(warmup):
         if not json_output:
             console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
         subprocess.run(command, capture_output=True, timeout=300)
 
-    events = "power/energy-pkg/"
-    try:
-        r = subprocess.run(["perf", "list", "power"], capture_output=True, text=True, timeout=5)
-        if "energy-ram" in r.stdout:
-            events += ",power/energy-ram/"
-    except Exception:
-        pass
-
     energies, times = [], []
     for i in range(repeat):
         if not json_output:
             console.print(f"[dim]Run {i+1}/{repeat}[/dim]")
-        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
-            perf_file = f.name
-        try:
-            full = ["perf", "stat", "-e", events, "-o", perf_file, "--"] + command
-            start = time.perf_counter()
-            subprocess.run(full, capture_output=True, text=True, timeout=300)
-            elapsed = time.perf_counter() - start
-            times.append(elapsed)
-            content = open(perf_file).read()
-            total = 0.0
-            for m in re.finditer(r'([\d.,]+)\s+Joules', content):
-                total += float(m.group(1).replace(',', ''))
-            if total > 0:
-                energies.append(total)
-        finally:
-            import os
-            os.unlink(perf_file)
+        energy_j, elapsed = backend.measure(command)
+        times.append(elapsed)
+        if energy_j is not None and energy_j > 0:
+            energies.append(energy_j)
 
     if not energies:
+        msg = f"No energy data from {backend.name}"
+        if isinstance(backend, _TimeOnlyBackend):
+            msg += " (need perf on Linux or sudo powermetrics on macOS)"
         if json_output:
-            print(json.dumps({"success": False, "error": "No energy data (RAPL unavailable?)"}))
+            t_mean = sum(times) / len(times) if times else 0
+            print(json.dumps({"success": False, "error": msg,
+                              "time_seconds": {"mean": t_mean}}))
         else:
-            console.print("[red]No energy data collected. Is RAPL accessible?[/red]")
+            console.print(f"[red]{msg}[/red]")
+            if times:
+                t_stats = StatisticalAnalysis.summarize(times)
+                console.print(f"[bold]Time:[/bold] {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
         raise typer.Exit(1)
 
     e_stats = StatisticalAnalysis.summarize(energies)
@@ -2340,6 +2331,124 @@ def run_command(
                 raise typer.Exit(1)
             else:
                 console.print(f"[green]Within budget: {e_stats.mean:.4f}J <= {budget}J[/green]")
+
+
+class _EnergyBackend:
+    """Base class for CLI energy measurement backends. New platforms add a subclass."""
+    name: str = "unknown"
+    def is_available(self) -> bool: return False
+    def measure(self, command: list, timeout: int = 300) -> tuple:
+        """Returns (energy_joules or None, elapsed_seconds)."""
+        raise NotImplementedError
+    def wrap_command(self, cmd_str: str, perf_file: str, checkpoint_file: str) -> str:
+        """Wrap a shell command for energy measurement + checkpoint capture.
+        Used by project mode. Returns shell command string."""
+        return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
+    def parse_energy(self, perf_file: str) -> float:
+        """Parse energy from the output file. Returns joules or 0."""
+        return 0.0
+
+
+class _PerfBackend(_EnergyBackend):
+    name = "perf (Linux RAPL)"
+    def is_available(self) -> bool:
+        import shutil
+        return sys.platform == "linux" and shutil.which("perf") is not None
+    def _events(self) -> str:
+        import subprocess
+        events = "power/energy-pkg/"
+        try:
+            r = subprocess.run(["perf", "list", "power"], capture_output=True, text=True, timeout=5)
+            if "energy-ram" in r.stdout:
+                events += ",power/energy-ram/"
+        except Exception:
+            pass
+        return events
+    def measure(self, command: list, timeout: int = 300) -> tuple:
+        import subprocess, time, tempfile, os
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            pf = f.name
+        try:
+            full = ["perf", "stat", "-e", self._events(), "-o", pf, "--"] + command
+            start = time.perf_counter()
+            subprocess.run(full, capture_output=True, text=True, timeout=timeout)
+            elapsed = time.perf_counter() - start
+            energy = self.parse_energy(pf)
+            return (energy if energy > 0 else None, elapsed)
+        finally:
+            os.unlink(pf)
+    def wrap_command(self, cmd_str: str, perf_file: str, checkpoint_file: str) -> str:
+        return f"perf stat -e {self._events()} -o {perf_file} -- bash -c '{cmd_str} 2>{checkpoint_file}'"
+    def parse_energy(self, perf_file: str) -> float:
+        import re
+        try:
+            content = open(perf_file).read()
+            total = 0.0
+            for m in re.finditer(r'([\d.,]+)\s+Joules', content):
+                total += float(m.group(1).replace(',', ''))
+            return total
+        except Exception:
+            return 0.0
+
+
+class _PowermetricsBackend(_EnergyBackend):
+    name = "powermetrics (macOS IOReport)"
+    def is_available(self) -> bool:
+        import shutil
+        return sys.platform == "darwin" and shutil.which("powermetrics") is not None
+    def measure(self, command: list, timeout: int = 300) -> tuple:
+        import subprocess, time, tempfile, os, re
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            pm_file = f.name
+        try:
+            proc = subprocess.Popen(
+                ["sudo", "-n", "powermetrics", "--samplers", "cpu_power",
+                 "-i", "100", "-o", pm_file],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.2)
+            start = time.perf_counter()
+            subprocess.run(command, capture_output=True, timeout=timeout)
+            elapsed = time.perf_counter() - start
+            time.sleep(0.3)
+            proc.terminate()
+            try: proc.wait(timeout=5)
+            except: proc.kill()
+            mw_samples = []
+            try:
+                for line in open(pm_file):
+                    if "Combined Power" in line or "CPU Power" in line:
+                        import re as _re
+                        m = _re.search(r'(\d+)\s*mW', line)
+                        if m: mw_samples.append(int(m.group(1)))
+            except Exception:
+                pass
+            if mw_samples:
+                return ((sum(mw_samples) / len(mw_samples) / 1000.0) * elapsed, elapsed)
+            return (None, elapsed)
+        finally:
+            os.unlink(pm_file)
+    def wrap_command(self, cmd_str: str, perf_file: str, checkpoint_file: str) -> str:
+        return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
+
+
+class _TimeOnlyBackend(_EnergyBackend):
+    name = "time-only (no energy)"
+    def is_available(self) -> bool: return True
+    def measure(self, command: list, timeout: int = 300) -> tuple:
+        import subprocess, time
+        start = time.perf_counter()
+        subprocess.run(command, capture_output=True, timeout=timeout)
+        return (None, time.perf_counter() - start)
+
+
+_ENERGY_BACKENDS = [_PerfBackend(), _PowermetricsBackend(), _TimeOnlyBackend()]
+
+def _get_energy_backend() -> _EnergyBackend:
+    """Auto-detect best available energy backend. Extensible: add new backends to _ENERGY_BACKENDS."""
+    for b in _ENERGY_BACKENDS:
+        if b.is_available():
+            return b
+    return _TimeOnlyBackend()
 
 
 def _load_language_config(language: str) -> dict:
@@ -2704,28 +2813,22 @@ def project_energy(
             if cores:
                 full_cmd = f"taskset -c {cores} {full_cmd}"
 
-            # Run with perf stat for total energy + capture stderr for checkpoints
-            perf_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+            energy_backend = _get_energy_backend()
+            energy_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
             checkpoint_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
 
-            # Run: perf stat wrapping the command, stderr goes to checkpoint_file
-            perf_cmd = f"perf stat -e power/energy-pkg/ -o {perf_file} -- bash -c '{full_cmd} 2>{checkpoint_file}'"
+            wrapped = energy_backend.wrap_command(full_cmd, energy_file, checkpoint_file)
             start_time = time.perf_counter()
             run_result = subprocess.run(
-                perf_cmd, shell=True, cwd=str(project_dir),
+                wrapped, shell=True, cwd=str(project_dir),
                 capture_output=True, text=True, timeout=3600)
             wall_time = time.perf_counter() - start_time
 
-            # Parse perf stat for total energy
-            total_energy_j = 0.0
+            total_energy_j = energy_backend.parse_energy(energy_file)
             try:
-                perf_content = open(perf_file).read()
-                for m in re.finditer(r'([\d.,]+)\s+Joules', perf_content):
-                    total_energy_j += float(m.group(1).replace(',', ''))
-            except Exception:
+                os.unlink(energy_file)
+            except OSError:
                 pass
-            finally:
-                os.unlink(perf_file)
 
             # Parse checkpoints with per-thread call stacks for inclusive/exclusive
             func_data = {}  # name -> {inclusive_uj, exclusive_uj, time_ns, calls}
