@@ -1,6 +1,21 @@
 # Changelog
 
-## v0.3.0 (Current)
+## v0.3.1 (Current)
+
+### Windows 11 Energy Measurement
+- WindowsEMIProvider: RAPL energy via inbox `intelpep.sys` driver (PKG, PP0/cores, PP1/iGPU, DRAM)
+- Zero driver install, HVCI-compatible, cumulative picowatt-hours via PDH Performance Counters
+- Verified on i7-1165G7: idle 47W, load 80W, 4 RAPL domains
+- PrecisionTimer: QueryPerformanceCounter path for Windows timestamps
+
+### Fixes
+- Python 3.9 compatibility: `from __future__ import annotations` in setup.py (fixes `Path | None` TypeError)
+- Removed legacy codegreen-core C++ code (2,565 lines deleted, moved to archive/)
+- Removed jsoncpp, curl, sqlite build dependencies (only NEMB remains)
+- CMakeLists.txt simplified: single `codegreen-nemb` target, no platform-conditional legacy guards
+- Version display reads from `__version__` (was hardcoded 0.1.0 in CLI)
+
+## v0.3.0
 
 ### Cross-Platform Energy Measurement
 - **macOS**: DarwinIOReportProvider via `libIOReport.dylib` (CPU, GPU, ANE, DRAM), DarwinKPCProvider via `kperf.framework` (~200ns exact hardware counters), per-channel unit handling (mJ/nJ via `IOReportChannelGetUnitLabel`), `mach_continuous_time` precision timer (~42ns)
