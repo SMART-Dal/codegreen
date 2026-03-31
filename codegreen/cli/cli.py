@@ -2387,10 +2387,12 @@ class _NEMBBackend(_EnergyBackend):
             return self._lib
         import ctypes
         pkg_root = Path(__file__).resolve().parent.parent
-        for name in ["libcodegreen-nemb.dylib", "libcodegreen-nemb.so"]:
-            for d in [pkg_root / "lib", pkg_root.parent / "lib", pkg_root.parent / "build" / "lib"]:
-                p = d / name
-                if p.exists():
+        search_dirs = [pkg_root / "lib", pkg_root.parent / "lib", pkg_root.parent / "build" / "lib"]
+        for d in search_dirs:
+            if not d.is_dir():
+                continue
+            for p in d.glob("*codegreen-nemb*"):
+                if p.suffix in (".so", ".dylib", ".dll"):
                     try:
                         self._lib = ctypes.CDLL(str(p))
                         return self._lib

@@ -58,6 +58,11 @@ set(NEMB_SOURCES
 
 add_library(codegreen-nemb SHARED ${NEMB_SOURCES})
 
+# Export all symbols on Windows so ctypes can find C API functions.
+# On Linux/macOS all symbols are exported by default; on MSVC nothing
+# is exported unless marked with __declspec(dllexport) or this property.
+set_target_properties(codegreen-nemb PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
 target_include_directories(codegreen-nemb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
