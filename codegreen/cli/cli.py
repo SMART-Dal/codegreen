@@ -669,7 +669,7 @@ def test_configuration(config: Dict[str, Any]) -> Dict[str, Any]:
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    debug: Annotated[bool, typer.Option("--debug", help="Enable debug output")] = False,
+    debug: Annotated[bool, typer.Option("--debug", "--verbose", help="Enable verbose diagnostic output")] = False,
     config: Annotated[Optional[Path], typer.Option("--config", help="Path to configuration file")] = None,
     version: Annotated[bool, typer.Option("--version", "-v", help="Show version and exit")] = False,
     log_level: Annotated[LogLevel, typer.Option("--log-level", help="Set logging level")] = LogLevel.INFO,
@@ -708,14 +708,53 @@ def main(
         console.print(ctx.get_help())
         raise typer.Exit()
     
-    # Set environment variables
     if debug:
         os.environ['CODEGREEN_DEBUG'] = '1'
     if config:
         os.environ['CODEGREEN_CONFIG'] = str(config)
-    
-    # Set log level
     os.environ['CODEGREEN_LOG_LEVEL'] = log_level.value
+
+    if debug:
+        import platform as _pf
+        pkg_root = Path(__file__).resolve().parent.parent
+        console.print(f"\n[bold]CodeGreen Diagnostics:[/bold]")
+        console.print(f"  Version:    {_VERSION}")
+        console.print(f"  Platform:   {_pf.system()} {_pf.machine()}")
+        console.print(f"  OS:         {_pf.platform()}")
+        console.print(f"  Python:     {sys.version.split()[0]} ({sys.executable})")
+        console.print(f"  Package:    {pkg_root}")
+        # NEMB library check
+        nemb_files = list((pkg_root / "lib").glob("*codegreen-nemb*")) if (pkg_root / "lib").is_dir() else []
+        if nemb_files:
+            for f in nemb_files:
+                console.print(f"  NEMB lib:   {f.name} ({f.stat().st_size} bytes)")
+        else:
+            console.print(f"  NEMB lib:   [red]NOT FOUND[/red] in {pkg_root / 'lib'}")
+        # Energy backend detection
+        try:
+            backend = _get_energy_backend()
+            console.print(f"  Backend:    {backend.name}")
+            if not isinstance(backend, _NEMBBackend):
+                console.print(f"  NEMB skip:  fell to {backend.name}")
+                try:
+                    import ctypes
+                    test = _NEMBBackend()
+                    lib = test._load()
+                    if not lib:
+                        console.print(f"  NEMB reason: library not loadable")
+                    elif lib is not False:
+                        lib.nemb_initialize.restype = ctypes.c_int
+                        r = lib.nemb_initialize()
+                        console.print(f"  NEMB init:  returned {r} ({'OK' if r == 1 else 'no energy providers found'})")
+                except Exception as e:
+                    console.print(f"  NEMB error: {e}")
+            console.print(f"  All backends: {', '.join(f'{b.name}(avail={b.is_available()})' for b in sorted(_ENERGY_BACKENDS, key=lambda x: -x.priority))}")
+        except Exception as e:
+            console.print(f"  Backend error: {e}")
+        # Config
+        cfg_path = get_config_path()
+        console.print(f"  Config:     {cfg_path or 'not found'}")
+        console.print()
 
 @app.command("measure")
 def measure_energy(
