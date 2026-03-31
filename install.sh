@@ -41,12 +41,33 @@ if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR"
 fi
 echo "[ok] Python $PYTHON_VERSION"
 
-for tool in cmake make g++; do
-    if ! command -v $tool &> /dev/null; then
-        echo "Error: $tool not found. Install with: sudo apt install build-essential cmake"
-        exit 1
-    fi
+# Check build dependencies
+MISSING_TOOLS=()
+for tool in cmake make; do
+    command -v $tool &> /dev/null || MISSING_TOOLS+=($tool)
 done
+if ! command -v g++ &> /dev/null && ! command -v clang++ &> /dev/null; then
+    MISSING_TOOLS+=("c++ compiler")
+fi
+
+if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+    echo ""
+    echo "Missing build tools: ${MISSING_TOOLS[*]}"
+    echo ""
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "Install with:  brew install cmake"
+        echo "               xcode-select --install  (for C++ compiler)"
+    elif command -v apt &> /dev/null; then
+        echo "Install with:  sudo apt install cmake build-essential"
+    elif command -v dnf &> /dev/null; then
+        echo "Install with:  sudo dnf install cmake gcc-c++ make"
+    elif command -v yum &> /dev/null; then
+        echo "Install with:  sudo yum install cmake gcc-c++ make"
+    fi
+    echo ""
+    echo "Then re-run: ./install.sh"
+    exit 1
+fi
 echo "[ok] CMake $(cmake --version | head -1 | awk '{print $3}')"
 echo "[ok] g++ $(g++ --version | head -1 | awk '{print $NF}')"
 
