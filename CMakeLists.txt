@@ -120,37 +120,33 @@ endif()
 # Instrumentation is now Python-based, no C++ build needed
 # add_subdirectory(codegreen/instrumentation)
 
-# Main executable
-add_executable(codegreen 
-    codegreen/measurement/main.cpp
-)
-
-# Ensure instrumentation files are synced before building main executable
-add_dependencies(codegreen sync_instrumentation)
-
-# Link all libraries
-target_link_libraries(codegreen PRIVATE
-    codegreen-core
-    codegreen-nemb
-    ${JSONCPP_LIBRARIES}
-    ${CURL_LIBRARIES}
-    Threads::Threads
-)
-
-target_include_directories(codegreen PRIVATE
-    ${CMAKE_SOURCE_DIR}/codegreen/measurement/include
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/include
-    ${JSONCPP_INCLUDE_DIRS}
-    ${CURL_INCLUDE_DIRS}
-)
-
-# Compiler-specific options
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(codegreen PRIVATE 
-        -Wall -Wextra -Wno-unused-parameter
-        $<$<CONFIG:Debug>:-g -O0>
-        $<$<CONFIG:Release>:-O3 -DNDEBUG>
+# Main executable (requires jsoncpp/curl/sqlite -- Linux only)
+# On macOS, only codegreen-nemb is built; the Python CLI handles everything.
+if(NOT APPLE)
+    add_executable(codegreen
+        codegreen/measurement/main.cpp
     )
+    add_dependencies(codegreen sync_instrumentation)
+    target_link_libraries(codegreen PRIVATE
+        codegreen-core
+        codegreen-nemb
+        ${JSONCPP_LIBRARIES}
+        ${CURL_LIBRARIES}
+        Threads::Threads
+    )
+    target_include_directories(codegreen PRIVATE
+        ${CMAKE_SOURCE_DIR}/codegreen/measurement/include
+        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/include
+        ${JSONCPP_INCLUDE_DIRS}
+        ${CURL_INCLUDE_DIRS}
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(codegreen PRIVATE
+            -Wall -Wextra -Wno-unused-parameter
+            $<$<CONFIG:Debug>:-g -O0>
+            $<$<CONFIG:Release>:-O3 -DNDEBUG>
+        )
+    endif()
 endif()
 
 # Copy runtime modules to build directory with dependency tracking
@@ -249,13 +245,23 @@ install(TARGETS codegreen
 )
 
 # Create development bin directory and copy binary for CLI integration
+if(NOT APPLE)
+    set(_DEV_INSTALL_DEPENDS codegreen)
+    set(_DEV_INSTALL_BINARY_CMDS
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
+    )
+else()
+    set(_DEV_INSTALL_DEPENDS codegreen-nemb)
+    set(_DEV_INSTALL_BINARY_CMDS "")
+endif()
+
 add_custom_target(dev-install ALL
-    DEPENDS codegreen
+    DEPENDS ${_DEV_INSTALL_DEPENDS}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
+    ${_DEV_INSTALL_BINARY_CMDS}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb${CMAKE_SHARED_LIBRARY_SUFFIX} ${CMAKE_SOURCE_DIR}/lib/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/

@@ -59,21 +59,26 @@ set(NEMB_SOURCES
     ${NEMB_CONFIG_SOURCES}
 )
 
-# Create core library (legacy CodeGreen)
-add_library(codegreen-core STATIC ${CORE_SOURCES})
+# Legacy core library (requires jsoncpp/curl/sqlite -- Linux only)
+if(NOT APPLE)
+    add_library(codegreen-core STATIC ${CORE_SOURCES})
+    target_include_directories(codegreen-core PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${JSONCPP_INCLUDE_DIRS}
+        ${SQLITE3_INCLUDE_DIRS}
+    )
+    target_compile_definitions(codegreen-core PRIVATE CODECREEN_CORE_EXPORTS)
+    target_link_libraries(codegreen-core
+        ${JSONCPP_LIBRARIES}
+        Threads::Threads
+        ${SQLITE3_LIBRARIES}
+    )
+endif()
 
-# Create NEMB library
+# NEMB library (cross-platform)
 add_library(codegreen-nemb SHARED ${NEMB_SOURCES})
 
-# Set include directories for legacy core
-target_include_directories(codegreen-core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${JSONCPP_INCLUDE_DIRS}
-    ${SQLITE3_INCLUDE_DIRS}
-)
-
-# Set include directories for NEMB
 target_include_directories(codegreen-nemb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -84,22 +89,7 @@ if(JNI_FOUND)
     target_compile_definitions(codegreen-nemb PRIVATE HAVE_JNI)
 endif()
 
-# Set compile definitions for legacy core
-target_compile_definitions(codegreen-core PRIVATE
-    CODECREEN_CORE_EXPORTS
-)
-
-# Set compile definitions for NEMB
-target_compile_definitions(codegreen-nemb PRIVATE
-    NEMB_EXPORTS
-)
-
-# Link libraries for legacy core
-target_link_libraries(codegreen-core
-    ${JSONCPP_LIBRARIES}
-    Threads::Threads
-    ${SQLITE3_LIBRARIES}
-)
+target_compile_definitions(codegreen-nemb PRIVATE NEMB_EXPORTS)
 
 # Link libraries for NEMB
 target_link_libraries(codegreen-nemb
