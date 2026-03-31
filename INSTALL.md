@@ -343,11 +343,14 @@ The source distribution (sdist) is a fallback: if a user's platform has no pre-b
 
 | Platform | Pre-built wheel | From source | Energy measurement | Backend |
 |----------|----------------|-------------|-------------------|---------|
-| Linux x86_64 (Intel/AMD) | Yes | Yes | Full | RAPL + NVML + ROCm |
+| Linux x86_64 (Intel) | Yes | Yes | Full (PKG, core, iGPU, DRAM) | RAPL + NVML |
+| Linux x86_64 (AMD) | Yes | Yes | Full (PKG, no DRAM) | RAPL + ROCm. Verified: EPYC 9554P |
 | Linux ARM64 | No | Yes (cmake + deps) | RAPL if available | RAPL |
-| macOS ARM64 (Apple Silicon) | Yes | Yes (brew + cmake) | Full | IOReport + kpc |
+| macOS ARM64 (Apple Silicon) | Yes | Yes (brew + cmake) | Full (CPU, GPU, ANE, DRAM) | IOReport + kpc |
 | macOS Intel | No | Yes (brew + cmake) | Full | IOReport |
-| Windows 11 (Intel/AMD) | No | Yes (cmake + VS) | Full | EMI (RAPL via intelpep.sys) |
+| Windows 11 (Intel) | No | Yes (cmake + VS) | Full (PKG, core, iGPU, DRAM) | EMI via intelpep.sys. Verified: i7-1165G7 |
+| Windows 11 (AMD) | No | Yes (cmake + VS) | Unverified | EMI may not expose AMD RAPL |
+| NVIDIA GPU (any OS) | Automatic | N/A | Full (cumulative mJ) | NVML. Verified: RTX 5000 Ada |
 | Windows 10 | No | No | Not supported | EMI unavailable |
 
 ### Common CI/CD Failures

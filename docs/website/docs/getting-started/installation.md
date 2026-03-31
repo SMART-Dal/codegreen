@@ -111,10 +111,10 @@ CodeGreen's NEMB (Native Energy Measurement Backend) auto-detects available ener
 
 | Sensor | Requirements | Description |
 |--------|--------------|-------------|
-| **Intel RAPL** | Intel CPU | CPU package, core, DRAM energy via `/sys/class/powercap` |
-| **AMD RAPL** | AMD CPU (EPYC, Ryzen) | CPU package energy via RAPL interface (no separate DRAM counter on AMD) |
-| **NVIDIA NVML** | NVIDIA GPU + drivers 450.80+ | GPU power via NVML library |
-| **AMD ROCm** | AMD GPU + ROCm | GPU power via ROCm SMI |
+| **Intel RAPL** | Intel CPU | CPU package, core, iGPU, DRAM energy via `/sys/class/powercap` |
+| **AMD RAPL** | AMD CPU (EPYC, Ryzen 3000+) | CPU package energy via RAPL interface. Verified on EPYC 9554P (Zen 4). No separate DRAM counter on AMD. |
+| **NVIDIA NVML** | NVIDIA GPU + drivers 450.80+ | GPU cumulative energy (mJ). Verified on RTX 5000 Ada. |
+| **AMD ROCm** | AMD GPU + ROCm SMI | GPU power via ROCm SMI |
 
 ### macOS
 
@@ -127,7 +127,7 @@ CodeGreen's NEMB (Native Energy Measurement Backend) auto-detects available ener
 
 | Sensor | Requirements | Description |
 |--------|--------------|-------------|
-| **EMI (Energy Metering Interface)** | Windows 11, Intel CPU (11th gen+) | RAPL PKG, cores, iGPU, DRAM via inbox `intelpep.sys` driver. Zero install. |
+| **EMI (Energy Metering Interface)** | Windows 11, Intel CPU (11th gen+) | RAPL PKG, cores, iGPU, DRAM via inbox `intelpep.sys` driver. Zero install. Verified on i7-1165G7. |
 | **NVML** | NVIDIA GPU + drivers 450.80+ | GPU energy via `nvml.dll` (cumulative mJ). User-mode, no admin. |
 
 Windows 11's inbox Intel Power Engine Plugin (`intelpep.sys`) exposes RAPL counters through the documented Energy Metering Interface (EMI). Same hardware-integrated cumulative energy as Linux RAPL. Domains: `RAPL_Package0_PKG`, `RAPL_Package0_PP0` (cores), `RAPL_Package0_PP1` (iGPU), `RAPL_Package0_DRAM`. AMD CPU support on Windows via EMI is unconfirmed (intelpep.sys is Intel-specific; AMD may not expose RAPL via EMI). Windows 10 does not expose RAPL via EMI. NVML GPU energy works on Windows without admin.

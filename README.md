@@ -37,10 +37,13 @@ sudo codegreen run -- python script.py
 
 | Platform | pip install | Energy measurement | Backend |
 |----------|------------|-------------------|---------|
-| Linux x86_64 (Intel/AMD) | Pre-built wheel | Full | RAPL via NEMB |
-| macOS ARM64 (Apple Silicon) | Pre-built wheel | Full | IOReport + kpc via NEMB |
+| Linux x86_64 (Intel) | Pre-built wheel | Full (PKG, core, iGPU, DRAM) | RAPL via NEMB |
+| Linux x86_64 (AMD) | Pre-built wheel | Full (PKG, no DRAM counter) | RAPL via NEMB |
+| macOS ARM64 (Apple Silicon) | Pre-built wheel | Full (CPU, GPU, ANE, DRAM) | IOReport + kpc via NEMB |
 | macOS Intel | From source | Full | IOReport via NEMB |
-| Windows 11 (Intel/AMD) | From source | Full | EMI (RAPL via intelpep.sys) |
+| Windows 11 (Intel) | From source | Full (PKG, core, iGPU, DRAM) | EMI via intelpep.sys |
+| Windows 11 (AMD) | From source | Unverified | EMI may not expose AMD RAPL |
+| NVIDIA GPU (any OS) | Automatic | Full (cumulative mJ) | NVML |
 | Other | From source | Time-only | Fallback |
 
 ### Requirements
