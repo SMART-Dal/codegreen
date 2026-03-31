@@ -36,6 +36,12 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
+      - name: Update changelog version from pyproject.toml
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          sed -i "s/## v[0-9.]* (Current)/## v${VERSION} (Current)/" docs/website/docs/about/changelog.md
+          echo "Changelog version set to v${VERSION}"
+
       - name: Build documentation
         run: |
           cd docs/website
