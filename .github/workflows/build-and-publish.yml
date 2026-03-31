@@ -240,15 +240,16 @@ jobs:
     - name: Install and test
       shell: pwsh
       run: |
-        $whl = Get-ChildItem wheelhouse/*.whl | Select-Object -First 1
+        $pyver = "${{ matrix.python-version }}".Replace(".", "")
+        $whl = Get-ChildItem wheelhouse/*cp${pyver}*win*.whl | Select-Object -First 1
+        if (-not $whl) { $whl = Get-ChildItem wheelhouse/*.whl | Select-Object -First 1 }
         pip install $whl.FullName
 
         codegreen --version
         codegreen --help
 
-        "def fib(n): return fib(n-1)+fib(n-2) if n>1 else n" | Out-File -Encoding utf8 test.py
-        codegreen analyze python test.py --json | python -c "import json,sys;d=json.load(sys.stdin);print(f'Instrumentation: {len(d.get(chr(105)+chr(110)+chr(115)+chr(116)+chr(114)+chr(117)+chr(109)+chr(101)+chr(110)+chr(116)+chr(97)+chr(116)+chr(105)+chr(111)+chr(110)+chr(95)+chr(112)+chr(111)+chr(105)+chr(110)+chr(116)+chr(115),[]))} points')"
-
+        python -c "open('test.py','w').write('def fib(n): return fib(n-1)+fib(n-2) if n>1 else n\n')"
+        codegreen analyze python test.py --json
         codegreen doctor
 
   publish-pypi:
