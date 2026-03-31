@@ -6,7 +6,7 @@
 
     ---
 
-    Hardware-level energy monitoring via RAPL (Linux), IOReport (macOS), NVML, and ROCm with sub-millisecond resolution.
+    Hardware-level energy monitoring via RAPL (Linux), IOReport (macOS), EMI (Windows), NVML, and ROCm with sub-millisecond resolution.
 
     [:octicons-arrow-right-24: Getting Started](getting-started/quickstart.md)
 
@@ -50,7 +50,7 @@ CodeGreen is an energy measurement tool that helps developers understand the ene
 
 ### Key Features
 
-- **Energy Measurement**: Per-function energy attribution via RAPL (Linux), IOReport + kpc (macOS), NVML, ROCm
+- **Energy Measurement**: Per-function energy attribution via RAPL (Linux), IOReport + kpc (macOS), EMI (Windows), NVML, ROCm
 - **Quick Measurement**: `codegreen run` measures energy of any shell command (like hyperfine for energy)
 - **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
 - **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
@@ -116,15 +116,15 @@ Get started with CodeGreen in just a few steps:
 
     Apple Silicon energy via IOReport (CPU/GPU/ANE/DRAM) + kpc hardware perf counters. Pre-built ARM64 wheels on PyPI.
 
--   :material-microsoft-windows:{ .lg .middle } **Windows**
+-   :material-microsoft-windows:{ .lg .middle } **Windows 11**
 
     ---
 
-    CLI and static analysis available. Energy measurement planned for future release.
+    RAPL energy via EMI (inbox intelpep.sys driver). PKG, cores, iGPU, DRAM domains. Zero driver install.
 
 </div>
 
-Pre-built wheels for Linux x86_64 and macOS ARM64. Other platforms: install from source or use time-only mode.
+Pre-built wheels for Linux x86_64 and macOS ARM64. Windows and other platforms: install from source.
 
 ## Citing CodeGreen
 

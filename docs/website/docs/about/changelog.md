@@ -2,11 +2,10 @@
 
 ## v0.3.0 (Current)
 
-### macOS Apple Silicon Support
-- DarwinIOReportProvider: energy measurement via `libIOReport.dylib` (CPU, GPU, ANE, DRAM domains)
-- DarwinKPCProvider: exact hardware perf counters via `kperf.framework` (~200ns per read, cycles/instructions/cache misses/branch misses)
-- Per-channel IOReport unit handling (mJ for most channels, nJ for GPU Energy) via `IOReportChannelGetUnitLabel`
-- PrecisionTimer: `mach_continuous_time` path for ARM generic timer (~42ns resolution, no kernel transition)
+### Cross-Platform Energy Measurement
+- **macOS**: DarwinIOReportProvider via `libIOReport.dylib` (CPU, GPU, ANE, DRAM), DarwinKPCProvider via `kperf.framework` (~200ns exact hardware counters), per-channel unit handling (mJ/nJ via `IOReportChannelGetUnitLabel`), `mach_continuous_time` precision timer (~42ns)
+- **Windows 11**: WindowsEMIProvider via PDH Energy Meter counters (RAPL PKG, PP0, PP1, DRAM via inbox `intelpep.sys` driver). Zero driver install, HVCI-compatible, cumulative picowatt-hours converted to joules
+- **Linux**: existing IntelRAPLProvider, AMDRAPLProvider, NvidiaGPUProvider, AMDGPUProvider unchanged
 - Pre-built macOS ARM64 wheels on PyPI (no cmake/brew required for users)
 
 ### Platform-Aware Energy Backends

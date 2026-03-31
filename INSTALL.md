@@ -347,7 +347,8 @@ The source distribution (sdist) is a fallback: if a user's platform has no pre-b
 | Linux ARM64 | No | Yes (cmake + deps) | RAPL if available | RAPL |
 | macOS ARM64 (Apple Silicon) | Yes | Yes (brew + cmake) | Full | IOReport + kpc |
 | macOS Intel | No | Yes (brew + cmake) | Full | IOReport |
-| Windows | No | No | Time-only | Fallback |
+| Windows 11 (Intel/AMD) | No | Yes (cmake + VS) | Full | EMI (RAPL via intelpep.sys) |
+| Windows 10 | No | No | Not supported | EMI unavailable |
 
 ### Common CI/CD Failures
 

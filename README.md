@@ -40,6 +40,7 @@ sudo codegreen run -- python script.py
 | Linux x86_64 (Intel/AMD) | Pre-built wheel | Full | RAPL via NEMB |
 | macOS ARM64 (Apple Silicon) | Pre-built wheel | Full | IOReport + kpc via NEMB |
 | macOS Intel | From source | Full | IOReport via NEMB |
+| Windows 11 (Intel/AMD) | From source | Full | EMI (RAPL via intelpep.sys) |
 | Other | From source | Time-only | Fallback |
 
 ### Requirements
@@ -47,6 +48,7 @@ sudo codegreen run -- python script.py
 - Python 3.9+
 - Linux: kernel 5.0+, Intel/AMD CPU with RAPL support
 - macOS: Apple Silicon (M1-M5) or Intel, sudo for energy measurement
+- Windows 11: Intel/AMD CPU (EMI via inbox intelpep.sys driver, zero install)
 - Source builds: CMake 3.16+, C++17 compiler
 
 ## Usage
@@ -124,7 +126,7 @@ Features: Ball & Larus branch heuristics, SCC-based hot path computation, three-
 
 ## Architecture
 
-- **C++ NEMB backend**: platform-aware energy measurement (RAPL on Linux, IOReport on macOS), sub-microsecond timestamping, background polling with lock-free ring buffers
+- **C++ NEMB backend**: platform-aware energy measurement (RAPL on Linux, IOReport on macOS, EMI on Windows), sub-microsecond timestamping, background polling with lock-free ring buffers
 - **Python instrumentation**: tree-sitter AST analysis, config-driven checkpoint insertion
 - **Energy Flow Graph**: CFG + energy annotation for path-dependent analysis
 - **Benchmark harness**: multi-suite support (benchmarksgame, PerfOpt), statistical analysis with t-distribution CI, IQR outlier detection, profiler comparison
