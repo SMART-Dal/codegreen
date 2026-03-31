@@ -2301,7 +2301,7 @@ def run_command(
     if not energies:
         msg = f"No energy data from {backend.name}"
         if isinstance(backend, _TimeOnlyBackend):
-            msg += " (need perf on Linux or sudo powermetrics on macOS)"
+            msg += " (need perf on Linux, or NEMB library not found)"
         if json_output:
             t_mean = sum(times) / len(times) if times else 0
             print(json.dumps({"success": False, "error": msg,

@@ -29,8 +29,7 @@ cd codegreen
 # Linux: RAPL sensor access (one-time, requires sudo):
 sudo ./install.sh   # or: sudo codegreen init-sensors
 
-# macOS: energy measurement requires sudo (IOReport access):
-sudo codegreen run -- python script.py
+# macOS: no setup needed, energy measurement works out of the box
 ```
 
 ### Platform support
@@ -50,7 +49,7 @@ sudo codegreen run -- python script.py
 
 - Python 3.9+
 - Linux: kernel 5.0+, Intel/AMD CPU with RAPL support
-- macOS: Apple Silicon (M1-M5) or Intel, sudo for energy measurement
+- macOS: Apple Silicon (M1-M5) or Intel, no setup needed
 - Windows 11: Intel/AMD CPU (EMI via inbox intelpep.sys driver, zero install)
 - Source builds: CMake 3.16+, C++17 compiler
 

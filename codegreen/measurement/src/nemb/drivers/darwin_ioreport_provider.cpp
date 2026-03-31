@@ -80,7 +80,7 @@ bool DarwinIOReportProvider::load_symbols() {
 bool DarwinIOReportProvider::setup_subscription() {
     CFDictionaryRef channels = copy_channels_in_group_(CFSTR("Energy Model"), NULL, NULL);
     if (!channels) {
-        std::cerr << " [darwin_ioreport] no 'Energy Model' channels (need root)" << std::endl;
+        std::cerr << " [darwin_ioreport] no 'Energy Model' channels available" << std::endl;
         return false;
     }
 
@@ -88,7 +88,7 @@ bool DarwinIOReportProvider::setup_subscription() {
     CFRelease(channels);
 
     if (!sub_handle_ || !subbed_channels_) {
-        std::cerr << " [darwin_ioreport] CreateSubscription failed (need root)" << std::endl;
+        std::cerr << " [darwin_ioreport] CreateSubscription failed" << std::endl;
         return false;
     }
 
