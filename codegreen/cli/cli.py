@@ -2347,6 +2347,20 @@ def run_command(
         console.print(f"[bold]Time:[/bold]   {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
         console.print(f"[bold]Power:[/bold]  {e_stats.mean / t_stats.mean:.2f} W (avg)")
         console.print(f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}")
+
+        # Per-domain energy breakdown (dynamically detected from hardware)
+        if isinstance(backend, _NEMBBackend):
+            domains = backend.get_last_domain_breakdown()
+            if domains:
+                console.print(f"\n[bold]Domain Breakdown:[/bold]")
+                total_reported = sum(v for v in domains.values() if v > 0)
+                for domain, joules in sorted(domains.items(), key=lambda x: -x[1]):
+                    if joules <= 0: continue
+                    pct = (joules / total_reported * 100) if total_reported > 0 else 0
+                    bar_len = int(pct / 5)
+                    bar = "[green]" + "=" * bar_len + "[/green]" + " " * (20 - bar_len)
+                    console.print(f"  {domain:<25} {joules:>10.4f} J  {bar} {pct:5.1f}%")
+
         if cv > 20:
             console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
         if budget is not None:
@@ -2427,7 +2441,21 @@ class _NEMBBackend(_EnergyBackend):
         energy = ctypes.c_double(0)
         power = ctypes.c_double(0)
         ok = lib.nemb_stop_session(sid, ctypes.byref(energy), ctypes.byref(power))
+        # Fetch per-domain breakdown (post-hoc, no measurement overhead)
+        self._last_domains = {}
+        try:
+            buf = ctypes.create_string_buffer(4096)
+            lib.nemb_get_domain_energy_json.restype = ctypes.c_int
+            lib.nemb_get_domain_energy_json.argtypes = [ctypes.c_char_p, ctypes.c_int]
+            n = lib.nemb_get_domain_energy_json(buf, 4096)
+            if n > 0:
+                self._last_domains = json.loads(buf.value.decode())
+        except Exception:
+            pass
         return (energy.value if ok and energy.value > 0 else None, elapsed)
+
+    def get_last_domain_breakdown(self) -> dict:
+        return getattr(self, '_last_domains', {})
 
     def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
         # NEMB measures in-process; for project mode, just run the command and

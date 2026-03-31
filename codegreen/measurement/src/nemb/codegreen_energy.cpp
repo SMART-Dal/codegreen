@@ -275,6 +275,12 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
     result.power_watts = sync_reading.total_system_power_watts;
     result.timestamp_ns = sync_reading.common_timestamp_ns;
     result.is_valid = true;
+    // Aggregate per-domain breakdown from all providers
+    for (auto& pr : sync_reading.provider_readings) {
+        for (auto& [domain, joules] : pr.domain_energy_joules) {
+            if (joules >= 0) result.components[domain] = joules;
+        }
+    }
     return result;
 }
 
@@ -351,6 +357,17 @@ EnergyDifference calculate_difference(const EnergyResult& e, const EnergyResult&
         d.energy_joules = e.energy_joules - s.energy_joules;
         d.duration_seconds = (e.timestamp_ns - s.timestamp_ns) / 1e9;
         if(d.duration_seconds > 0) d.average_power_watts = d.energy_joules / d.duration_seconds;
+        // Per-domain delta: subtract baseline from end for each domain present in both
+        for (auto& [domain, end_j] : e.components) {
+            auto it = s.components.find(domain);
+            double start_j = (it != s.components.end()) ? it->second : 0;
+            double delta = end_j - start_j;
+            if (delta >= 0) {
+                d.component_energy[domain] = delta;
+                if (d.duration_seconds > 0)
+                    d.component_power[domain] = delta / d.duration_seconds;
+            }
+        }
     }
     return d;
 }
@@ -498,6 +515,25 @@ extern "C" {
             if(i < cps.size()-1) ss << ", ";
         }
         ss << "]}";
+        std::string s = ss.str();
+        if(s.length() >= (size_t)m) return -s.length();
+        std::copy(s.begin(), s.end(), b); b[s.length()] = '\0';
+        return s.length();
+    }
+
+    int nemb_get_domain_energy_json(char* b, int m) {
+        std::lock_guard<std::mutex> l(c_api_mutex);
+        if(!c_api_meter) return 0;
+        auto result = c_api_meter->read();
+        std::ostringstream ss;
+        ss << std::setprecision(10) << "{";
+        bool first = true;
+        for(auto& [domain, joules] : result.components) {
+            if(!first) ss << ", ";
+            ss << "\"" << domain << "\": " << joules;
+            first = false;
+        }
+        ss << "}";
         std::string s = ss.str();
         if(s.length() >= (size_t)m) return -s.length();
         std::copy(s.begin(), s.end(), b); b[s.length()] = '\0';
