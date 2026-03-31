@@ -3,6 +3,7 @@
 #include "../hal/counter_manager.hpp"
 #include <map>
 #include <mutex>
+#include <set>
 #include <fstream>
 #include <vector>
 #include <chrono>
@@ -132,6 +133,7 @@ private:
     
     // Hardware capability detection results
     std::vector<std::string> available_domains_;
+    std::set<std::string> top_level_domains_;  // non-overlapping domains for total
     double energy_unit_joules_{0.0};
     std::map<std::string, std::string> domain_paths_;
     

@@ -8,21 +8,34 @@
 
 namespace codegreen::nemb::drivers {
 
-// Map EMI instance names to CodeGreen energy domains.
-// Verified on i7-1165G7 Windows 11 build 26100:
-//   RAPL_Package0_PKG, RAPL_Package0_PP0, RAPL_Package0_PP1, RAPL_Package0_DRAM
-// Multi-socket systems may have RAPL_Package1_* etc.
+// Map EMI instance names to user-friendly domain names.
+// Preserves all instances dynamically -- no hardcoded domain count.
+// Pattern: RAPL_Package{N}_{SUFFIX} -> lowercase suffix with socket index.
+// Unknown suffixes are passed through (future-proof).
 std::string WindowsEMIProvider::emi_instance_to_domain(const std::string& instance) {
-    // Extract domain from pattern: RAPL_Package{N}_{DOMAIN}
-    auto pos = instance.rfind('_');
-    if (pos == std::string::npos) return "";
-    std::string suffix = instance.substr(pos + 1);
-    if (suffix == "PKG") return "package";
-    if (suffix == "PP0") return "core";
-    if (suffix == "PP1") return "gpu";
-    if (suffix == "DRAM") return "dram";
-    if (suffix == "PSYS") return "platform";
-    return "";
+    auto last_sep = instance.rfind('_');
+    if (last_sep == std::string::npos || last_sep == 0) return instance;
+    std::string suffix = instance.substr(last_sep + 1);
+
+    // Extract socket index if present (Package0, Package1, etc.)
+    std::string socket_id;
+    auto pkg_pos = instance.find("Package");
+    if (pkg_pos != std::string::npos) {
+        size_t num_start = pkg_pos + 7;
+        size_t num_end = instance.find('_', num_start);
+        if (num_end != std::string::npos && num_end > num_start)
+            socket_id = instance.substr(num_start, num_end - num_start);
+    }
+
+    // Lowercase the suffix for consistency
+    std::string domain;
+    for (char c : suffix) domain += std::tolower(c);
+
+    // Append socket index for multi-socket (skip for system-wide domains)
+    if (!socket_id.empty() && domain != "psys")
+        domain += "-" + socket_id;
+
+    return domain;
 }
 
 WindowsEMIProvider::WindowsEMIProvider() = default;
@@ -89,7 +102,13 @@ bool WindowsEMIProvider::initialize() {
         return false;
     }
 
-    // Initial collect to prime counters
+    // Determine non-overlapping top-level domains for correct total.
+    // Uses the same RAPL containment rules as Linux:
+    // - PSYS (if present) is the most inclusive -- use it alone
+    // - Otherwise: all pkg-* and dram-* domains are top-level
+    // - pp0/pp1/core/gpu sub-domains are never top-level
+    compute_top_level_domains();
+
     PdhCollectQueryData(query_);
 
     initialized_ = true;
@@ -97,6 +116,29 @@ bool WindowsEMIProvider::initialize() {
     for (auto& d : domains_) std::cout << " " << d.domain;
     std::cout << ")" << std::endl;
     return true;
+}
+
+void WindowsEMIProvider::compute_top_level_domains() {
+    top_level_domains_.clear();
+    bool has_psys = false;
+    for (auto& dc : domains_) {
+        if (dc.domain == "psys") { has_psys = true; break; }
+    }
+    for (auto& dc : domains_) {
+        if (has_psys) {
+            // PSYS is the most inclusive single counter (entire SoC)
+            if (dc.domain == "psys") top_level_domains_.insert(dc.domain);
+        } else {
+            // pkg-* and dram-* are top-level; pp0/pp1/core/gpu are sub-domains of pkg
+            if (dc.domain.rfind("pkg", 0) == 0 || dc.domain.rfind("dram", 0) == 0)
+                top_level_domains_.insert(dc.domain);
+        }
+    }
+    // If no known top-level detected (unknown hardware), treat ALL as top-level
+    // This overcounts but never silently drops energy -- honest default.
+    if (top_level_domains_.empty()) {
+        for (auto& dc : domains_) top_level_domains_.insert(dc.domain);
+    }
 }
 
 EnergyReading WindowsEMIProvider::get_reading() {
@@ -137,7 +179,9 @@ EnergyReading WindowsEMIProvider::get_reading() {
         dc.has_prev = true;
 
         reading.domain_energy_joules[dc.domain] = dc.cumulative_joules;
-        total_j += dc.cumulative_joules;
+        if (top_level_domains_.count(dc.domain)) {
+            total_j += dc.cumulative_joules;
+        }
     }
 
     reading.energy_joules = total_j;

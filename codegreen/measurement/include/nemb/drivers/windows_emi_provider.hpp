@@ -4,6 +4,7 @@
 #include "../core/energy_provider.hpp"
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -43,9 +44,11 @@ private:
         bool has_prev{false};
     };
     std::vector<DomainCounter> domains_;
+    std::set<std::string> top_level_domains_;
     std::mutex reading_mutex_;
 
     static std::string emi_instance_to_domain(const std::string& instance);
+    void compute_top_level_domains();
 };
 
 } // namespace codegreen::nemb::drivers

@@ -5,6 +5,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 
 namespace codegreen::nemb::drivers {
@@ -56,10 +57,15 @@ private:
     CFDictionaryRef prev_sample_{nullptr};
 
     // Accumulated energy per domain
-    struct DomainAccumulator { double cumulative_joules{0.0}; };
+    struct DomainAccumulator {
+        double cumulative_joules{0.0};
+        double last_delta_j{0.0};  // delta from most recent sample (for power calc)
+    };
     std::map<std::string, DomainAccumulator> domains_;
+    std::set<std::string> top_level_domains_;
     uint64_t last_ts_ns_{0};
     std::mutex reading_mutex_;
+    void compute_top_level_domains();
 };
 
 } // namespace codegreen::nemb::drivers

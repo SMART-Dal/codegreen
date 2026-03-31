@@ -144,10 +144,10 @@ EnergyReading IntelRAPLProvider::get_reading() {
             reading.domain_power_watts[domain] = domain_power;
             last_domain_energies_[domain] = domain_energy;
             
-            // Accumulate total energy and power
-            // package = CPU+uncore, dram = memory, psys = platform
-            // pp0/pp1 are subsets of package, so exclude to avoid double counting
-            if (domain == "package" || domain == "dram" || domain == "psys") {
+            // Only sum non-overlapping top-level domains (computed at detection time).
+            // If PSYS present: total = PSYS only (superset of PKG+DRAM).
+            // Else: total = all package-* + dram-* (excludes core/uncore sub-domains).
+            if (top_level_domains_.count(domain)) {
                 total_energy += domain_energy;
                 total_power += domain_power;
             }
@@ -274,7 +274,6 @@ bool IntelRAPLProvider::detect_rapl_domains() {
         if (!std::filesystem::exists(energy_path)) break;
         std::string domain_name = read_sysfs(base + "/name");
         if (domain_name.empty()) domain_name = "package-" + std::to_string(pkg);
-        if (domain_name == "package-0" && pkg == 0) domain_name = "package";
         available_domains_.push_back(domain_name);
         domain_paths_[domain_name] = energy_path;
         RAPLDomain domain;
@@ -303,6 +302,25 @@ bool IntelRAPLProvider::detect_rapl_domains() {
     if (available_domains_.empty()) {
         std::cout << "  No RAPL domains found" << std::endl;
         return false;
+    }
+
+    // Compute non-overlapping top-level domains for correct total energy.
+    // PSYS (platform) is a superset of PKG+DRAM on Intel Skylake+.
+    // If PSYS exists, use it alone. Otherwise sum all package-* and dram* domains.
+    // Sub-domains (core, uncore, pp0, pp1) are NEVER top-level.
+    top_level_domains_.clear();
+    bool has_psys = false;
+    for (auto& d : available_domains_) {
+        if (d == "psys") { has_psys = true; break; }
+    }
+    for (auto& d : available_domains_) {
+        if (has_psys) {
+            if (d == "psys") top_level_domains_.insert(d);
+        } else {
+            // package-0, package-1, dram, dram-0 etc. are top-level
+            if (d.rfind("package", 0) == 0 || d.rfind("dram", 0) == 0)
+                top_level_domains_.insert(d);
+        }
     }
     
     // Set access method

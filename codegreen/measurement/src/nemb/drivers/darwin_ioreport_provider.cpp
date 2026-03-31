@@ -110,6 +110,32 @@ bool DarwinIOReportProvider::initialize() {
     return true;
 }
 
+void DarwinIOReportProvider::compute_top_level_domains() {
+    // Apple Silicon IOReport hierarchy (verified on M4):
+    //   "CPU Energy" = ECPU + PCPU (aggregate -- top-level for CPU)
+    //   "ECPU", "PCPU" = sub-clusters of CPU (NOT top-level)
+    //   "GPU Energy" = separate (top-level)
+    //   "ANE" = separate (top-level)
+    //   "DRAM" = separate (top-level)
+    //   "DISP" = display (excluded from software profiling total)
+    //   "AMCC", "DCS" = memory controller fabric (overlaps with DRAM, excluded)
+    //
+    // Rule: a domain is top-level if it is NOT a known sub-component of another.
+    // "cpu" contains "ecpu"+"pcpu". "memory_controller" overlaps "dram".
+    // Unknown domains default to top-level (safe: overcounts, never undercounts).
+    top_level_domains_.clear();
+    std::set<std::string> known_sub_domains = {"ecpu", "pcpu", "memory_controller"};
+    std::set<std::string> known_noise_domains = {"display"}; // not software-related
+    for (auto& [d, _] : domains_) {
+        if (!known_sub_domains.count(d) && !known_noise_domains.count(d))
+            top_level_domains_.insert(d);
+    }
+    // Fallback: if nothing recognized, include everything
+    if (top_level_domains_.empty()) {
+        for (auto& [d, _] : domains_) top_level_domains_.insert(d);
+    }
+}
+
 EnergyReading DarwinIOReportProvider::get_reading() {
     EnergyReading reading;
     reading.provider_id = "darwin_ioreport";
@@ -137,9 +163,7 @@ EnergyReading DarwinIOReportProvider::get_reading() {
     }
 
     // Each channel has its own unit (mJ, uJ, nJ) read via IOReportChannelGetUnitLabel.
-    // Verified on M4: all channels "mJ" except "GPU Energy" which is "nJ".
-    // Obj-C blocks require __block for mutated captures.
-    __block double delta_total_j = 0;
+    // Verified on M4: most channels "mJ", "GPU Energy" is "nJ".
     auto& domains_ref = domains_;
     auto get_name = channel_get_name_;
     auto get_unit = channel_get_unit_;
@@ -154,19 +178,28 @@ EnergyReading DarwinIOReportProvider::get_reading() {
         double delta_j = to_joules(raw, unit);
 
         domains_ref[domain].cumulative_joules += delta_j;
-        delta_total_j += delta_j;
+        domains_ref[domain].last_delta_j = delta_j;
         return 0;
     });
 
+    // Recompute top-level set if new domains appeared (first few samples)
+    if (top_level_domains_.empty()) compute_top_level_domains();
+
+    // All domains go into breakdown (users get full visibility for analysis)
+    // Only top-level domains contribute to total (no double-counting)
     double total_j = 0;
+    double delta_top_level_j = 0;
     for (auto& [d, acc] : domains_) {
-        total_j += acc.cumulative_joules;
         reading.domain_energy_joules[d] = acc.cumulative_joules;
+        if (top_level_domains_.count(d)) {
+            total_j += acc.cumulative_joules;
+            delta_top_level_j += acc.last_delta_j;
+        }
     }
     reading.energy_joules = total_j;
 
     double dt_s = (reading.timestamp_ns - last_ts_ns_) / 1e9;
-    reading.average_power_watts = (dt_s > 0) ? delta_total_j / dt_s : 0;
+    reading.average_power_watts = (dt_s > 0) ? delta_top_level_j / dt_s : 0;
     reading.instantaneous_power_watts = reading.average_power_watts;
     reading.source_type = "hardware_counter";
     reading.confidence = 0.95;
