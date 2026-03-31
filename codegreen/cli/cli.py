@@ -2290,6 +2290,7 @@ def run_command(
         subprocess.run(command, capture_output=True, timeout=300)
 
     energies, times = [], []
+    domain_runs = []  # per-domain breakdown per run
     for i in range(repeat):
         if not json_output:
             console.print(f"[dim]Run {i+1}/{repeat}[/dim]")
@@ -2297,6 +2298,10 @@ def run_command(
         times.append(elapsed)
         if energy_j is not None and energy_j > 0:
             energies.append(energy_j)
+            if isinstance(backend, _NEMBBackend):
+                domains = backend.get_last_domain_breakdown()
+                if domains:
+                    domain_runs.append(domains)
 
     if not energies:
         msg = f"No energy data from {backend.name}"
@@ -2348,14 +2353,20 @@ def run_command(
         console.print(f"[bold]Power:[/bold]  {e_stats.mean / t_stats.mean:.2f} W (avg)")
         console.print(f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}")
 
-        # Per-domain energy breakdown (dynamically detected from hardware)
-        if isinstance(backend, _NEMBBackend):
-            domains = backend.get_last_domain_breakdown()
-            if domains:
-                console.print(f"\n[bold]Domain Breakdown:[/bold]")
-                total_reported = sum(v for v in domains.values() if v > 0)
-                for domain, joules in sorted(domains.items(), key=lambda x: -x[1]):
-                    if joules <= 0: continue
+        # Per-domain energy breakdown (averaged across runs, same as total)
+        if domain_runs:
+            all_domains = set()
+            for dr in domain_runs:
+                all_domains.update(dr.keys())
+            avg_domains = {}
+            for d in all_domains:
+                vals = [dr.get(d, 0) for dr in domain_runs if dr.get(d, 0) > 0]
+                if vals:
+                    avg_domains[d] = sum(vals) / len(vals)
+            if avg_domains:
+                console.print(f"\n[bold]Domain Breakdown (avg of {len(domain_runs)} runs):[/bold]")
+                total_reported = sum(avg_domains.values())
+                for domain, joules in sorted(avg_domains.items(), key=lambda x: -x[1]):
                     pct = (joules / total_reported * 100) if total_reported > 0 else 0
                     bar_len = int(pct / 5)
                     bar = "[green]" + "=" * bar_len + "[/green]" + " " * (20 - bar_len)
