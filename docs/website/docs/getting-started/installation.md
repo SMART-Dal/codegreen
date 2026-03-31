@@ -127,9 +127,10 @@ CodeGreen's NEMB (Native Energy Measurement Backend) auto-detects available ener
 
 | Sensor | Requirements | Description |
 |--------|--------------|-------------|
-| **EMI (Energy Metering Interface)** | Windows 11, Intel/AMD CPU | RAPL PKG, cores, iGPU, DRAM via inbox `intelpep.sys` driver. Zero install. |
+| **EMI (Energy Metering Interface)** | Windows 11, Intel CPU (11th gen+) | RAPL PKG, cores, iGPU, DRAM via inbox `intelpep.sys` driver. Zero install. |
+| **NVML** | NVIDIA GPU + drivers 450.80+ | GPU energy via `nvml.dll` (cumulative mJ). User-mode, no admin. |
 
-Windows 11's inbox Intel Power Engine Plugin (`intelpep.sys`) exposes RAPL counters through the documented Energy Metering Interface (EMI). Same hardware-integrated cumulative energy as Linux RAPL. Domains: `RAPL_Package0_PKG`, `RAPL_Package0_PP0` (cores), `RAPL_Package0_PP1` (iGPU), `RAPL_Package0_DRAM`. Windows 10 does not expose RAPL via EMI.
+Windows 11's inbox Intel Power Engine Plugin (`intelpep.sys`) exposes RAPL counters through the documented Energy Metering Interface (EMI). Same hardware-integrated cumulative energy as Linux RAPL. Domains: `RAPL_Package0_PKG`, `RAPL_Package0_PP0` (cores), `RAPL_Package0_PP1` (iGPU), `RAPL_Package0_DRAM`. AMD CPU support on Windows via EMI is unconfirmed (intelpep.sys is Intel-specific; AMD may not expose RAPL via EMI). Windows 10 does not expose RAPL via EMI. NVML GPU energy works on Windows without admin.
 
 Energy measurement on macOS requires `sudo` for IOReport and kpc access. The auto-detection backend chain is: NEMB (in-process) > perf (Linux) > powermetrics (macOS) > time-only.
 
