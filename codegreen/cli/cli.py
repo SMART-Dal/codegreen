@@ -2334,23 +2334,93 @@ def run_command(
 
 
 class _EnergyBackend:
-    """Base class for CLI energy measurement backends. New platforms add a subclass."""
+    """Base class for CLI energy measurement backends.
+    Open/closed: add new hardware support by subclassing and appending to _ENERGY_BACKENDS.
+    No file I/O during measurement -- all data via in-memory APIs or pipes."""
     name: str = "unknown"
+    priority: int = 0  # higher = preferred
     def is_available(self) -> bool: return False
     def measure(self, command: list, timeout: int = 300) -> tuple:
         """Returns (energy_joules or None, elapsed_seconds)."""
         raise NotImplementedError
-    def wrap_command(self, cmd_str: str, perf_file: str, checkpoint_file: str) -> str:
-        """Wrap a shell command for energy measurement + checkpoint capture.
-        Used by project mode. Returns shell command string."""
+    def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
+        """Wrap a shell command for energy + checkpoint capture (project mode)."""
         return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
-    def parse_energy(self, perf_file: str) -> float:
-        """Parse energy from the output file. Returns joules or 0."""
+    def parse_energy(self, energy_file: str) -> float:
+        """Parse energy from output file (project mode only). Returns joules or 0."""
         return 0.0
+
+
+class _NEMBBackend(_EnergyBackend):
+    """In-process NEMB measurement via ctypes. Zero file I/O during measurement.
+    Uses the same background polling + ring buffer architecture as fine-grained mode."""
+    name = "NEMB (native energy measurement)"
+    priority = 100
+    _lib = None
+
+    def _load(self):
+        if self._lib is not None:
+            return self._lib
+        import ctypes
+        pkg_root = Path(__file__).resolve().parent.parent
+        for name in ["libcodegreen-nemb.dylib", "libcodegreen-nemb.so"]:
+            for d in [pkg_root / "lib", pkg_root.parent / "lib", pkg_root.parent / "build" / "lib"]:
+                p = d / name
+                if p.exists():
+                    try:
+                        self._lib = ctypes.CDLL(str(p))
+                        return self._lib
+                    except OSError:
+                        pass
+        self._lib = False
+        return False
+
+    def is_available(self) -> bool:
+        lib = self._load()
+        if not lib:
+            return False
+        import ctypes
+        try:
+            lib.nemb_initialize.restype = ctypes.c_int
+            return lib.nemb_initialize() == 1
+        except Exception:
+            return False
+
+    def measure(self, command: list, timeout: int = 300) -> tuple:
+        import ctypes, subprocess, time
+        lib = self._load()
+        lib.nemb_start_session.restype = ctypes.c_uint64
+        lib.nemb_start_session.argtypes = [ctypes.c_char_p]
+        lib.nemb_stop_session.restype = ctypes.c_int
+        lib.nemb_stop_session.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+
+        sid = lib.nemb_start_session(b"run")
+        start = time.perf_counter()
+        subprocess.run(command, capture_output=True, timeout=timeout)
+        elapsed = time.perf_counter() - start
+        energy = ctypes.c_double(0)
+        power = ctypes.c_double(0)
+        ok = lib.nemb_stop_session(sid, ctypes.byref(energy), ctypes.byref(power))
+        return (energy.value if ok and energy.value > 0 else None, elapsed)
+
+    def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
+        # NEMB wraps via the codegreen binary which handles measurement internally
+        binary = get_binary_path()
+        if binary:
+            return f"{binary} measure-workload --output {energy_file} -- bash -c '{cmd_str} 2>{checkpoint_file}'"
+        return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
+
+    def parse_energy(self, energy_file: str) -> float:
+        try:
+            d = json.loads(open(energy_file).read())
+            return d.get("summary", {}).get("total_energy_j", 0.0)
+        except Exception:
+            return 0.0
 
 
 class _PerfBackend(_EnergyBackend):
     name = "perf (Linux RAPL)"
+    priority = 50
     def is_available(self) -> bool:
         import shutil
         return sys.platform == "linux" and shutil.which("perf") is not None
@@ -2393,6 +2463,7 @@ class _PerfBackend(_EnergyBackend):
 
 class _PowermetricsBackend(_EnergyBackend):
     name = "powermetrics (macOS IOReport)"
+    priority = 30
     def is_available(self) -> bool:
         import shutil
         return sys.platform == "darwin" and shutil.which("powermetrics") is not None
@@ -2441,11 +2512,13 @@ class _TimeOnlyBackend(_EnergyBackend):
         return (None, time.perf_counter() - start)
 
 
-_ENERGY_BACKENDS = [_PerfBackend(), _PowermetricsBackend(), _TimeOnlyBackend()]
+_ENERGY_BACKENDS = [_NEMBBackend(), _PerfBackend(), _PowermetricsBackend(), _TimeOnlyBackend()]
 
 def _get_energy_backend() -> _EnergyBackend:
-    """Auto-detect best available energy backend. Extensible: add new backends to _ENERGY_BACKENDS."""
-    for b in _ENERGY_BACKENDS:
+    """Auto-detect best available energy backend, sorted by priority.
+    NEMB (100) > perf (50) > powermetrics (30) > time_only (0).
+    Extensible: add new backends to _ENERGY_BACKENDS."""
+    for b in sorted(_ENERGY_BACKENDS, key=lambda x: x.priority, reverse=True):
         if b.is_available():
             return b
     return _TimeOnlyBackend()
