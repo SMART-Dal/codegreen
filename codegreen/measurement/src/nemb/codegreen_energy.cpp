@@ -16,11 +16,17 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#ifdef _WIN32
+#include <process.h>
+static int _nemb_getpid() { return _getpid(); }
+#else
+#include <unistd.h>
+#include <pthread.h>
+static int _nemb_getpid() { return getpid(); }
+#endif
 #include <iostream>
 #include <mutex>
 #include <map>
-#include <unistd.h>
-#include <pthread.h>
 
 namespace codegreen {
 
@@ -381,17 +387,19 @@ extern "C" {
         }
     }
 
+#ifndef _WIN32
     __attribute__((constructor))
     static void nemb_register_fork_handler() {
         pthread_atfork(nullptr, nullptr, nemb_after_fork_child);
     }
+#endif
 
     int nemb_initialize() {
         if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
             c_api_meter = std::make_unique<codegreen::EnergyMeter>();
-            c_api_init_pid = getpid();
+            c_api_init_pid = _nemb_getpid();
         }
         return c_api_meter->is_available() ? 1 : 0;
     }
@@ -419,7 +427,7 @@ extern "C" {
 
     void nemb_report_at_exit() {
         if (c_api_is_forked_child) return;
-        if (c_api_init_pid != 0 && getpid() != c_api_init_pid) return;
+        if (c_api_init_pid != 0 && _nemb_getpid() != c_api_init_pid) return;
         int retries = 10;
         while (retries-- > 0) {
             if (c_api_mutex.try_lock()) {
@@ -450,7 +458,7 @@ extern "C" {
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
             c_api_meter = std::make_unique<codegreen::EnergyMeter>();
-            c_api_init_pid = getpid();
+            c_api_init_pid = _nemb_getpid();
             static bool atexit_registered = false;
             if (!atexit_registered) {
                 std::atexit(nemb_report_at_exit);

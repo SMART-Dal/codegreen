@@ -123,19 +123,17 @@ private:
     uint64_t tsc_frequency_hz_{0};
     uint64_t tsc_offset_{0};
     
-    // Initialization methods
     bool initialize_tsc();
-    bool initialize_posix_clock();
     bool detect_tsc_invariant();
     uint64_t measure_tsc_frequency();
-    double measure_clock_resolution(clockid_t clock_id);
-
-    // TSC access methods
     uint64_t read_tsc() const;
     uint64_t tsc_to_nanoseconds(uint64_t tsc_value) const;
 
-    // POSIX clock methods
+#ifndef _WIN32
+    bool initialize_posix_clock();
+    double measure_clock_resolution(clockid_t clock_id);
     uint64_t read_posix_clock_ns(clockid_t clock_id) const;
+#endif
 
 #ifdef __APPLE__
     bool initialize_mach_continuous();

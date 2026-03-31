@@ -45,13 +45,23 @@ bool PrecisionTimer::initialize() {
  }
 #endif
 
+#ifdef _WIN32
+ // Windows: QueryPerformanceCounter is always available
+ clock_source_ = ClockSource::MONOTONIC;
+ LARGE_INTEGER freq;
+ QueryPerformanceFrequency(&freq);
+ resolution_ns_ = 1e9 / freq.QuadPart;
+ std::cout << " Using QueryPerformanceCounter" << std::endl;
+ return true;
+#else
  // Fallback to POSIX clocks
  if (initialize_posix_clock()) {
  std::cout << " Using " << get_clock_source_name() << std::endl;
  std::cout << " Resolution: " << resolution_ns_ << " ns" << std::endl;
  return true;
  }
- 
+#endif
+
  std::cerr << " Failed to initialize any timing source" << std::endl;
  return false;
 }
@@ -70,13 +80,19 @@ uint64_t PrecisionTimer::get_timestamp_ns() const {
  case ClockSource::MONOTONIC_RAW:
  return read_posix_clock_ns(CLOCK_MONOTONIC_RAW);
 #endif
- 
+
+#ifdef _WIN32
+ case ClockSource::MONOTONIC:
+ case ClockSource::REALTIME:
+ return monotonic_timestamp_ns();
+#else
  case ClockSource::MONOTONIC:
  return read_posix_clock_ns(CLOCK_MONOTONIC);
- 
+
  case ClockSource::REALTIME:
  return read_posix_clock_ns(CLOCK_REALTIME);
- 
+#endif
+
  default:
  return 0;
  }
@@ -112,6 +128,14 @@ bool PrecisionTimer::initialize(ClockSource source) {
  return true;
  }
 #endif
+#ifdef _WIN32
+ // Windows: any source maps to QueryPerformanceCounter
+ clock_source_ = source;
+ LARGE_INTEGER freq;
+ QueryPerformanceFrequency(&freq);
+ resolution_ns_ = 1e9 / freq.QuadPart;
+ return true;
+#else
  clockid_t clock_id;
  switch (source) {
 #ifdef CLOCK_MONOTONIC_RAW
@@ -126,6 +150,7 @@ bool PrecisionTimer::initialize(ClockSource source) {
  clock_source_ = source;
  resolution_ns_ = resolution;
  return true;
+#endif
 }
 
 uint64_t PrecisionTimer::monotonic_timestamp_ns() {
@@ -192,8 +217,8 @@ bool PrecisionTimer::initialize_tsc() {
 #endif
 }
 
+#ifndef _WIN32
 bool PrecisionTimer::initialize_posix_clock() {
- // Try clocks in order of preference
  std::vector<std::pair<clockid_t, ClockSource>> clocks = {
 #ifdef CLOCK_MONOTONIC_RAW
  {CLOCK_MONOTONIC_RAW, ClockSource::MONOTONIC_RAW},
@@ -201,18 +226,17 @@ bool PrecisionTimer::initialize_posix_clock() {
  {CLOCK_MONOTONIC, ClockSource::MONOTONIC},
  {CLOCK_REALTIME, ClockSource::REALTIME}
  };
- 
  for (auto [clock_id, source] : clocks) {
  double resolution = measure_clock_resolution(clock_id);
- if (resolution > 0 && resolution < 1000000) { // Less than 1ms resolution
+ if (resolution > 0 && resolution < 1000000) {
  clock_source_ = source;
  resolution_ns_ = resolution;
  return true;
  }
  }
- 
  return false;
 }
+#endif
 
 bool PrecisionTimer::detect_tsc_invariant() {
 #ifdef __x86_64__
@@ -250,14 +274,13 @@ uint64_t PrecisionTimer::measure_tsc_frequency() {
  return 0;
 }
 
+#ifndef _WIN32
 double PrecisionTimer::measure_clock_resolution(clockid_t clock_id) {
  struct timespec resolution;
- if (clock_getres(clock_id, &resolution) != 0) {
- return -1.0; // Clock not available
- }
- 
+ if (clock_getres(clock_id, &resolution) != 0) return -1.0;
  return resolution.tv_sec * 1e9 + resolution.tv_nsec;
 }
+#endif
 
 uint64_t PrecisionTimer::read_tsc() const {
 #ifdef __x86_64__
@@ -274,14 +297,13 @@ uint64_t PrecisionTimer::tsc_to_nanoseconds(uint64_t tsc_value) const {
  return (tsc_delta * 1000000000ULL) / tsc_frequency_hz_;
 }
 
+#ifndef _WIN32
 uint64_t PrecisionTimer::read_posix_clock_ns(clockid_t clock_id) const {
  struct timespec ts;
- if (clock_gettime(clock_id, &ts) != 0) {
- return 0;
- }
- 
+ if (clock_gettime(clock_id, &ts) != 0) return 0;
  return ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
+#endif
 
 #ifdef __APPLE__
 bool PrecisionTimer::initialize_mach_continuous() {

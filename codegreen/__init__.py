@@ -5,7 +5,7 @@ A comprehensive energy measurement and code optimization tool for developers
 and researchers who need precise, fine-grained energy consumption analysis.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 __author__ = "Saurabhsingh Rajput"
 __email__ = "saurabh@dal.ca"
 __description__ = "Energy-aware software development tool"

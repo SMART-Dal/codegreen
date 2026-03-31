@@ -1,5 +1,6 @@
 #include "../../../include/nemb/utils/non_blocking_file_reader.hpp"
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/select.h>
@@ -114,3 +115,4 @@ bool NonBlockingFileReader::read_uint64_with_timeout(uint64_t& value, std::chron
 }
 
 } // namespace codegreen::nemb::utils
+#endif // _WIN32
