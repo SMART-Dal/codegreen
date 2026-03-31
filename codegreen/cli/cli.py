@@ -761,24 +761,38 @@ def main(
                 console.print(f"  NEMB lib:   {f.name} ({f.stat().st_size} bytes)")
         else:
             console.print(f"  NEMB lib:   [red]NOT FOUND[/red] in {pkg_root / 'lib'}")
+            # Search other common locations
+            for alt in [pkg_root.parent / "lib", pkg_root.parent / "build" / "lib"]:
+                alt_files = list(alt.glob("*codegreen-nemb*")) if alt.is_dir() else []
+                if alt_files:
+                    console.print(f"  NEMB alt:   found at {alt_files[0]} (not in expected location)")
+        # Try loading NEMB and capture exact error
+        import ctypes as _ct
+        nemb_load_error = None
+        nemb_init_result = None
+        try:
+            test_be = _NEMBBackend()
+            lib = test_be._load()
+            if not lib or lib is False:
+                nemb_load_error = "library not found in search paths"
+            else:
+                lib.nemb_initialize.restype = _ct.c_int
+                nemb_init_result = lib.nemb_initialize()
+        except OSError as e:
+            nemb_load_error = f"OS load error: {e}"
+        except Exception as e:
+            nemb_load_error = f"error: {e}"
+        if nemb_load_error:
+            console.print(f"  NEMB load:  [red]{nemb_load_error}[/red]")
+        elif nemb_init_result is not None:
+            if nemb_init_result == 1:
+                console.print(f"  NEMB load:  [green]OK (providers detected)[/green]")
+            else:
+                console.print(f"  NEMB load:  loaded but no energy providers found (init={nemb_init_result})")
         # Energy backend detection
         try:
             backend = _get_energy_backend()
             console.print(f"  Backend:    {backend.name}")
-            if not isinstance(backend, _NEMBBackend):
-                console.print(f"  NEMB skip:  fell to {backend.name}")
-                try:
-                    import ctypes
-                    test = _NEMBBackend()
-                    lib = test._load()
-                    if not lib:
-                        console.print(f"  NEMB reason: library not loadable")
-                    elif lib is not False:
-                        lib.nemb_initialize.restype = ctypes.c_int
-                        r = lib.nemb_initialize()
-                        console.print(f"  NEMB init:  returned {r} ({'OK' if r == 1 else 'no energy providers found'})")
-                except Exception as e:
-                    console.print(f"  NEMB error: {e}")
             console.print(f"  All backends: {', '.join(f'{b.name}(avail={b.is_available()})' for b in sorted(_ENERGY_BACKENDS, key=lambda x: -x.priority))}")
         except Exception as e:
             console.print(f"  Backend error: {e}")
