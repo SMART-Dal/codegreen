@@ -2365,12 +2365,14 @@ def run_command(
                     avg_domains[d] = sum(vals) / len(vals)
             if avg_domains:
                 console.print(f"\n[bold]Domain Breakdown (avg of {len(domain_runs)} runs):[/bold]")
-                total_reported = sum(avg_domains.values())
+                max_j = max(avg_domains.values()) if avg_domains else 1
                 for domain, joules in sorted(avg_domains.items(), key=lambda x: -x[1]):
-                    pct = (joules / total_reported * 100) if total_reported > 0 else 0
-                    bar_len = int(pct / 5)
-                    bar = "[green]" + "=" * bar_len + "[/green]" + " " * (20 - bar_len)
-                    console.print(f"  {domain:<25} {joules:>10.4f} J  {bar} {pct:5.1f}%")
+                    if joules <= 0: continue
+                    # Bar proportional to the largest domain (not percentage)
+                    bar_len = min(20, int(joules / max_j * 20)) if max_j > 0 else 0
+                    bar = "[cyan]" + "=" * bar_len + "[/cyan]" + " " * (20 - bar_len)
+                    power = joules / t_stats.mean if t_stats.mean > 0 else 0
+                    console.print(f"  {domain:<25} {joules:>8.4f} J  {power:>7.2f} W  {bar}")
 
         if cv > 20:
             console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
