@@ -66,29 +66,21 @@ std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provid
 
 std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
     std::vector<std::unique_ptr<EnergyProvider>> providers;
-    
+
     std::cout << "Detecting available energy providers..." << std::endl;
-    
+
     auto registered = EnergyProvider::get_registered_providers();
     for (const auto& name : registered) {
         auto provider = EnergyProvider::create(name);
-        if (provider) {
-            // Check if available (lightweight check if possible) or initialize
-            // Note: Some providers might output errors during initialize if hardware missing
-            // Ideally we should silence stdout/stderr here or have a 'check_support' method
-            
-            if (provider->initialize()) {
-                std::cout << "  " << provider->get_name() << " initialized" << std::endl;
-                providers.push_back(std::move(provider));
-            } else {
-                // Determine if we should log failure (verbose)
-                // For now, keep it clean
-            }
+        if (!provider) continue;
+        if (provider->initialize()) {
+            std::cout << "  " << provider->get_name() << " initialized" << std::endl;
+            providers.push_back(std::move(provider));
         }
     }
-    
+
     if (providers.empty()) {
-        std::cout << "  No energy providers available - measurements will be limited" << std::endl;
+        std::cout << "  No energy providers available" << std::endl;
     } else {
         std::cout << "  Successfully initialized " << providers.size() << " energy provider(s)" << std::endl;
     }

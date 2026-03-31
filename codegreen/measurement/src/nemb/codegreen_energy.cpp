@@ -105,9 +105,18 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
     coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
     coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
     
-    coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
+    // Suppress verbose init logging from providers and coordinator.
+    // Providers on wrong platforms print expected failures (e.g., "No RAPL" on macOS).
+    // Only errors after initialization are printed.
+    std::streambuf* saved_cout = std::cout.rdbuf();
+    std::streambuf* saved_cerr = std::cerr.rdbuf();
+    std::ostringstream suppressed;
+    if (!config.enable_debug_logging) {
+        std::cout.rdbuf(suppressed.rdbuf());
+        std::cerr.rdbuf(suppressed.rdbuf());
+    }
 
-    // Pre-allocate marker storage to reduce reallocation overhead (typical workload ~10K checkpoints)
+    coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
     markers_.reserve(10000);
 
     auto providers = nemb::detect_available_providers();
@@ -115,7 +124,15 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
         coordinator_->add_provider(std::move(provider));
     }
 
-    if (!coordinator_->start_measurements()) {
+    bool started = coordinator_->start_measurements();
+
+    // Restore output
+    if (!config.enable_debug_logging) {
+        std::cout.rdbuf(saved_cout);
+        std::cerr.rdbuf(saved_cerr);
+    }
+
+    if (!started) {
         throw std::runtime_error("Failed to start NEMB measurement coordinator");
     }
     

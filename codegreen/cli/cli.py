@@ -2325,11 +2325,30 @@ def run_command(
             "budget_exceeded": budget is not None and e_stats.mean > budget
         }, indent=2))
     else:
+        # Coefficient of variation: signal-to-noise indicator
+        cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0
+        ci_width = e_stats.ci95_upper - e_stats.ci95_lower
+        ci_pct = (ci_width / e_stats.mean * 100) if e_stats.mean > 0 else 0
+
+        # Color-code by measurement quality
+        if cv < 5:
+            quality, color = "excellent", "green"
+        elif cv < 15:
+            quality, color = "good", "yellow"
+        elif cv < 30:
+            quality, color = "moderate", "bright_yellow"
+        else:
+            quality, color = "high noise", "red"
+
         console.print(f"\n[bold]Energy:[/bold] {e_stats.mean:.4f} J +/- {e_stats.std:.4f} J")
-        console.print(f"  Range: [{e_stats.min:.4f} .. {e_stats.max:.4f}] J, "
-                       f"CI95: [{e_stats.ci95_lower:.4f}, {e_stats.ci95_upper:.4f}] J")
+        console.print(f"  Range: [{e_stats.min:.4f} .. {e_stats.max:.4f}] J")
+        console.print(f"  CI95:  [{e_stats.ci95_lower:.4f}, {e_stats.ci95_upper:.4f}] J ({ci_pct:.1f}% width)")
+        console.print(f"  CV:    [{color}]{cv:.1f}% ({quality})[/{color}]")
         console.print(f"[bold]Time:[/bold]   {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
+        console.print(f"[bold]Power:[/bold]  {e_stats.mean / t_stats.mean:.2f} W (avg)")
         console.print(f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}")
+        if cv > 20:
+            console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
         if budget is not None:
             if e_stats.mean > budget:
                 console.print(f"[red]BUDGET EXCEEDED: {e_stats.mean:.4f}J > {budget}J[/red]")

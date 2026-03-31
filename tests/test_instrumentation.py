@@ -184,7 +184,7 @@ SAMPLES = {
     "java": (".java", JAVA_SAMPLE, 3),
     "c": (".c", C_SAMPLE, 3),
     "cpp": (".cpp", CPP_SAMPLE, 3),
-    "javascript": (".js", JS_SAMPLE, 2),
+    "javascript": (".js", JS_SAMPLE, 4),
 }
 
 
@@ -215,8 +215,7 @@ class TestInstrumentationPoints:
         ("java", ".java", JAVA_SAMPLE, 3),
         ("c", ".c", C_SAMPLE, 3),
         ("cpp", ".cpp", CPP_SAMPLE, 3),
-        pytest.param("javascript", ".js", JS_SAMPLE, 2,
-                     marks=pytest.mark.xfail(reason="JavaScript instrumentation incomplete")),
+        pytest.param("javascript", ".js", JS_SAMPLE, 4),
     ])
     def test_finds_instrumentation_points(self, lang, ext, code, min_points):
         path = _write_sample(lang, code, ext)
