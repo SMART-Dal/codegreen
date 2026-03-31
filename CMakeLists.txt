@@ -38,36 +38,10 @@ endif()
 # Global include directories
 include_directories(${CMAKE_SOURCE_DIR}/codegreen/measurement/include)
 
-# Tree-sitter (for C++ instrumentation runtime, if submodules present)
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/CMakeLists.txt")
-    include_directories(${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include)
-    add_subdirectory(third_party/tree-sitter/lib)
-    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-python/CMakeLists.txt")
-        add_subdirectory(third_party/tree-sitter-python EXCLUDE_FROM_ALL)
-    endif()
-endif()
-
-# NEMB -- the only native component
+# NEMB -- the only native component (no tree-sitter dependency;
+# instrumentation uses the tree-sitter-language-pack pip package)
 add_subdirectory(codegreen/measurement)
 
-# Sync instrumentation files to build dir (for C/C++/Java runtime headers)
-file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime)
-file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation)
-
-add_custom_target(sync_instrumentation
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime/codegreen_runtime.py
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/language_runtimes
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/configs
-    COMMENT "Syncing instrumentation files to build directory"
-)
-
-add_dependencies(codegreen-nemb sync_instrumentation)
 
 # Copy config to build dir
 if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")

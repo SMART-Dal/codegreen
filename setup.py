@@ -57,8 +57,13 @@ class BuildWithCMake(build_py):
                  "-j", str(os.cpu_count() or 2)],
                 cwd=build_dir)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print(f"NEMB build skipped ({e.__class__.__name__}). "
-                  "Python-only install (no native energy measurement).")
+            print(f"\n{'='*60}")
+            print(f"NEMB C++ build failed: {e.__class__.__name__}: {e}")
+            print(f"Installing Python-only (CLI, instrumentation, analysis work).")
+            print(f"Energy measurement requires the NEMB native library.")
+            print(f"To fix: install cmake (brew install cmake / apt install cmake)")
+            print(f"then: pip install --force-reinstall --no-cache-dir codegreen")
+            print(f"{'='*60}\n")
 
     def _install_native_artifacts(self, source_dir: Path, native_lib: Path | None) -> None:
         build_src = Path(self.build_lib) / "codegreen"

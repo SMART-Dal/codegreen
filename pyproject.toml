@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codegreen"
-version = "0.3.13"
+version = "0.3.14"
 description = "Energy-aware software development tool for measuring and optimizing code energy consumption"
 readme = "README.md"
 license = {file = "LICENSE"}
