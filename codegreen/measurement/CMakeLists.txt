@@ -108,7 +108,11 @@ if(APPLE)
 endif()
 
 # Install targets
-install(TARGETS codegreen-core codegreen-nemb
+set(_INSTALL_TARGETS codegreen-nemb)
+if(NOT APPLE)
+    list(APPEND _INSTALL_TARGETS codegreen-core)
+endif()
+install(TARGETS ${_INSTALL_TARGETS}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )

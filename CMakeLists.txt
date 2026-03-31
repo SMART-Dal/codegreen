@@ -238,40 +238,44 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
     )
 endif()
 
-# Installation
-install(TARGETS codegreen
-    RUNTIME DESTINATION bin
-    COMPONENT runtime
-)
-
-# Create development bin directory and copy binary for CLI integration
+# Installation (binary only on Linux where codegreen-core is built)
 if(NOT APPLE)
-    set(_DEV_INSTALL_DEPENDS codegreen)
-    set(_DEV_INSTALL_BINARY_CMDS
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
+    install(TARGETS codegreen
+        RUNTIME DESTINATION bin
+        COMPONENT runtime
     )
-else()
-    set(_DEV_INSTALL_DEPENDS codegreen-nemb)
-    set(_DEV_INSTALL_BINARY_CMDS "")
 endif()
 
-add_custom_target(dev-install ALL
-    DEPENDS ${_DEV_INSTALL_DEPENDS}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
-    ${_DEV_INSTALL_BINARY_CMDS}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb${CMAKE_SHARED_LIBRARY_SUFFIX} ${CMAKE_SOURCE_DIR}/lib/
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/language_runtimes
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/configs
-    COMMENT "Copying binary and instrumentation files to development bin directory for CLI integration"
-)
+# Dev-install: copy NEMB library + instrumentation files for local development
+if(APPLE)
+    add_custom_target(dev-install ALL
+        DEPENDS codegreen-nemb
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.dylib ${CMAKE_SOURCE_DIR}/lib/
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/language_runtimes
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/configs
+        COMMENT "Dev-install: NEMB dylib + instrumentation (macOS)"
+    )
+else()
+    add_custom_target(dev-install ALL
+        DEPENDS codegreen
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.so ${CMAKE_SOURCE_DIR}/lib/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/language_runtimes
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/configs
+        COMMENT "Dev-install: binary + NEMB + instrumentation (Linux)"
+    )
+endif()
 
 # Install runtime modules
 install(FILES ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
