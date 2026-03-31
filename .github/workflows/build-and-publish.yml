@@ -61,7 +61,7 @@ jobs:
           brew install cmake pkg-config jsoncpp curl sqlite &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(sysctl -n hw.ncpu) && ls -la {project}/lib/libcodegreen-nemb.dylib {project}/build/bin/codegreen 2>/dev/null || echo "NEMB build failed, Python-only wheel"
+          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(sysctl -n hw.ncpu) && ls -la {project}/lib/libcodegreen-nemb.dylib {project}/build/bin/codegreen
         CIBW_TEST_COMMAND: >
           python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;print(f'dylib={(pkg/\"lib\"/\"libcodegreen-nemb.dylib\").exists()}')" && codegreen --help && codegreen doctor || true
 

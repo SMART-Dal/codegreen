@@ -138,24 +138,31 @@ EnergyReading DarwinIOReportProvider::get_reading() {
 
     // Each channel has its own unit (mJ, uJ, nJ) read via IOReportChannelGetUnitLabel.
     // Verified on M4: all channels "mJ" except "GPU Energy" which is "nJ".
-    double delta_total_j = 0;
+    // Obj-C blocks require __block for mutated captures.
+    __block double delta_total_j = 0;
+    auto& domains_ref = domains_;
+    auto get_name = channel_get_name_;
+    auto get_unit = channel_get_unit_;
+    auto get_int = simple_get_int_;
     iterate_(delta, ^(CFDictionaryRef ch) {
-        std::string name = cfstr_to_std(channel_get_name_(ch));
+        std::string name = cfstr_to_std(get_name(ch));
         std::string domain = channel_to_domain(name);
         if (domain.empty()) return 0;
 
-        std::string unit = channel_get_unit_ ? cfstr_to_std(channel_get_unit_(ch)) : "mJ";
-        int64_t raw = simple_get_int_(ch, 0);
+        std::string unit = get_unit ? cfstr_to_std(get_unit(ch)) : "mJ";
+        int64_t raw = get_int(ch, 0);
         double delta_j = to_joules(raw, unit);
 
-        domains_[domain].cumulative_joules += delta_j;
-        reading.domain_energy_joules[domain] = domains_[domain].cumulative_joules;
+        domains_ref[domain].cumulative_joules += delta_j;
         delta_total_j += delta_j;
         return 0;
     });
 
     double total_j = 0;
-    for (auto& [d, acc] : domains_) total_j += acc.cumulative_joules;
+    for (auto& [d, acc] : domains_) {
+        total_j += acc.cumulative_joules;
+        reading.domain_energy_joules[d] = acc.cumulative_joules;
+    }
     reading.energy_joules = total_j;
 
     double dt_s = (reading.timestamp_ns - last_ts_ns_) / 1e9;

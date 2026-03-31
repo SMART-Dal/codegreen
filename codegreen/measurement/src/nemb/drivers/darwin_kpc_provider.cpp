@@ -1,6 +1,7 @@
 #ifdef __APPLE__
 #include "../../../include/nemb/drivers/darwin_kpc_provider.hpp"
 #include <dlfcn.h>
+#include <unistd.h>
 #include <iostream>
 #include <cstring>
 
