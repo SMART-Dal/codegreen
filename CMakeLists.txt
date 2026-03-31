@@ -84,7 +84,7 @@ add_custom_target(dev-install ALL
     DEPENDS codegreen-nemb
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb${CMAKE_SHARED_LIBRARY_SUFFIX}
+        $<TARGET_FILE:codegreen-nemb>
         ${CMAKE_SOURCE_DIR}/lib/
     COMMENT "Dev-install: copying NEMB to ${CMAKE_SOURCE_DIR}/lib/"
 )
