@@ -268,14 +268,20 @@ bool IntelRAPLProvider::detect_rapl_domains() {
         if (f.is_open()) std::getline(f, val);
         return val;
     };
+    // Enumerate RAPL zones from sysfs. Top-level zones are at intel-rapl:X,
+    // sub-domains are at intel-rapl:X:Y. We use this STRUCTURAL hierarchy
+    // (not name matching) to determine which domains are top-level.
+    std::set<std::string> zone_level_domains;  // sysfs top-level (intel-rapl:X)
+
     for (int pkg = 0; ; ++pkg) {
         std::string base = "/sys/class/powercap/intel-rapl:" + std::to_string(pkg);
         std::string energy_path = base + "/energy_uj";
         if (!std::filesystem::exists(energy_path)) break;
         std::string domain_name = read_sysfs(base + "/name");
-        if (domain_name.empty()) domain_name = "package-" + std::to_string(pkg);
+        if (domain_name.empty()) domain_name = "zone-" + std::to_string(pkg);
         available_domains_.push_back(domain_name);
         domain_paths_[domain_name] = energy_path;
+        zone_level_domains.insert(domain_name);
         RAPLDomain domain;
         domain.name = domain_name;
         domain.sysfs_path = energy_path;
@@ -290,6 +296,7 @@ bool IntelRAPLProvider::detect_rapl_domains() {
             if (sub_name.empty()) sub_name = "sub-" + std::to_string(sub);
             available_domains_.push_back(sub_name);
             domain_paths_[sub_name] = sub_energy;
+            // Sub-domains (intel-rapl:X:Y) are NOT added to zone_level_domains
             RAPLDomain sub_domain;
             sub_domain.name = sub_name;
             sub_domain.sysfs_path = sub_energy;
@@ -298,30 +305,33 @@ bool IntelRAPLProvider::detect_rapl_domains() {
             std::cout << "  [ok] Found sub-domain: " << sub_name << std::endl;
         }
     }
-    
+
     if (available_domains_.empty()) {
         std::cout << "  No RAPL domains found" << std::endl;
         return false;
     }
 
-    // Compute non-overlapping top-level domains for correct total energy.
-    // PSYS (platform) is a superset of PKG+DRAM on Intel Skylake+.
-    // If PSYS exists, use it alone. Otherwise sum all package-* and dram* domains.
-    // Sub-domains (core, uncore, pp0, pp1) are NEVER top-level.
+    // Top-level = all sysfs zone-level domains (intel-rapl:X).
+    // Exception: if one zone is PSYS (platform = entire SoC), it alone is the
+    // most inclusive counter. Other zone-level domains (package, dram) are subsets.
+    // We detect PSYS by checking if any zone name contains "psys" or "platform".
     top_level_domains_.clear();
     bool has_psys = false;
-    for (auto& d : available_domains_) {
-        if (d == "psys") { has_psys = true; break; }
-    }
-    for (auto& d : available_domains_) {
-        if (has_psys) {
-            if (d == "psys") top_level_domains_.insert(d);
-        } else {
-            if (d.rfind("package", 0) == 0 || d.rfind("dram", 0) == 0)
-                top_level_domains_.insert(d);
+    std::string psys_name;
+    for (auto& d : zone_level_domains) {
+        std::string lower;
+        for (char c : d) lower += std::tolower(c);
+        if (lower.find("psys") != std::string::npos || lower.find("platform") != std::string::npos) {
+            has_psys = true;
+            psys_name = d;
         }
     }
-    // Fallback: if no recognized top-level domains, include all (safe overcount)
+    if (has_psys) {
+        top_level_domains_.insert(psys_name);
+    } else {
+        top_level_domains_ = zone_level_domains;
+    }
+    // Fallback: if empty (shouldn't happen), include all
     if (top_level_domains_.empty()) {
         for (auto& d : available_domains_) top_level_domains_.insert(d);
     }

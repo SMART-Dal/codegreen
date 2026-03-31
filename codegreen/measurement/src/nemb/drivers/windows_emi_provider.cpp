@@ -31,8 +31,10 @@ std::string WindowsEMIProvider::emi_instance_to_domain(const std::string& instan
     std::string domain;
     for (char c : suffix) domain += std::tolower(c);
 
-    // Append socket index for multi-socket (skip for system-wide domains)
-    if (!socket_id.empty() && domain != "psys")
+    // Append socket index for multi-socket.
+    // Only add suffix if the instance had a Package identifier (system-wide
+    // domains like PSYS have no Package in their name, so socket_id is empty).
+    if (!socket_id.empty())
         domain += "-" + socket_id;
 
     return domain;

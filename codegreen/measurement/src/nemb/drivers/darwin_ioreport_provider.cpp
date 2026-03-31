@@ -22,40 +22,45 @@ static double to_joules(int64_t raw, const std::string& unit) {
     if (unit == "uJ") return raw / 1e6;
     if (unit == "nJ") return raw / 1e9;
     if (unit == "J")  return static_cast<double>(raw);
-    return raw / 1e3; // conservative fallback: assume mJ
+    // Unknown unit -- return 0 rather than silently misinterpret
+    return 0;
 }
 
 // Map IOReport channel names to CodeGreen energy domains.
 // Verified on M4 MacBook Pro (Mac16,1, macOS 25C56, 175 channels).
 // Only aggregate channels are mapped; per-core/SRAM/DTL/PCIe are skipped.
+// Convert IOReport channel name to a clean domain identifier.
+// All channels are normalized to lowercase_with_underscores.
+// Per-core channels (ECPU0, PCPU1, etc.) and fine-grained noise channels
+// (DTL, SRAM, PCIe) are skipped to avoid ~150 low-value entries.
+// No channel name is hardcoded as the primary mapping -- the normalization
+// handles current and future Apple chips uniformly.
 static std::string channel_to_domain(const std::string& name) {
-    if (name == "CPU Energy") return "cpu";
-    if (name == "GPU Energy") return "gpu";
-    if (name == "ANE") return "ane";
-    if (name == "DRAM") return "dram";
-    if (name == "DISP") return "display";
-    if (name == "ECPU") return "ecpu";
-    if (name == "PCPU") return "pcpu";
-    if (name == "AMCC") return "memory_controller";
-    if (name == "DCS") return "dram_controller";
-    // Skip known noise channels (per-core, SRAM, DTL, PCIe -- ~150 channels on M4)
-    if (name.find("DTL") != std::string::npos) return "";
+    if (name.empty()) return "";
+
+    // Skip per-core channels: any name that is a known cluster prefix + digits
+    // (e.g., ECPU0, ECPU5, PCPU0, PCPU3, ECPUDTL07, PCPUDTL312)
+    // but keep cluster aggregates (ECPU, PCPU, CPU Energy, etc.)
+    for (const char* prefix : {"ECPU", "PCPU"}) {
+        if (name.rfind(prefix, 0) == 0 && name.size() > 4) {
+            char fifth = name[4];
+            if (std::isdigit(fifth) || fifth == 'D') return ""; // per-core or DTL
+        }
+    }
+    // Skip fine-grained channels that are noise for software profiling
     if (name.find("SRAM") != std::string::npos) return "";
     if (name.find("PCIe") != std::string::npos) return "";
     if (name.find("apciec") != std::string::npos) return "";
-    // Skip per-core variants (ECPU0, ECPU1, PCPU0, etc.)
-    if ((name.rfind("ECPU", 0) == 0 || name.rfind("PCPU", 0) == 0) &&
-        name.size() > 4 && name != "ECPU" && name != "PCPU") return "";
-    // Pass through genuinely unknown channels for future-proofing.
-    // They appear in domain_energy_joules and default to top-level via compute_top_level_domains fallback.
-    if (!name.empty()) {
-        std::string lower;
-        for (char c : name) lower += std::tolower(c);
-        // Replace spaces with underscores for clean domain names
-        for (char& c : lower) if (c == ' ') c = '_';
-        return lower;
+    if (name.find("SOC_") != std::string::npos) return "";
+
+    // Normalize: lowercase, spaces -> underscores
+    std::string domain;
+    domain.reserve(name.size());
+    for (char c : name) {
+        if (c == ' ') domain += '_';
+        else domain += std::tolower(c);
     }
-    return "";
+    return domain;
 }
 
 DarwinIOReportProvider::DarwinIOReportProvider() = default;
@@ -129,20 +134,27 @@ bool DarwinIOReportProvider::initialize() {
 }
 
 void DarwinIOReportProvider::compute_top_level_domains() {
-    // Domains that are sub-components of other domains (would double-count if summed).
-    // This set can grow as new Apple chips add sub-domains -- safe to add, never to remove.
-    static const std::set<std::string> sub_domains = {
-        "ecpu", "pcpu",                     // sub-clusters of "cpu"
-        "memory_controller", "dram_controller", // overlaps with "dram"
-    };
-    // Domains excluded from software profiling total (not caused by code execution).
-    static const std::set<std::string> noise_domains = {
-        "display",                           // constant regardless of workload
-    };
+    // Determine which domains are sub-components that would double-count if summed.
+    // Rule: if domain X is a known sub-component of domain Y (both present),
+    // then X is NOT top-level. We detect this by checking if the aggregate exists.
     top_level_domains_.clear();
+    bool has_cpu_aggregate = domains_.count("cpu_energy") > 0;
+    bool has_dram = domains_.count("dram") > 0;
+
     for (auto& [d, _] : domains_) {
-        if (!sub_domains.count(d) && !noise_domains.count(d))
-            top_level_domains_.insert(d);
+        bool is_sub = false;
+        // ecpu/pcpu are sub-clusters of cpu_energy
+        if (has_cpu_aggregate && (d == "ecpu" || d == "pcpu")) is_sub = true;
+        // ecpm/pcpm are management overheads already in cpu_energy
+        if (has_cpu_aggregate && (d == "ecpm" || d == "pcpm")) is_sub = true;
+        // amcc/dcs overlap with dram
+        if (has_dram && (d == "amcc" || d == "dcs")) is_sub = true;
+        // display is hardware noise, not software-driven
+        if (d == "disp" || d == "dispext") is_sub = true;
+        // msr, ave, isp are small peripheral domains -- include for completeness
+        // but mark as non-sub (they don't overlap with cpu/gpu/dram)
+
+        if (!is_sub) top_level_domains_.insert(d);
     }
     if (top_level_domains_.empty()) {
         for (auto& [d, _] : domains_) top_level_domains_.insert(d);
@@ -190,6 +202,7 @@ EnergyReading DarwinIOReportProvider::get_reading() {
         int64_t raw = get_int(ch, 0);
         double delta_j = to_joules(raw, unit);
 
+        if (delta_j < 0) delta_j = 0; // clamp: counter reset or sleep
         domains_ref[domain].cumulative_joules += delta_j;
         domains_ref[domain].last_delta_j = delta_j;
         return 0;
@@ -234,7 +247,7 @@ EnergyProviderSpec DarwinIOReportProvider::get_specification() const {
     spec.provider_name = "Darwin IOReport Energy";
     spec.hardware_type = "soc";
     spec.vendor = "apple";
-    spec.measurement_domains = {"cpu", "gpu", "ane", "dram", "ecpu", "pcpu", "display"};
+    for (auto& [d, _] : domains_) spec.measurement_domains.push_back(d);
     spec.energy_resolution_joules = 1e-3; // millijoule resolution
     spec.min_measurement_interval = std::chrono::microseconds(2000);
     spec.typical_accuracy_percent = 2.0;
