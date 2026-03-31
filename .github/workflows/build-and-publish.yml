@@ -93,7 +93,7 @@ jobs:
       env:
         CIBW_BUILD: "cp310-win_amd64 cp311-win_amd64 cp312-win_amd64 cp313-win_amd64"
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir build & cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . --config Release -j %NUMBER_OF_PROCESSORS% && dir {project}\lib\codegreen-nemb.dll 2>nul || echo "NEMB build info"
+          cd {project} && mkdir build & cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . --config Release -j %NUMBER_OF_PROCESSORS% && mkdir {project}\lib 2>nul & copy {project}\build\bin\Release\codegreen-nemb.dll {project}\lib\ && dir {project}\lib\codegreen-nemb.dll
         CIBW_TEST_COMMAND: >
           python -c "import importlib;pkg=importlib.import_module('codegreen');print(f'CodeGreen {pkg.__version__}')" && codegreen --help
 
