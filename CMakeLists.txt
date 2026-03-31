@@ -1,236 +1,77 @@
 cmake_minimum_required(VERSION 3.16)
-project(CodeGreen VERSION 0.1.0 LANGUAGES CXX)
+project(CodeGreen VERSION 0.3.0 LANGUAGES CXX)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Find required packages
 find_package(PkgConfig)
 find_package(Threads REQUIRED)
 
-# Optional GPU library support
+# Optional GPU library detection
 find_library(NVML_LIBRARY nvidia-ml PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu)
 find_path(NVML_INCLUDE_DIR nvml.h PATHS /usr/local/cuda/include /usr/include/nvidia/gdk)
 find_library(ROCM_SMI_LIBRARY rocm_smi64 PATHS /opt/rocm/lib)
 find_path(ROCM_SMI_INCLUDE_DIR rocm_smi.h PATHS /opt/rocm/include/rocm_smi)
 
 if(NVML_LIBRARY AND NVML_INCLUDE_DIR)
-    message(STATUS "✓ NVML library and headers found: ${NVML_LIBRARY}")
+    message(STATUS "NVML found: ${NVML_LIBRARY}")
     set(HAVE_NVML ON)
-elseif(NVML_LIBRARY)
-    message(STATUS "⚠ NVML library found but headers missing - NVIDIA GPU energy monitoring will use fallback")
-    set(HAVE_NVML OFF)
 else()
-    message(STATUS "⚠ NVML library not found - NVIDIA GPU energy monitoring will use fallback")
     set(HAVE_NVML OFF)
 endif()
 
 if(ROCM_SMI_LIBRARY AND ROCM_SMI_INCLUDE_DIR)
-    message(STATUS "✓ ROCm SMI library and headers found: ${ROCM_SMI_LIBRARY}")
+    message(STATUS "ROCm SMI found: ${ROCM_SMI_LIBRARY}")
     set(HAVE_ROCM_SMI ON)
-elseif(ROCM_SMI_LIBRARY)
-    message(STATUS "⚠ ROCm SMI library found but headers missing - AMD GPU energy monitoring will use fallback")
-    set(HAVE_ROCM_SMI OFF)  
 else()
-    message(STATUS "⚠ ROCm SMI library not found - AMD GPU energy monitoring will use fallback")
     set(HAVE_ROCM_SMI OFF)
-endif()
-
-# System libraries (required for legacy core on Linux, not for NEMB-only macOS builds)
-if(NOT APPLE)
-    pkg_check_modules(JSONCPP REQUIRED jsoncpp)
-    pkg_check_modules(CURL REQUIRED libcurl)
-    pkg_check_modules(SQLITE3 REQUIRED sqlite3)
-else()
-    pkg_check_modules(JSONCPP jsoncpp)
-    pkg_check_modules(CURL libcurl)
-    pkg_check_modules(SQLITE3 sqlite3)
 endif()
 
 # Global include directories
 include_directories(${CMAKE_SOURCE_DIR}/codegreen/measurement/include)
-include_directories(${CMAKE_SOURCE_DIR}/codegreen/instrumentation/include)
-include_directories(${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include)
 
-
-# Add tree-sitter submodules
-message(STATUS "Building tree-sitter language parsers...")
-add_subdirectory(third_party/tree-sitter/lib)
-
-# Use EXCLUDE_FROM_ALL to avoid test target conflicts but still build libraries
-add_subdirectory(third_party/tree-sitter-python EXCLUDE_FROM_ALL)
-
-# Add measurement module
-add_subdirectory(codegreen/measurement)
-
-# Check if additional language parsers exist
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-c/src/parser.c")
-    message(STATUS "✓ Found tree-sitter-c (supported via Python runtime)")
-    set(HAS_TREE_SITTER_C ON)
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-c")
-    message(STATUS "Found tree-sitter-c, but parser.c missing - C support disabled")
-    set(HAS_TREE_SITTER_C OFF)
-else()
-    message(STATUS "tree-sitter-c not found, C support will be limited")
-    set(HAS_TREE_SITTER_C OFF)
-endif()
-
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-cpp/src/parser.c")
-    message(STATUS "✓ Found tree-sitter-cpp (supported via Python runtime)")
-    set(HAS_TREE_SITTER_CPP ON)
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-cpp")
-    message(STATUS "Found tree-sitter-cpp, but parser.c missing - C++ support disabled")
-    set(HAS_TREE_SITTER_CPP OFF)
-else()
-    message(STATUS "tree-sitter-cpp not found, C++ support will be limited")
-    set(HAS_TREE_SITTER_CPP OFF)
-endif()
-
-if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-java/src/parser.c")
-    message(STATUS "✓ Found tree-sitter-java (supported via Python runtime)")
-    set(HAS_TREE_SITTER_JAVA ON)
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-java")
-    message(STATUS "Found tree-sitter-java, but parser.c missing - Java support disabled")
-    set(HAS_TREE_SITTER_JAVA OFF)
-else()
-    message(STATUS "tree-sitter-java not found, Java support will be limited")
-    set(HAS_TREE_SITTER_JAVA OFF)
-endif()
-
-# NEMB (Native Energy Measurement Backend) handles all energy measurement
-# PMT has been completely replaced by NEMB native implementations
-
-# Core library sources are now defined in src/measurement/CMakeLists.txt
-
-
-# Language adapters are now created in src/instrumentation/CMakeLists.txt
-
-# Add instrumentation module
-# Instrumentation is now Python-based, no C++ build needed
-# add_subdirectory(codegreen/instrumentation)
-
-# Main executable (requires jsoncpp/curl/sqlite -- Linux only)
-# On macOS, only codegreen-nemb is built; the Python CLI handles everything.
-if(NOT APPLE)
-    add_executable(codegreen
-        codegreen/measurement/main.cpp
-    )
-    add_dependencies(codegreen sync_instrumentation)
-    target_link_libraries(codegreen PRIVATE
-        codegreen-core
-        codegreen-nemb
-        ${JSONCPP_LIBRARIES}
-        ${CURL_LIBRARIES}
-        Threads::Threads
-    )
-    target_include_directories(codegreen PRIVATE
-        ${CMAKE_SOURCE_DIR}/codegreen/measurement/include
-        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/include
-        ${JSONCPP_INCLUDE_DIRS}
-        ${CURL_INCLUDE_DIRS}
-    )
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(codegreen PRIVATE
-            -Wall -Wextra -Wno-unused-parameter
-            $<$<CONFIG:Debug>:-g -O0>
-            $<$<CONFIG:Release>:-O3 -DNDEBUG>
-        )
+# Tree-sitter (for C++ instrumentation runtime, if submodules present)
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/CMakeLists.txt")
+    include_directories(${CMAKE_SOURCE_DIR}/third_party/tree-sitter/lib/include)
+    add_subdirectory(third_party/tree-sitter/lib)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/tree-sitter-python/CMakeLists.txt")
+        add_subdirectory(third_party/tree-sitter-python EXCLUDE_FROM_ALL)
     endif()
 endif()
 
-# Copy runtime modules to build directory with dependency tracking
+# NEMB -- the only native component
+add_subdirectory(codegreen/measurement)
+
+# Sync instrumentation files to build dir (for C/C++/Java runtime headers)
 file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime)
 file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation)
 
-# Define instrumentation source files for dependency tracking
-set(INSTRUMENTATION_SOURCES
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py
-)
-
-# Define target destination files
-set(RUNTIME_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime/codegreen_runtime.py)
-set(BRIDGE_ANALYZE_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/bridge_analyze.py)
-set(BRIDGE_INSTRUMENT_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/bridge_instrument.py)
-set(LANGUAGE_ENGINE_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/language_engine.py)
-set(AST_PROCESSOR_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/ast_processor.py)
-set(LANGUAGE_CONFIGS_DEST ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/language_configs.py)
-
-# Custom commands to copy files when source changes
-add_custom_command(
-    OUTPUT ${RUNTIME_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py ${RUNTIME_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
-    COMMENT "Copying codegreen_runtime.py to build directory"
-)
-
-add_custom_command(
-    OUTPUT ${BRIDGE_ANALYZE_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${BRIDGE_ANALYZE_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py
-    COMMENT "Copying bridge_analyze.py to build directory"
-)
-
-add_custom_command(
-    OUTPUT ${BRIDGE_INSTRUMENT_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${BRIDGE_INSTRUMENT_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py
-    COMMENT "Copying bridge_instrument.py to build directory"
-)
-
-add_custom_command(
-    OUTPUT ${LANGUAGE_ENGINE_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py ${LANGUAGE_ENGINE_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py
-    COMMENT "Copying language_engine.py to build directory"
-)
-
-add_custom_command(
-    OUTPUT ${AST_PROCESSOR_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py ${AST_PROCESSOR_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py
-    COMMENT "Copying ast_processor.py to build directory"
-)
-
-add_custom_command(
-    OUTPUT ${LANGUAGE_CONFIGS_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py ${LANGUAGE_CONFIGS_DEST}
-    DEPENDS ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py
-    COMMENT "Copying language_configs.py to build directory"
-)
-
-# Create a target that depends on all instrumentation files being copied
 add_custom_target(sync_instrumentation
-    DEPENDS 
-        ${RUNTIME_DEST}
-        ${BRIDGE_ANALYZE_DEST}
-        ${BRIDGE_INSTRUMENT_DEST}
-        ${LANGUAGE_ENGINE_DEST}
-        ${AST_PROCESSOR_DEST}
-        ${LANGUAGE_CONFIGS_DEST}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/language_runtimes
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/configs
-    COMMENT "Ensuring all instrumentation files are up to date"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/runtime/codegreen_runtime.py
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/language_runtimes
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/python/instrumentation/configs
+    COMMENT "Syncing instrumentation files to build directory"
 )
 
-# Copy configuration file to build directory
-file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config)
+add_dependencies(codegreen-nemb sync_instrumentation)
+
+# Copy config to build dir
 if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
+    file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config)
     configure_file(
         ${CMAKE_SOURCE_DIR}/config/codegreen.json
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config/codegreen.json
@@ -238,99 +79,35 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
     )
 endif()
 
-# Installation (binary only on Linux where codegreen-core is built)
-if(NOT APPLE)
-    install(TARGETS codegreen
-        RUNTIME DESTINATION bin
-        COMPONENT runtime
-    )
-endif()
+# Dev-install: copy NEMB library to project root for pip editable installs
+add_custom_target(dev-install ALL
+    DEPENDS codegreen-nemb
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb${CMAKE_SHARED_LIBRARY_SUFFIX}
+        ${CMAKE_SOURCE_DIR}/lib/
+    COMMENT "Dev-install: copying NEMB to ${CMAKE_SOURCE_DIR}/lib/"
+)
 
-# Dev-install: copy NEMB library + instrumentation files for local development
-if(APPLE)
-    add_custom_target(dev-install ALL
-        DEPENDS codegreen-nemb
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.dylib ${CMAKE_SOURCE_DIR}/lib/
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/language_runtimes
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/configs
-        COMMENT "Dev-install: NEMB dylib + instrumentation (macOS)"
-    )
-else()
-    add_custom_target(dev-install ALL
-        DEPENDS codegreen
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen ${CMAKE_SOURCE_DIR}/bin/
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/lib
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-nemb.so ${CMAKE_SOURCE_DIR}/lib/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libcodegreen-core.a ${CMAKE_SOURCE_DIR}/lib/
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/python/instrumentation
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/language_runtimes
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/configs ${CMAKE_SOURCE_DIR}/bin/python/instrumentation/configs
-        COMMENT "Dev-install: binary + NEMB + instrumentation (Linux)"
-    )
-endif()
+# Install
+install(TARGETS codegreen-nemb
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+)
 
-# Install runtime modules
-install(FILES ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
+install(FILES
+    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
     DESTINATION bin/runtime
-    COMPONENT runtime
 )
 
-# Install Python instrumentation system
-install(FILES 
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_analyze.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/bridge_instrument.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_engine.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/ast_processor.py
-    ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_configs.py
-    DESTINATION bin/python/instrumentation
-    COMPONENT runtime
-)
-
-
-# Install configuration file
 if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
     install(FILES ${CMAKE_SOURCE_DIR}/config/codegreen.json
         DESTINATION bin/config
-        COMPONENT runtime
     )
 endif()
 
-# Create installation package
 set(CPACK_PACKAGE_NAME "CodeGreen")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "CodeGreen - Energy-Aware Code Analysis Tool")
-set(CPACK_PACKAGE_VENDOR "CodeGreen Project")
-
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Energy-aware software development tool")
 include(CPack)
-
-# Display build summary
-message(STATUS "")
-message(STATUS "=== CodeGreen Build Configuration ===")
-message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "C++ Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "Language Support:")
-message(STATUS "  ✓ Python (tree-sitter)")
-if(HAS_TREE_SITTER_C)
-    message(STATUS "  ✓ C (tree-sitter)")
-endif()
-if(HAS_TREE_SITTER_CPP)
-    message(STATUS "  ✓ C++ (tree-sitter)")
-endif()
-if(HAS_TREE_SITTER_JAVA)
-    message(STATUS "  ✓ Java (tree-sitter)")
-endif()
-message(STATUS "Hardware Sensors:")
-message(STATUS "  ✓ Intel/AMD RAPL (NEMB)")
-message(STATUS "  ✓ NVIDIA NVML (NEMB)")
-message(STATUS "")
-message(STATUS "Build Target: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/codegreen")
-message(STATUS "=====================================")
-message(STATUS "")
