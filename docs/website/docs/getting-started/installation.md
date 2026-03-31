@@ -1,8 +1,25 @@
 # Installation
 
-CodeGreen can be installed via the automated script or built manually from source.
+## From PyPI (Recommended)
 
-## Quick Install (Recommended)
+```bash
+pip install codegreen
+```
+
+Pre-built wheels available for **Linux x86_64** and **macOS ARM64** (Apple Silicon). Includes the native NEMB energy measurement backend -- no cmake or compilation needed.
+
+After install on Linux, set up RAPL sensor permissions:
+```bash
+sudo codegreen init-sensors
+# then log out/in for group changes
+```
+
+On macOS, energy measurement requires sudo:
+```bash
+sudo codegreen run -- python script.py
+```
+
+## From Source (Development)
 
 ```bash
 git clone https://github.com/SMART-Dal/codegreen.git

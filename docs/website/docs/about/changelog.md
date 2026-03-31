@@ -1,6 +1,37 @@
 # Changelog
 
-## v0.1.0 (Current)
+## v0.3.0 (Current)
+
+### macOS Apple Silicon Support
+- DarwinIOReportProvider: energy measurement via `libIOReport.dylib` (CPU, GPU, ANE, DRAM domains)
+- DarwinKPCProvider: exact hardware perf counters via `kperf.framework` (~200ns per read, cycles/instructions/cache misses/branch misses)
+- Per-channel IOReport unit handling (mJ for most channels, nJ for GPU Energy) via `IOReportChannelGetUnitLabel`
+- PrecisionTimer: `mach_continuous_time` path for ARM generic timer (~42ns resolution, no kernel transition)
+- Pre-built macOS ARM64 wheels on PyPI (no cmake/brew required for users)
+
+### Platform-Aware Energy Backends
+- NEMB-first backend selection: NEMB (in-process, zero file I/O) > perf (Linux) > powermetrics (macOS) > time-only
+- Extensible backend registry: add new hardware support by subclassing `_EnergyBackend`
+- `codegreen run` and `codegreen project` auto-detect best backend per platform
+
+### Package and Build
+- Graceful cmake failure on unsupported platforms (Python-only install with CLI, instrumentation, analysis)
+- `.dylib` support in setup.py and pyproject.toml package_data
+- Multi-arch CI/CD: Linux x86_64 + macOS ARM64 wheel builds and tests
+- Auto-create GitHub Release on tag push after PyPI publish
+- Robust path resolution: all `parents[N]` indexing replaced with consistent `pkg_root` pattern
+- Config.json packaged inside wheel (fixes "Default configuration file not found")
+- Version display reads from `__init__.__version__` (was hardcoded 0.1.0)
+
+### Bug Fixes
+- Fixed `src/` to `codegreen/` path references across all Python, C++, and CI files
+- Fixed IOReport API flow: CopyChannelsInGroup -> CreateSubscription -> CreateSamples (3-step, not 2)
+- Fixed Obj-C block captures (`__block` qualifier for mutated variables)
+- Fixed `CLOCK_MONOTONIC_RAW` guards for macOS (doesn't exist on Darwin)
+- Fixed CIBW inline Python indentation error in CI smoke tests
+- Skip legacy `codegreen-core` and C++ binary on macOS (only NEMB needed)
+
+## v0.1.0
 
 ### Features
 
