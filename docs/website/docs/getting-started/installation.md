@@ -124,10 +124,21 @@ CodeGreen's NEMB (Native Energy Measurement Backend) auto-detects available ener
 
 | Sensor | Requirements | Description |
 |--------|--------------|-------------|
-| **EMI (Energy Metering Interface)** | Windows 11, Intel CPU (11th gen+) | RAPL PKG, cores, iGPU, DRAM via inbox `intelpep.sys` driver. Zero install. Verified on i7-1165G7. |
+| **EMI (Energy Metering Interface)** | Windows 11, Intel CPU (11th gen+) | RAPL energy via inbox `intelpep.sys` driver. Zero install, no admin needed. |
 | **NVML** | NVIDIA GPU + drivers 450.80+ | GPU energy via `nvml.dll` (cumulative mJ). User-mode, no admin. |
 
-Windows 11's inbox Intel Power Engine Plugin (`intelpep.sys`) exposes RAPL counters through the documented Energy Metering Interface (EMI). Same hardware-integrated cumulative energy as Linux RAPL. Domains: `RAPL_Package0_PKG`, `RAPL_Package0_PP0` (cores), `RAPL_Package0_PP1` (iGPU), `RAPL_Package0_DRAM`. AMD CPU support on Windows via EMI is unconfirmed (intelpep.sys is Intel-specific; AMD may not expose RAPL via EMI). Windows 10 does not expose RAPL via EMI. NVML GPU energy works on Windows without admin.
+Windows 11's inbox Intel Power Engine Plugin (`intelpep.sys`) exposes RAPL counters through the Energy Metering Interface (EMI). No additional drivers, no admin setup, nothing to install. Same hardware-integrated cumulative energy as Linux RAPL. Verified on i7-1165G7 (Tiger Lake) and i7-12700H (Alder Lake).
+
+**Windows EMI measures 4 RAPL domains:**
+
+| Domain | What it measures | Example |
+|--------|-----------------|---------|
+| `RAPL_Package0_PKG` | Entire CPU package (all cores + iGPU + L3 + memory controller) | Total CPU energy |
+| `RAPL_Package0_PP0` | CPU cores only (P-cores + E-cores on 12th gen+) | Core computation energy |
+| `RAPL_Package0_PP1` | Integrated GPU (Intel Iris Xe / UHD) | iGPU energy |
+| `RAPL_Package0_DRAM` | DRAM memory controller + memory | Memory energy |
+
+AMD CPU support on Windows via EMI is unconfirmed (`intelpep.sys` is Intel-specific). Windows 10 does not expose RAPL via EMI.
 
 Energy measurement on macOS works without sudo on modern macOS (Ventura+). The auto-detection backend chain is: NEMB (in-process) > perf (Linux) > powermetrics (macOS) > time-only.
 
