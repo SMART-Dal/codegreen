@@ -89,11 +89,11 @@ add_custom_target(dev-install ALL
     COMMENT "Dev-install: copying NEMB to ${CMAKE_SOURCE_DIR}/lib/"
 )
 
-# Install
+# Install -- DLLs go to lib/ (not bin/) so setup.py finds them consistently
 install(TARGETS codegreen-nemb
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
+    RUNTIME DESTINATION lib
 )
 
 install(FILES
