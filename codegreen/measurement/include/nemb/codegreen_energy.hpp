@@ -279,6 +279,11 @@ public:
         uint64_t timestamp_ns;
         double cumulative_energy_joules;
         double instantaneous_power_watts;
+        // Per-checkpoint exact perf counters (macOS kpc only, zero on other platforms)
+        uint64_t cycles{0};
+        uint64_t instructions{0};
+        uint64_t cache_misses{0};
+        uint64_t branch_misses{0};
     };
     std::vector<CorrelatedCheckpoint> get_checkpoint_measurements();
 

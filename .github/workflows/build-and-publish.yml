@@ -22,6 +22,8 @@ jobs:
             platform: linux-arm64
           - os: macos-latest
             platform: macos
+          - os: windows-latest
+            platform: windows
 
     steps:
     - uses: actions/checkout@v4
@@ -84,6 +86,16 @@ jobs:
           cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(sysctl -n hw.ncpu) && ls -la {project}/lib/libcodegreen-nemb.dylib
         CIBW_TEST_COMMAND: >
           python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;print(f'dylib={(pkg/\"lib\"/\"libcodegreen-nemb.dylib\").exists()}')" && codegreen --help && codegreen doctor || true
+
+    - name: Build wheels (Windows)
+      if: matrix.platform == 'windows'
+      run: cibuildwheel --output-dir wheelhouse
+      env:
+        CIBW_BUILD: "cp310-win_amd64 cp311-win_amd64 cp312-win_amd64 cp313-win_amd64"
+        CIBW_BEFORE_BUILD: >
+          cd {project} && mkdir build & cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . --config Release -j %NUMBER_OF_PROCESSORS% && dir {project}\lib\codegreen-nemb.dll 2>nul || echo "NEMB build info"
+        CIBW_TEST_COMMAND: >
+          python -c "import importlib;pkg=importlib.import_module('codegreen');print(f'CodeGreen {pkg.__version__}')" && codegreen --help
 
     - uses: actions/upload-artifact@v4
       with:
@@ -210,9 +222,38 @@ jobs:
 
         codegreen doctor || true
 
+  test-windows-wheel:
+    name: Test Windows wheel (${{ matrix.python-version }})
+    needs: build-wheels
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - uses: actions/download-artifact@v4
+      with:
+        name: wheels-windows-latest
+        path: wheelhouse/
+    - name: Install and test
+      shell: pwsh
+      run: |
+        $whl = Get-ChildItem wheelhouse/*.whl | Select-Object -First 1
+        pip install $whl.FullName
+
+        codegreen --version
+        codegreen --help
+
+        "def fib(n): return fib(n-1)+fib(n-2) if n>1 else n" | Out-File -Encoding utf8 test.py
+        codegreen analyze python test.py --json | python -c "import json,sys;d=json.load(sys.stdin);print(f'Instrumentation: {len(d.get(chr(105)+chr(110)+chr(115)+chr(116)+chr(114)+chr(117)+chr(109)+chr(101)+chr(110)+chr(116)+chr(97)+chr(116)+chr(105)+chr(111)+chr(110)+chr(95)+chr(112)+chr(111)+chr(105)+chr(110)+chr(116)+chr(115),[]))} points')"
+
+        codegreen doctor
+
   publish-pypi:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist, test-linux-wheel, test-macos-wheel]
+    needs: [build-wheels, build-sdist, test-linux-wheel, test-macos-wheel, test-windows-wheel]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:

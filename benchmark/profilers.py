@@ -202,11 +202,79 @@ class NativeProfiler(ProfilerInterface):
     def is_available(self) -> bool:
         return True
 
+class CodeCarbonProfiler(ProfilerInterface):
+    """Wraps CodeCarbon for energy measurement (requires: pip install codecarbon)."""
+    def run(self, cmd: List[str], timeout: int = 300) -> ProfileResult:
+        try:
+            from codecarbon import EmissionsTracker
+        except ImportError:
+            return ProfileResult(0.0, 0.0, "", [], {"error": "codecarbon not installed"})
+        tracker = EmissionsTracker(log_level="error", save_to_file=False)
+        tracker.start()
+        start = time.perf_counter()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        elapsed = time.perf_counter() - start
+        emissions = tracker.stop()
+        energy = tracker._total_energy.kWh * 3_600_000  # kWh -> J
+        return ProfileResult(energy, elapsed, result.stdout, [],
+                             {"emissions_kg_co2": emissions, "energy_kwh": tracker._total_energy.kWh})
+
+    def is_available(self) -> bool:
+        try:
+            import codecarbon
+            return True
+        except ImportError:
+            return False
+
+
+class JoularJXProfiler(ProfilerInterface):
+    """Wraps JoularJX for Java energy measurement (requires JoularJX agent jar)."""
+    def __init__(self, agent_path: str = ""):
+        self.agent_path = agent_path or self._find_agent()
+
+    def _find_agent(self) -> str:
+        for p in [Path("joularjx-agent.jar"), Path.home() / ".joularjx" / "joularjx-agent.jar"]:
+            if p.exists():
+                return str(p)
+        return ""
+
+    def run(self, cmd: List[str], timeout: int = 300) -> ProfileResult:
+        if not self.agent_path:
+            return ProfileResult(0.0, 0.0, "", [], {"error": "JoularJX agent not found"})
+        jx_cmd = cmd.copy()
+        if cmd[0] == "java":
+            jx_cmd.insert(1, f"-javaagent:{self.agent_path}")
+        start = time.perf_counter()
+        result = subprocess.run(jx_cmd, capture_output=True, text=True, timeout=timeout)
+        elapsed = time.perf_counter() - start
+        energy = self._parse_joularjx_output()
+        return ProfileResult(energy, elapsed, result.stdout, [], {"agent": self.agent_path})
+
+    def _parse_joularjx_output(self) -> float:
+        csv_path = Path("joularJX-all-methods-energy.csv")
+        if not csv_path.exists():
+            return 0.0
+        total = 0.0
+        for line in csv_path.read_text().splitlines()[1:]:
+            parts = line.split(",")
+            if len(parts) >= 2:
+                try:
+                    total += float(parts[-1])
+                except ValueError:
+                    pass
+        return total
+
+    def is_available(self) -> bool:
+        return bool(self.agent_path) and Path(self.agent_path).exists()
+
+
 def get_profiler(name: str) -> ProfilerInterface:
     profilers = {
         "codegreen": CodeGreenProfiler,
         "perf": PerfProfiler,
         "native": NativeProfiler,
+        "codecarbon": CodeCarbonProfiler,
+        "joularjx": JoularJXProfiler,
     }
     if name not in profilers:
         raise ValueError(f"Unknown profiler: {name}. Available: {list(profilers.keys())}")

@@ -3,6 +3,9 @@
 #include "nemb/core/measurement_coordinator.hpp"
 #include "nemb/core/energy_provider.hpp"
 #include "nemb/utils/precision_timer.hpp"
+#ifdef __APPLE__
+#include "nemb/drivers/darwin_kpc_provider.hpp"
+#endif
 #ifdef HAVE_JNI
 #include <jni.h>
 #endif
@@ -49,6 +52,12 @@ private:
     struct Marker {
         std::string name;
         uint64_t timestamp_ns;
+#ifdef __APPLE__
+        uint64_t kpc_cycles{0};
+        uint64_t kpc_instructions{0};
+        uint64_t kpc_cache_misses{0};
+        uint64_t kpc_branch_misses{0};
+#endif
     };
     
     NEMBConfig config_;
@@ -126,6 +135,11 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
 
     bool started = coordinator_->start_measurements();
 
+#ifdef __APPLE__
+    // Initialize kpc for hybrid checkpoint counters (cycles, IPC, cache misses)
+    nemb::drivers::DarwinKPCProvider::initialize();
+#endif
+
     // Restore output
     if (!config.enable_debug_logging) {
         std::cout.rdbuf(saved_cout);
@@ -162,19 +176,38 @@ void EnergyMeter::Impl::mark_checkpoint(const std::string& name) {
     // Get timestamp BEFORE lock to minimize critical section
     uint64_t ts = timer_.get_timestamp_ns();
 
-    // Pre-allocate buffer to avoid heap allocations (stack-based)
-    // Format: "original_name#inv_N_tTHREADID"
+    // Hybrid checkpoint: also read kpc perf counters on macOS (~200ns)
+#ifdef __APPLE__
+    uint64_t kpc_cyc = 0, kpc_ins = 0, kpc_cm = 0, kpc_bm = 0;
+    if (nemb::drivers::DarwinKPCProvider::is_available()) {
+        auto snap = nemb::drivers::DarwinKPCProvider::read_thread_counters();
+        kpc_cyc = snap.cycles;
+        kpc_ins = snap.instructions;
+        kpc_cm = snap.l1d_cache_misses;
+        kpc_bm = snap.branch_misses;
+    }
+#endif
+
     thread_local char enhanced_buffer[512];
     int len = snprintf(enhanced_buffer, sizeof(enhanced_buffer),
                        "%s#inv_%u_t%zu", name.c_str(), invocation, thread_hash);
 
     if (len < 0 || len >= static_cast<int>(sizeof(enhanced_buffer))) {
-        // Fallback for very long names (rare)
         std::lock_guard<std::mutex> lock(markers_mutex_);
-        markers_.push_back({name + "#inv_" + std::to_string(invocation) + "_t" + std::to_string(thread_hash), ts});
+        Marker m{name + "#inv_" + std::to_string(invocation) + "_t" + std::to_string(thread_hash), ts};
+#ifdef __APPLE__
+        m.kpc_cycles = kpc_cyc; m.kpc_instructions = kpc_ins;
+        m.kpc_cache_misses = kpc_cm; m.kpc_branch_misses = kpc_bm;
+#endif
+        markers_.push_back(std::move(m));
     } else {
         std::lock_guard<std::mutex> lock(markers_mutex_);
-        markers_.push_back({std::string(enhanced_buffer, len), ts});
+        Marker m{std::string(enhanced_buffer, len), ts};
+#ifdef __APPLE__
+        m.kpc_cycles = kpc_cyc; m.kpc_instructions = kpc_ins;
+        m.kpc_cache_misses = kpc_cm; m.kpc_branch_misses = kpc_bm;
+#endif
+        markers_.push_back(std::move(m));
     }
 }
 
@@ -210,6 +243,12 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             cc.cumulative_energy_joules = r1.total_system_energy_joules + ratio * (r2.total_system_energy_joules - r1.total_system_energy_joules);
             cc.instantaneous_power_watts = r1.total_system_power_watts + ratio * (r2.total_system_power_watts - r1.total_system_power_watts);
         }
+#ifdef __APPLE__
+        cc.cycles = marker.kpc_cycles;
+        cc.instructions = marker.kpc_instructions;
+        cc.cache_misses = marker.kpc_cache_misses;
+        cc.branch_misses = marker.kpc_branch_misses;
+#endif
         result.push_back(cc);
     }
     return result;
