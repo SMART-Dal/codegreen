@@ -317,10 +317,13 @@ bool IntelRAPLProvider::detect_rapl_domains() {
         if (has_psys) {
             if (d == "psys") top_level_domains_.insert(d);
         } else {
-            // package-0, package-1, dram, dram-0 etc. are top-level
             if (d.rfind("package", 0) == 0 || d.rfind("dram", 0) == 0)
                 top_level_domains_.insert(d);
         }
+    }
+    // Fallback: if no recognized top-level domains, include all (safe overcount)
+    if (top_level_domains_.empty()) {
+        for (auto& d : available_domains_) top_level_domains_.insert(d);
     }
     
     // Set access method

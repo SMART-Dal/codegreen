@@ -37,6 +37,24 @@ static std::string channel_to_domain(const std::string& name) {
     if (name == "ECPU") return "ecpu";
     if (name == "PCPU") return "pcpu";
     if (name == "AMCC") return "memory_controller";
+    if (name == "DCS") return "dram_controller";
+    // Skip known noise channels (per-core, SRAM, DTL, PCIe -- ~150 channels on M4)
+    if (name.find("DTL") != std::string::npos) return "";
+    if (name.find("SRAM") != std::string::npos) return "";
+    if (name.find("PCIe") != std::string::npos) return "";
+    if (name.find("apciec") != std::string::npos) return "";
+    // Skip per-core variants (ECPU0, ECPU1, PCPU0, etc.)
+    if ((name.rfind("ECPU", 0) == 0 || name.rfind("PCPU", 0) == 0) &&
+        name.size() > 4 && name != "ECPU" && name != "PCPU") return "";
+    // Pass through genuinely unknown channels for future-proofing.
+    // They appear in domain_energy_joules and default to top-level via compute_top_level_domains fallback.
+    if (!name.empty()) {
+        std::string lower;
+        for (char c : name) lower += std::tolower(c);
+        // Replace spaces with underscores for clean domain names
+        for (char& c : lower) if (c == ' ') c = '_';
+        return lower;
+    }
     return "";
 }
 
@@ -111,26 +129,21 @@ bool DarwinIOReportProvider::initialize() {
 }
 
 void DarwinIOReportProvider::compute_top_level_domains() {
-    // Apple Silicon IOReport hierarchy (verified on M4):
-    //   "CPU Energy" = ECPU + PCPU (aggregate -- top-level for CPU)
-    //   "ECPU", "PCPU" = sub-clusters of CPU (NOT top-level)
-    //   "GPU Energy" = separate (top-level)
-    //   "ANE" = separate (top-level)
-    //   "DRAM" = separate (top-level)
-    //   "DISP" = display (excluded from software profiling total)
-    //   "AMCC", "DCS" = memory controller fabric (overlaps with DRAM, excluded)
-    //
-    // Rule: a domain is top-level if it is NOT a known sub-component of another.
-    // "cpu" contains "ecpu"+"pcpu". "memory_controller" overlaps "dram".
-    // Unknown domains default to top-level (safe: overcounts, never undercounts).
+    // Domains that are sub-components of other domains (would double-count if summed).
+    // This set can grow as new Apple chips add sub-domains -- safe to add, never to remove.
+    static const std::set<std::string> sub_domains = {
+        "ecpu", "pcpu",                     // sub-clusters of "cpu"
+        "memory_controller", "dram_controller", // overlaps with "dram"
+    };
+    // Domains excluded from software profiling total (not caused by code execution).
+    static const std::set<std::string> noise_domains = {
+        "display",                           // constant regardless of workload
+    };
     top_level_domains_.clear();
-    std::set<std::string> known_sub_domains = {"ecpu", "pcpu", "memory_controller"};
-    std::set<std::string> known_noise_domains = {"display"}; // not software-related
     for (auto& [d, _] : domains_) {
-        if (!known_sub_domains.count(d) && !known_noise_domains.count(d))
+        if (!sub_domains.count(d) && !noise_domains.count(d))
             top_level_domains_.insert(d);
     }
-    // Fallback: if nothing recognized, include everything
     if (top_level_domains_.empty()) {
         for (auto& [d, _] : domains_) top_level_domains_.insert(d);
     }
@@ -182,8 +195,9 @@ EnergyReading DarwinIOReportProvider::get_reading() {
         return 0;
     });
 
-    // Recompute top-level set if new domains appeared (first few samples)
-    if (top_level_domains_.empty()) compute_top_level_domains();
+    // Recompute every sample -- handles domains appearing after first sample.
+    // O(N) with N~10 domains, negligible overhead vs IOReport snapshot cost.
+    compute_top_level_domains();
 
     // All domains go into breakdown (users get full visibility for analysis)
     // Only top-level domains contribute to total (no double-counting)
