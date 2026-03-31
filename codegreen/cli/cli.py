@@ -990,8 +990,8 @@ def _build_comprehensive_json(
 def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
     """Check if actual energy measurement should be performed"""
     # For now, check if binary exists for actual measurement
-    binary_path = get_binary_path()
-    return binary_path is not None and binary_path.exists()
+    backend = _get_energy_backend()
+    return not isinstance(backend, _TimeOnlyBackend)
 
 
 def _parse_runtime_measurements(output: str) -> List[Dict[str, Any]]:
@@ -2126,22 +2126,26 @@ def run_measure_workload(
     console.print(f"[blue]Duration:[/blue] {duration} seconds")
     console.print(f"[blue]Workload:[/blue] {workload}")
     
-    binary_path = get_binary_path()
-    if not binary_path:
-        console.print("[red]CodeGreen binary not found[/red]")
+    backend = _get_energy_backend()
+    if isinstance(backend, _TimeOnlyBackend):
+        console.print("[red]No energy measurement backend available[/red]")
         raise typer.Exit(1)
-    
+
+    # Generate workload command
+    if workload == "cpu_stress":
+        cmd = ["python3", "-c", f"import time;t=time.time();[sum(range(10**6)) for _ in iter(lambda:time.time()-t<{duration},True)]"]
+    elif workload == "memory_stress":
+        cmd = ["python3", "-c", f"import time;t=time.time();exec('x=[]\\nwhile time.time()-t<{duration}:\\n x.append(bytearray(10**6))\\n if len(x)>100: x.clear()')"]
+    else:
+        cmd = ["python3", "-c", f"import time;time.sleep({duration})"]
+
     try:
-        result = subprocess.run(
-            [binary_path, "--measure-workload", f"--duration={duration}", f"--workload={workload}"],
-            capture_output=True,
-            text=True,
-            timeout=duration + 30  # Add buffer time
-        )
-        
-        if result.returncode == 0:
+        energy_j, elapsed = backend.measure(cmd, timeout=duration + 30)
+        if energy_j and energy_j > 0:
             console.print("[green]Workload measurement completed successfully[/green]")
-            console.print(result.stdout)
+            console.print(f"Energy: {energy_j:.4f} J")
+            console.print(f"Power:  {energy_j/elapsed:.2f} W")
+            console.print(f"Duration: {elapsed:.2f} s")
         else:
             console.print("[red]Workload measurement failed[/red]")
             console.print(result.stderr)
@@ -2405,10 +2409,8 @@ class _NEMBBackend(_EnergyBackend):
         return (energy.value if ok and energy.value > 0 else None, elapsed)
 
     def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
-        # NEMB wraps via the codegreen binary which handles measurement internally
-        binary = get_binary_path()
-        if binary:
-            return f"{binary} measure-workload --output {energy_file} -- bash -c '{cmd_str} 2>{checkpoint_file}'"
+        # NEMB measures in-process; for project mode, just run the command and
+        # let the coordinator's background thread capture energy during execution
         return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
 
     def parse_energy(self, energy_file: str) -> float:

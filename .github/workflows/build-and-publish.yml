@@ -42,14 +42,14 @@ jobs:
         CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
         CIBW_BEFORE_ALL_LINUX: >
           yum install -y epel-release &&
-          yum install -y cmake gcc-c++ make pkgconfig jsoncpp-devel libcurl-devel sqlite-devel &&
+          yum install -y cmake gcc-c++ make pkgconfig &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
-          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(nproc) && ls -la {project}/lib/libcodegreen-nemb.so {project}/build/bin/codegreen 2>/dev/null
+          cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(nproc) && ls -la {project}/lib/libcodegreen-nemb.so
         CIBW_ENVIRONMENT: >
           LD_LIBRARY_PATH={project}/lib:$LD_LIBRARY_PATH
         CIBW_TEST_COMMAND: >
-          python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;so=pkg/'lib'/'libcodegreen-nemb.so';b=pkg/'bin'/'codegreen';assert so.exists(),f'NEMB .so missing at {so}';assert b.exists(),f'CLI missing at {b}';print(f'NEMB OK: {so} ({so.stat().st_size}B)');print(f'CLI OK: {b} ({b.stat().st_size}B)')" && codegreen --help
+          python -c "import importlib,pathlib;pkg=pathlib.Path(importlib.import_module('codegreen').__file__).parent;so=pkg/'lib'/'libcodegreen-nemb.so';assert so.exists(),f'NEMB .so missing at {so}';print(f'NEMB OK: {so} ({so.stat().st_size}B)')" && codegreen --help
 
     - name: Build wheels (macOS)
       if: matrix.platform == 'macos'
@@ -58,7 +58,7 @@ jobs:
         CIBW_BUILD: "cp310-macosx_arm64 cp311-macosx_arm64 cp312-macosx_arm64 cp313-macosx_arm64"
         CIBW_ARCHS_MACOS: arm64
         CIBW_BEFORE_ALL_MACOS: >
-          brew install cmake pkg-config jsoncpp curl sqlite &&
+          brew install cmake pkg-config &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
           cd {project} && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build . --config Release -j$(sysctl -n hw.ncpu) && ls -la {project}/lib/libcodegreen-nemb.dylib
@@ -112,11 +112,8 @@ jobs:
         import importlib, pathlib
         pkg = pathlib.Path(importlib.import_module('codegreen').__file__).parent
         so = pkg / 'lib' / 'libcodegreen-nemb.so'
-        binary = pkg / 'bin' / 'codegreen'
         assert so.exists(), f'NEMB .so missing at {so}'
-        assert binary.exists(), f'CLI binary missing at {binary}'
         print(f'NEMB: {so} ({so.stat().st_size} bytes)')
-        print(f'CLI:  {binary} ({binary.stat().st_size} bytes)')
         "
 
         cat > /tmp/cg_test.py << 'PYEOF'
