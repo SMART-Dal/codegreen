@@ -6,7 +6,7 @@
 
     ---
 
-    Hardware-level energy monitoring via Intel RAPL, NVIDIA NVML, and AMD ROCm with sub-millisecond resolution.
+    Hardware-level energy monitoring via RAPL (Linux), IOReport (macOS), NVML, and ROCm with sub-millisecond resolution.
 
     [:octicons-arrow-right-24: Getting Started](getting-started/quickstart.md)
 
@@ -50,7 +50,7 @@ CodeGreen is an energy measurement tool that helps developers understand the ene
 
 ### Key Features
 
-- **Energy Measurement**: Per-function energy attribution via Intel RAPL, NVIDIA NVML, AMD ROCm
+- **Energy Measurement**: Per-function energy attribution via RAPL (Linux), IOReport + kpc (macOS), NVML, ROCm
 - **Quick Measurement**: `codegreen run` measures energy of any shell command (like hyperfine for energy)
 - **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
 - **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
@@ -62,7 +62,13 @@ CodeGreen is an energy measurement tool that helps developers understand the ene
 
 Get started with CodeGreen in just a few steps:
 
-=== "Installation"
+=== "Install (pip)"
+
+    ```bash
+    pip install codegreen
+    ```
+
+=== "Install (source)"
 
     ```bash
     git clone https://github.com/SMART-Dal/codegreen.git
@@ -70,7 +76,7 @@ Get started with CodeGreen in just a few steps:
     ./install.sh
     ```
 
-=== "Initialize"
+=== "Initialize (Linux)"
 
     ```bash
     sudo codegreen init-sensors
@@ -108,17 +114,17 @@ Get started with CodeGreen in just a few steps:
 
     ---
 
-    Apple Silicon and Intel Mac energy monitoring support.
+    Apple Silicon energy via IOReport (CPU/GPU/ANE/DRAM) + kpc hardware perf counters. Pre-built ARM64 wheels on PyPI.
 
 -   :material-microsoft-windows:{ .lg .middle } **Windows**
 
     ---
 
-    Windows energy monitoring via supported hardware interfaces.
+    CLI and static analysis available. Energy measurement planned for future release.
 
 </div>
 
-Hardware sensor availability varies by platform.
+Pre-built wheels for Linux x86_64 and macOS ARM64. Other platforms: install from source or use time-only mode.
 
 ## Citing CodeGreen
 
