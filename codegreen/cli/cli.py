@@ -717,12 +717,43 @@ def main(
     if debug:
         import platform as _pf
         pkg_root = Path(__file__).resolve().parent.parent
+        import psutil
         console.print(f"\n[bold]CodeGreen Diagnostics:[/bold]")
         console.print(f"  Version:    {_VERSION}")
         console.print(f"  Platform:   {_pf.system()} {_pf.machine()}")
         console.print(f"  OS:         {_pf.platform()}")
         console.print(f"  Python:     {sys.version.split()[0]} ({sys.executable})")
         console.print(f"  Package:    {pkg_root}")
+        # Hardware
+        try:
+            cpu_name = _pf.processor() or "unknown"
+            try:
+                if sys.platform == "linux":
+                    for line in open("/proc/cpuinfo"):
+                        if line.startswith("model name"):
+                            cpu_name = line.split(":")[1].strip(); break
+                elif sys.platform == "darwin":
+                    import subprocess as _sp
+                    cpu_name = _sp.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip()
+            except Exception:
+                pass
+            console.print(f"  CPU:        {cpu_name}")
+            console.print(f"  Cores:      {psutil.cpu_count(logical=False)} physical, {psutil.cpu_count(logical=True)} logical")
+            mem = psutil.virtual_memory()
+            console.print(f"  RAM:        {mem.total / (1024**3):.1f} GB ({mem.percent}% used)")
+        except Exception:
+            pass
+        # Dependencies
+        try:
+            import tree_sitter
+            console.print(f"  tree-sitter: {tree_sitter.__version__}")
+        except Exception:
+            console.print(f"  tree-sitter: not found")
+        try:
+            import typer as _ty
+            console.print(f"  typer:      {_ty.__version__}")
+        except Exception:
+            pass
         # NEMB library check
         nemb_files = list((pkg_root / "lib").glob("*codegreen-nemb*")) if (pkg_root / "lib").is_dir() else []
         if nemb_files:
