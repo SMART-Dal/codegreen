@@ -2,7 +2,16 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.3.15 (Current)
+## v0.3.16 (Current)
+
+### NVML Runtime Loading
+- NVML loaded via dlopen/LoadLibrary instead of link-time dependency (fixes `libnvidia-ml.so.1: cannot open shared object file`)
+- Works on all platforms without NVIDIA drivers installed (no hard .so dependency)
+- `CODEGREEN_NVML_PATH` env var for non-standard NVML locations
+- Detailed error messages listing all searched paths when NVML not found
+- Eliminates `HAVE_NVML` compile flag entirely -- provider always compiles, decides at runtime
+
+## v0.3.15
 
 ### Crash Fixes
 - Fix core dump when RAPL permission denied (C++ exception no longer crosses ctypes boundary)

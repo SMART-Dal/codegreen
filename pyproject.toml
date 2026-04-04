@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codegreen"
-version = "0.3.15"
+version = "0.3.16"
 description = "Know the true energy cost of your code -- hardware-level measurement via RAPL, NVML, IOReport, EMI"
 readme = "README.md"
 license = {file = "LICENSE"}

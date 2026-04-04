@@ -62,13 +62,18 @@ class BuildWithCMake(build_py):
                 raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             msg = [f"\n{'='*60}",
-                   "NEMB C++ build failed. Energy measurement will not be available.",
+                   "NEMB C++ build failed: " + str(e),
+                   "Energy measurement will not be available.",
                    "Installing Python-only (CLI, instrumentation, analysis work)."]
             if isinstance(e, subprocess.CalledProcessError):
                 if e.stderr:
-                    msg.append(f"stderr:\n{e.stderr.strip()[-400:]}")
+                    msg.append(f"\ncmake stderr:\n{e.stderr.strip()[-800:]}")
                 if e.stdout:
-                    msg.append(f"stdout:\n{e.stdout.strip()[-400:]}")
+                    msg.append(f"\ncmake stdout:\n{e.stdout.strip()[-400:]}")
+                msg.append("\nCommon fixes:")
+                msg.append("  macOS: xcode-select --install  (for C++ compiler)")
+                msg.append("  Linux: apt install build-essential cmake")
+                msg.append("  Windows: install Visual Studio Build Tools + cmake")
             elif isinstance(e, FileNotFoundError):
                 msg.append("cmake not found. Install: brew install cmake / apt install cmake")
             msg.append("To retry: pip install --force-reinstall --no-cache-dir codegreen")

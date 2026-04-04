@@ -45,6 +45,6 @@ end
 -- Usage information
 if (myModuleUserlvl() >= 2) then
     LmodMessage("CodeGreen loaded. Usage examples:")
-    LmodMessage("  codegreen benchmark cpu_stress --duration 10")
+    LmodMessage("  codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'")
     LmodMessage("  python -m codegreen.cli info")
 end

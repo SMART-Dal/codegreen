@@ -75,17 +75,13 @@ endif()
 
 target_compile_definitions(codegreen-nemb PRIVATE NEMB_EXPORTS)
 
-if(HAVE_NVML)
-    target_compile_definitions(codegreen-nemb PRIVATE HAVE_NVML)
-    target_include_directories(codegreen-nemb PRIVATE ${NVML_INCLUDE_DIR})
-endif()
+# NVML is loaded at runtime via dlopen/LoadLibrary (no compile-time dependency).
+# The NVIDIAGPUProvider always compiles and gracefully returns false if the
+# NVIDIA driver is not installed on the target machine.
 
 target_link_libraries(codegreen-nemb Threads::Threads)
-if(HAVE_NVML)
-    target_link_libraries(codegreen-nemb ${NVML_LIBRARY})
-endif()
 if(NOT WIN32)
-    target_link_libraries(codegreen-nemb m)
+    target_link_libraries(codegreen-nemb dl m)
 endif()
 
 if(APPLE)

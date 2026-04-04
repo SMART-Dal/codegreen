@@ -15,8 +15,7 @@ _install_str = str(_install_dir)
 if _install_str not in sys.path:
     sys.path.insert(0, _install_str)
 
-if os.getcwd() != _install_str:
-    os.chdir(_install_str)
+os.environ.setdefault("CODEGREEN_INSTALL_DIR", _install_str)
 
 from codegreen.cli.cli import main_cli
 

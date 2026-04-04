@@ -15,28 +15,18 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 find_package(PkgConfig)
 find_package(Threads REQUIRED)
 
-# Optional GPU library detection
+# GPU libraries are loaded at runtime (dlopen/LoadLibrary), not linked.
+# These checks are informational only.
 find_library(NVML_LIBRARY nvidia-ml PATHS
     /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu
     "C:/Windows/System32" "$ENV{ProgramFiles}/NVIDIA Corporation/NVSMI")
-find_path(NVML_INCLUDE_DIR nvml.h PATHS
-    /usr/local/cuda/include /usr/include/nvidia/gdk
-    "$ENV{CUDA_PATH}/include")
-find_library(ROCM_SMI_LIBRARY rocm_smi64 PATHS /opt/rocm/lib)
-find_path(ROCM_SMI_INCLUDE_DIR rocm_smi.h PATHS /opt/rocm/include/rocm_smi)
-
-if(NVML_LIBRARY AND NVML_INCLUDE_DIR)
-    message(STATUS "NVML found: ${NVML_LIBRARY}")
-    set(HAVE_NVML ON)
-else()
-    set(HAVE_NVML OFF)
+if(NVML_LIBRARY)
+    message(STATUS "NVML found (runtime-loaded): ${NVML_LIBRARY}")
 endif()
 
-if(ROCM_SMI_LIBRARY AND ROCM_SMI_INCLUDE_DIR)
+find_library(ROCM_SMI_LIBRARY rocm_smi64 PATHS /opt/rocm/lib)
+if(ROCM_SMI_LIBRARY)
     message(STATUS "ROCm SMI found: ${ROCM_SMI_LIBRARY}")
-    set(HAVE_ROCM_SMI ON)
-else()
-    set(HAVE_ROCM_SMI OFF)
 endif()
 
 # Global include directories

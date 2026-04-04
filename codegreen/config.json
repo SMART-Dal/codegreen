@@ -1,5 +1,5 @@
 {
-  "version": "0.3.15",
+  "version": "0.3.16",
   "paths": {
     "runtime_modules": {
       "python": "runtime/codegreen_runtime.py",
@@ -166,6 +166,6 @@
     "timestamp": null,
     "environment_type": "unknown",
     "detected_sensors": [],
-    "version": "0.3.15"
+    "version": "0.3.16"
   }
 }
