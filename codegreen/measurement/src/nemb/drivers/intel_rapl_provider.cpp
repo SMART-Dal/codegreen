@@ -30,49 +30,49 @@ IntelRAPLProvider::~IntelRAPLProvider() {
 }
 
 bool IntelRAPLProvider::initialize() {
-    std::cout << "Initializing Intel RAPL provider..." << std::endl;
+    std::cerr << "Initializing Intel RAPL provider..." << std::endl;
     
     // Detect available RAPL domains with proper hardware capability detection
     if (!detect_rapl_domains()) {
-        std::cout << "No RAPL domains detected" << std::endl;
+        std::cerr << "No RAPL domains detected" << std::endl;
         return false;
     }
     
     // Query hardware-specific energy resolution instead of hardcoding
     if (!query_energy_units()) {
-        std::cout << "Failed to determine energy units" << std::endl;
+        std::cerr << "Failed to determine energy units" << std::endl;
         return false;
     }
     
     // Initialize counter management for wraparound handling
     if (!initialize_counters()) {
-        std::cout << "Counter initialization failed" << std::endl;
+        std::cerr << "Counter initialization failed" << std::endl;
         return false;
     }
     
     // Initialize non-blocking file readers
     if (!initialize_file_readers()) {
-        std::cout << "Failed to initialize file readers" << std::endl;
+        std::cerr << "Failed to initialize file readers" << std::endl;
         return false;
     }
     
     // Take initial baseline readings
     if (!take_initial_readings()) {
-        std::cout << "Failed to take initial readings" << std::endl;
+        std::cerr << "Failed to take initial readings" << std::endl;
         return false;
     }
     
     initialized_ = true;
     
     // Log detected capabilities
-    std::cout << "[ok] Intel RAPL provider initialized" << std::endl;
-    std::cout << "    Energy unit: " << energy_unit_joules_ << " J" << std::endl;
-    std::cout << "    Available domains: ";
+    std::cerr << "[ok] Intel RAPL provider initialized" << std::endl;
+    std::cerr << "    Energy unit: " << energy_unit_joules_ << " J" << std::endl;
+    std::cerr << "    Available domains: ";
     for (size_t i = 0; i < available_domains_.size(); ++i) {
-        if (i > 0) std::cout << ", ";
-        std::cout << available_domains_[i];
+        if (i > 0) std::cerr << ", ";
+        std::cerr << available_domains_[i];
     }
-    std::cout << std::endl;
+    std::cerr << std::endl;
     
     return true;
 }
@@ -226,7 +226,9 @@ bool IntelRAPLProvider::is_available() const {
 }
 
 void IntelRAPLProvider::shutdown() {
-    std::cout << "Shutting down Intel RAPL provider..." << std::endl;
+    const char* dbg = std::getenv("CODEGREEN_DEBUG");
+    if (dbg && std::string(dbg) == "1")
+        std::cerr << "Shutting down Intel RAPL provider..." << std::endl;
     
     // Close all file readers
     for (auto& [domain, reader] : domain_file_readers_) {
@@ -255,7 +257,7 @@ std::map<std::string, RAPLDomain> IntelRAPLProvider::get_available_domains() con
 
 // Hardware detection methods implementation
 bool IntelRAPLProvider::detect_rapl_domains() {
-    std::cout << "Detecting RAPL domains..." << std::endl;
+    std::cerr << "Detecting RAPL domains..." << std::endl;
     
     available_domains_.clear();
     domain_paths_.clear();
@@ -287,7 +289,7 @@ bool IntelRAPLProvider::detect_rapl_domains() {
         domain.sysfs_path = energy_path;
         domain.available = true;
         rapl_domains_[domain_name] = domain;
-        std::cout << "  [ok] Found domain: " << domain_name << std::endl;
+        std::cerr << "  [ok] Found domain: " << domain_name << std::endl;
         for (int sub = 0; ; ++sub) {
             std::string sub_base = base + ":" + std::to_string(sub);
             std::string sub_energy = sub_base + "/energy_uj";
@@ -302,12 +304,12 @@ bool IntelRAPLProvider::detect_rapl_domains() {
             sub_domain.sysfs_path = sub_energy;
             sub_domain.available = true;
             rapl_domains_[sub_name] = sub_domain;
-            std::cout << "  [ok] Found sub-domain: " << sub_name << std::endl;
+            std::cerr << "  [ok] Found sub-domain: " << sub_name << std::endl;
         }
     }
 
     if (available_domains_.empty()) {
-        std::cout << "  No RAPL domains found" << std::endl;
+        std::cerr << "  No RAPL domains found" << std::endl;
         return false;
     }
 
@@ -342,7 +344,7 @@ bool IntelRAPLProvider::detect_rapl_domains() {
 }
 
 bool IntelRAPLProvider::query_energy_units() {
-    std::cout << "Querying RAPL energy units..." << std::endl;
+    std::cerr << "Querying RAPL energy units..." << std::endl;
     
     // Try to read energy unit from sysfs
     // Note: The actual RAPL energy unit should be read from MSR 0x606
@@ -354,22 +356,22 @@ bool IntelRAPLProvider::query_energy_units() {
         std::ifstream name_file(name_path);
         std::string rapl_name;
         if (name_file >> rapl_name) {
-            std::cout << "  RAPL name: " << rapl_name << std::endl;
+            std::cerr << "  RAPL name: " << rapl_name << std::endl;
         }
     }
     
     // Query energy unit from hardware - NEVER use hardcoded values!
     if (!query_energy_unit_from_hardware()) {
-        std::cout << "  Failed to query energy unit from hardware" << std::endl;
+        std::cerr << "  Failed to query energy unit from hardware" << std::endl;
         return false;
     }
     
-    std::cout << "  Energy unit: " << (energy_unit_joules_ * 1e6) << " μJ" << std::endl;
+    std::cerr << "  Energy unit: " << (energy_unit_joules_ * 1e6) << " μJ" << std::endl;
     return true;
 }
 
 bool IntelRAPLProvider::initialize_counters() {
-    std::cout << "Initializing RAPL counters..." << std::endl;
+    std::cerr << "Initializing RAPL counters..." << std::endl;
     
     // Create the HAL counter manager
     counter_manager_ = std::make_unique<hal::CounterManager>();
@@ -394,43 +396,46 @@ bool IntelRAPLProvider::initialize_counters() {
             std::ifstream max_file(max_range_path);
             if (max_file.is_open()) {
                 max_file >> max_energy;
-                std::cout << "  Max energy range for " << domain << ": " << max_energy << " uJ" << std::endl;
+                std::cerr << "  Max energy range for " << domain << ": " << max_energy << " uJ" << std::endl;
             }
         }
         config.max_value = max_energy;
 
         counter_manager_->register_counter(domain, config);
-        std::cout << "  [ok] Initialized counter for domain: " << domain << std::endl;
+        std::cerr << "  [ok] Initialized counter for domain: " << domain << std::endl;
     }
     
     return true;
 }
 
 bool IntelRAPLProvider::initialize_file_readers() {
-    std::cout << "Initializing non-blocking file readers..." << std::endl;
-    
-    // Clear any existing readers
+    std::cerr << "Initializing non-blocking file readers..." << std::endl;
     domain_file_readers_.clear();
-    
+    std::vector<std::string> accessible;
+
     for (const std::string& domain : available_domains_) {
         const std::string& path = domain_paths_[domain];
-        
         auto reader = std::make_unique<utils::NonBlockingFileReader>(path);
         if (!reader->open_file()) {
-            std::cout << "Failed to open file reader for domain: " << domain 
-                      << " (path: " << path << ")" << std::endl;
-            return false;
+            std::cerr << "  [skip] Cannot read " << domain
+                      << " (" << path << ") -- permission denied?" << std::endl;
+            continue;
         }
-        
         domain_file_readers_[domain] = std::move(reader);
-        std::cout << "[ok] File reader initialized for domain: " << domain << std::endl;
+        accessible.push_back(domain);
+        std::cerr << "  [ok] " << domain << std::endl;
     }
-    
+
+    if (accessible.empty()) {
+        std::cerr << "No RAPL domains accessible. Fix: sudo chmod +r /sys/class/powercap/intel-rapl/*/energy_uj" << std::endl;
+        return false;
+    }
+    available_domains_ = accessible;
     return true;
 }
 
 bool IntelRAPLProvider::take_initial_readings() {
-    std::cout << "Taking initial baseline readings..." << std::endl;
+    std::cerr << "Taking initial baseline readings..." << std::endl;
     
     std::map<std::string, uint64_t> initial_values;
     bool success = true;
@@ -442,14 +447,14 @@ bool IntelRAPLProvider::take_initial_readings() {
             
             if (reader && reader->read_uint64_with_timeout(energy_uj, std::chrono::milliseconds(100))) {
                 initial_values[domain] = energy_uj;
-                std::cout << "  [ok] Initial reading for " << domain << ": " 
+                std::cerr << "  [ok] Initial reading for " << domain << ": " 
                          << energy_uj << " μJ" << std::endl;
             } else {
-                std::cout << "  Cannot read " << domain << " energy file" << std::endl;
+                std::cerr << "  Cannot read " << domain << " energy file" << std::endl;
                 success = false;
             }
         } catch (const std::exception& e) {
-            std::cout << "  Error reading " << domain << ": " << e.what() << std::endl;
+            std::cerr << "  Error reading " << domain << ": " << e.what() << std::endl;
             success = false;
         }
     }
@@ -470,7 +475,7 @@ bool IntelRAPLProvider::query_energy_unit_from_hardware() {
         // For sysfs interface, energy values are already in microjoules
         // The unit is implicitly 1 microjoule = 1e-6 joules
         energy_unit_joules_ = 1e-6; // 1 microjoule
-        std::cout << "  [ok] Using sysfs energy unit: 1 μJ" << std::endl;
+        std::cerr << "  [ok] Using sysfs energy unit: 1 μJ" << std::endl;
         return true;
     }
     
@@ -493,17 +498,17 @@ bool IntelRAPLProvider::query_energy_unit_from_hardware() {
                     uint32_t energy_unit_raw = (power_unit_msr >> 8) & 0x1F;
                     energy_unit_joules_ = 1.0 / (1ULL << energy_unit_raw); // 2^(-energy_unit_raw) joules
                     
-                    std::cout << "  [ok] Hardware energy unit: " << (energy_unit_joules_ * 1e6) << " μJ" << std::endl;
+                    std::cerr << "  [ok] Hardware energy unit: " << (energy_unit_joules_ * 1e6) << " μJ" << std::endl;
                     return true;
                 }
             }
         }
     } catch (const std::exception& e) {
-        std::cout << "  MSR access failed: " << e.what() << std::endl;
+        std::cerr << "  MSR access failed: " << e.what() << std::endl;
     }
     
     // Final fallback - this should rarely be needed if hardware detection works properly
-    std::cout << "  Cannot query energy unit from hardware, using conservative fallback" << std::endl;
+    std::cerr << "  Cannot query energy unit from hardware, using conservative fallback" << std::endl;
     energy_unit_joules_ = 15.3e-6; // Conservative typical Intel value
     return true; // Still succeed, but with lower confidence
 }

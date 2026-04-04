@@ -46,7 +46,7 @@ console = Console()
 # Enhanced Typer app with advanced features
 app = typer.Typer(
     name="codegreen",
-    help="[bold green]CodeGreen[/bold green] - Energy-aware software development tool",
+    help="[bold green]CodeGreen[/bold green] - Know the true energy cost of your code",
     add_completion=True,  # Enable shell completion
     rich_markup_mode="rich",  # Enable Rich markup in help
     no_args_is_help=False,  # Allow version option without command
@@ -60,6 +60,7 @@ class Language(str, Enum):
     cpp = "cpp"
     java = "java"
     c = "c"
+    javascript = "javascript"  # analysis works; instrumented measurement needs JS runtime (WIP)
 
 class SensorType(str, Enum):
     """Available NEMB sensor types."""
@@ -85,6 +86,10 @@ class Granularity(str, Enum):
     """Instrumentation granularity level."""
     coarse = "coarse"  # main entry/exit only (minimal overhead)
     fine = "fine"       # all points from language config (functions, methods, etc.)
+
+def _is_root() -> bool:
+    """Check for root/admin. Safe on all platforms (Windows lacks geteuid)."""
+    return getattr(os, 'geteuid', lambda: 1)() == 0
 
 def get_binary_path() -> Optional[Path]:
     """
@@ -113,9 +118,9 @@ def get_config_path() -> Optional[Path]:
     """Get the path to the default configuration file."""
     pkg_root = Path(__file__).resolve().parent.parent
     possible_paths = [
+        Path.home() / ".codegreen" / "config.json",            # user override (highest priority)
         pkg_root / "config.json",                              # pip install (inside codegreen/)
         pkg_root.parent / "config" / "codegreen.json",         # dev: repo_root/config/codegreen.json
-        Path.home() / ".codegreen" / "codegreen.json",         # user override
     ]
     for path in possible_paths:
         if path.exists():
@@ -205,7 +210,7 @@ def detect_environment() -> Dict[str, Any]:
                     env_info["type"] = "shared_server"
                     env_info["deployment_mode"] = "multi_user"
                     env_info["detected_features"].append("multi_user_system")
-            except:
+            except Exception:
                 pass
         else:
             # Fallback detection without psutil
@@ -241,9 +246,9 @@ def detect_environment() -> Dict[str, Any]:
                 "cpu_cores": multiprocessing.cpu_count(),
                 "memory_gb": "unknown"
             }
-        except:
+        except Exception:
             pass
-    
+
     # Power management capabilities
     if Path("/sys/class/power_supply").exists():
         env_info["detected_features"].append("power_management")
@@ -441,7 +446,7 @@ def check_energy_permissions() -> Dict[str, Dict[str, Any]]:
     general_permission = {"accessible": True, "details": "Basic system access OK"}
     
     # Check if running as root (usually not recommended)
-    if os.geteuid() == 0:
+    if _is_root():
         general_permission = {
             "accessible": True,
             "details": "Running as root - all permissions available",
@@ -490,11 +495,11 @@ def detect_performance_settings() -> Dict[str, Any]:
         # I/O and storage
         try:
             disk_usage = psutil.disk_usage('/')
-            if disk_usage.free < disk_usage.total * 0.1:  # Less than 10% free
+            if disk_usage.free < disk_usage.total * 0.1:
                 settings["recommended_settings"]["storage"] = "Low disk space - enable temp file cleanup"
-        except:
+        except Exception:
             pass
-            
+
     else:
         # Fallback settings without psutil
         import multiprocessing
@@ -650,10 +655,10 @@ def test_configuration(config: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 # Run a very quick workload test
                 result = subprocess.run(
-                    [str(binary_path), "benchmark", "cpu_stress", "--duration=1"],
+                    [str(binary_path), "measure-workload", "--workload=cpu_stress", "--duration=1"],
                     capture_output=True, text=True, timeout=15
                 )
-                if result.returncode == 0 and "Energy consumed:" in result.stdout:
+                if result.returncode == 0:
                     test_results["measurement_test"] = "passed"
                 else:
                     test_results["warnings"].append("Quick measurement test failed")
@@ -675,37 +680,35 @@ def main(
     log_level: Annotated[LogLevel, typer.Option("--log-level", help="Set logging level")] = LogLevel.INFO,
 ):
     """
-    [bold green]CodeGreen[/bold green] - Energy-aware software development and optimization tool
+    [bold green]CodeGreen[/bold green] - Know the true energy cost of your code
 
-    Advanced energy profiling and optimization for sustainable software development.
-    Measure fine-grained energy consumption, identify hotspots, and optimize code
-    efficiency using hardware-level sensors and AI-powered analysis.
-
-    [bold]Core Features:[/bold]
-    - [cyan]Hardware-level energy measurement[/cyan] via Intel RAPL, NVIDIA NVML, AMD ROCm
-    - [cyan]Multi-language support[/cyan] with AST-based instrumentation (Python, C++, Java, C)
-    - [cyan]Function-level energy profiling[/cyan] with microsecond precision
-    - [cyan]AI-powered optimization[/cyan] suggestions and energy hotspot detection
-    - [cyan]Professional CLI interface[/cyan] with rich formatting and auto-completion
+    Precise, hardware-level energy measurement for any program. Reads directly
+    from CPU and GPU energy counters (Intel/AMD RAPL, NVIDIA NVML, Apple
+    IOReport, Windows EMI) -- no estimation, no modeling, just what the
+    hardware reports.
 
     [bold]Quick Start:[/bold]
-    - [dim]codegreen init[/dim] - Initialize sensors and system configuration
-    - [dim]codegreen measure python script.py[/dim] - Measure energy consumption
-    - [dim]codegreen analyze python module.py[/dim] - Analyze code structure
-    - [dim]codegreen benchmark cpu_stress[/dim] - Run energy benchmarks
-
-    [bold]System Management:[/bold]
-    - [dim]codegreen info[/dim] - Show installation and system status
-    - [dim]codegreen doctor[/dim] - Diagnose installation issues
-    - [dim]codegreen config --show[/dim] - View/edit configuration
+    - [dim]codegreen doctor[/dim]                              - Check system readiness
+    - [dim]codegreen run -- python3 script.py[/dim]            - Measure energy of a command
+    - [dim]codegreen measure python script.py[/dim]            - Per-function energy breakdown
+    - [dim]codegreen run --json --budget 10 -- ./binary[/dim]  - CI/CD energy gate
     """
     if version:
         console.print(f"[bold green]CodeGreen version {_VERSION}[/bold green]")
         raise typer.Exit()
-    
+
     # If no command is provided and version is not requested, show help
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
+        # Quick setup check for new users
+        backend = _get_energy_backend()
+        if isinstance(backend, _TimeOnlyBackend):
+            console.print("\n[yellow]Energy measurement not available.[/yellow]")
+            if sys.platform == "linux":
+                console.print("  Run: [cyan]sudo codegreen init-sensors[/cyan]  (one-time setup)")
+            elif sys.platform == "darwin":
+                console.print("  NEMB library required. Reinstall: [cyan]pip install --force-reinstall codegreen[/cyan]")
+            console.print("  Then: [cyan]codegreen doctor[/cyan]  (verify setup)")
         raise typer.Exit()
     
     if debug:
@@ -801,7 +804,7 @@ def main(
         console.print(f"  Config:     {cfg_path or 'not found'}")
         console.print()
 
-@app.command("measure")
+@app.command("measure", rich_help_panel="Measurement")
 def measure_energy(
     language: Annotated[Language, typer.Argument(help="Programming language to analyze")],
     script: Annotated[Path, typer.Argument(help="Path to the script file to measure")],
@@ -891,7 +894,7 @@ def measure_energy(
             instrumented_code = engine.instrument_code(source_code, points, language.value)
 
             # Determine correct output extension
-            ext_map = {'python': '.py', 'c': '.c', 'cpp': '.cpp', 'java': '.java'}
+            ext_map = {'python': '.py', 'c': '.c', 'cpp': '.cpp', 'java': '.java', 'javascript': '.js'}
             ext = ext_map.get(language.value, script.suffix)
             if language == Language.java:
                 # Java requires filename to match public class name
@@ -1285,7 +1288,7 @@ def _save_measurement_results(
         json.dump(results, f, indent=2)
 
 
-@app.command("analyze")
+@app.command("analyze", rich_help_panel="Measurement")
 def analyze_code_structure(
     language: Annotated[Language, typer.Argument(help="Programming language to analyze")],
     script: Annotated[Path, typer.Argument(help="Path to the script file to analyze")],
@@ -1491,7 +1494,7 @@ def analyze_code_structure(
             print(json.dumps({"success": False, "error": str(e)}))
         raise typer.Exit(1)
 
-@app.command("init")
+@app.command("init", rich_help_panel="Setup")
 def comprehensive_init(
     force: Annotated[bool, typer.Option("--force", "-f", help="Force re-initialization even if config exists")] = False,
     interactive: Annotated[bool, typer.Option("--interactive", "-i", help="Interactive mode with user confirmation")] = True,
@@ -1707,7 +1710,7 @@ def comprehensive_init(
         # Display next steps
         console.print("\n[bold]Next Steps:[/bold]")
         console.print("• Run [cyan]codegreen info[/cyan] to verify system status")
-        console.print("• Test with [cyan]codegreen benchmark cpu_stress --duration 5[/cyan]")
+        console.print("• Test with [cyan]codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'[/cyan]")
         console.print("• Customize settings with [cyan]codegreen config --edit[/cyan]")
         
     else:
@@ -1726,7 +1729,7 @@ def comprehensive_init(
         
         raise typer.Exit(1)
 
-@app.command("info")
+@app.command("info", rich_help_panel="Diagnostics")
 def show_info(
     detailed: Annotated[bool, typer.Option("--detailed", "-d", help="Show detailed information")] = False,
 ):
@@ -1786,7 +1789,7 @@ def show_info(
     try:
         import codegreen
         table.add_row("Version", "[ok]", f"CodeGreen {_VERSION}")
-    except:
+    except Exception:
         table.add_row("Version", "-", "Unknown")
     
     console.print(table)
@@ -1805,10 +1808,9 @@ def show_info(
         
         console.print(config_table)
 
-@app.command("doctor")
+@app.command("doctor", rich_help_panel="Diagnostics")
 def diagnose(
-    test_sensors: Annotated[bool, typer.Option("--test-sensors", help="Test sensor functionality")] = False,
-    fix: Annotated[bool, typer.Option("--fix", help="Attempt to fix common issues")] = False,
+    test_sensors: Annotated[bool, typer.Option("--test-sensors", help="Run a live energy measurement test")] = False,
 ):
     """
     [bold]Diagnose CodeGreen installation and configuration issues[/bold].
@@ -1828,13 +1830,12 @@ def diagnose(
     [bold]Examples:[/bold]
     - [cyan]codegreen doctor[/cyan] - Basic diagnostic checks
     - [cyan]codegreen doctor --test-sensors[/cyan] - Include sensor functionality tests
-    - [cyan]codegreen doctor --fix[/cyan] - Attempt to auto-fix common issues
+    - [cyan]codegreen doctor --test-sensors[/cyan] - Run live sensor test
     """
     console.print(Panel.fit("[bold green]CodeGreen Doctor - System Diagnosis[/bold green]"))
     
     issues = []
     warnings = []
-    fixes_applied = []
     
     # Check binary
     binary_path = get_binary_path()
@@ -1849,10 +1850,6 @@ def diagnose(
         console.print("[green][ok][/green] Python dependencies available")
     except ImportError as e:
         issues.append(f"Missing Python dependency: {e}")
-        if fix:
-            console.print("[blue]Attempting to install missing dependencies...[/blue]")
-            # Could add auto-fix logic here
-    
     # Check runtime
     if not ensure_runtime_available():
         warnings.append("Runtime modules not found - some features may not work")
@@ -1866,21 +1863,65 @@ def diagnose(
     else:
         console.print(f"[green][ok][/green] Configuration: {config_path}")
     
-    # Test basic functionality if binary exists
-    if binary_path and test_sensors:
-        console.print("\n[bold]Testing sensor functionality...[/bold]")
+    # Check NEMB native library
+    nemb = _NEMBBackend()
+    lib = nemb._load()
+    if lib and lib is not False:
+        console.print("[green][ok][/green] NEMB native library loaded")
+    else:
+        issues.append("NEMB native library not found (energy measurement unavailable)")
+
+    # Check energy backend availability
+    backend = _get_energy_backend()
+    if isinstance(backend, _TimeOnlyBackend):
+        issues.append(f"No energy backend available (time-only fallback)")
+    else:
+        console.print(f"[green][ok][/green] Energy backend: {backend.name}")
+
+    # Check GPU (NVIDIA)
+    gpu_detected = False
+    if shutil.which("nvidia-smi"):
         try:
-            result = subprocess.run([str(binary_path), "--help"], 
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                console.print("[green][ok][/green] Binary executes successfully")
+            r = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                gpu_detected = True
+                console.print(f"[green][ok][/green] NVIDIA GPU: {r.stdout.strip().splitlines()[0]}")
+        except Exception:
+            pass
+    if gpu_detected and not (lib and lib is not False):
+        warnings.append("NVIDIA GPU detected but NEMB library not loaded (no GPU energy measurement)")
+        warnings.append("Fix: pip install --force-reinstall --no-cache-dir codegreen")
+
+    # Check energy permissions (Linux RAPL / macOS sudo)
+    if sys.platform == "linux":
+        perms = check_energy_permissions()
+        rapl = perms.get("rapl_cpu", {})
+        if rapl.get("accessible"):
+            console.print(f"[green][ok][/green] RAPL access: {rapl.get('details', 'OK')}")
+        elif rapl.get("denied_files"):
+            issues.append(f"RAPL permission denied for {len(rapl['denied_files'])} files")
+            for hint in rapl.get("fix_instructions", []):
+                warnings.append(hint)
+        else:
+            warnings.append("RAPL interface not found (non-Intel/AMD CPU?)")
+    elif sys.platform == "darwin":
+        if not shutil.which("powermetrics"):
+            warnings.append("powermetrics not found (macOS energy measurement unavailable)")
+
+    # Test actual measurement if requested
+    if test_sensors and not isinstance(backend, _TimeOnlyBackend):
+        console.print("\n[bold]Testing energy measurement...[/bold]")
+        try:
+            backend._quiet = True
+            e, t = backend.measure(["true"] if sys.platform != "win32" else ["cmd", "/c", "echo"], timeout=10)
+            if e is not None and e > 0:
+                console.print(f"[green][ok][/green] Sensor test passed ({e:.4f} J in {t:.3f} s)")
             else:
-                issues.append(f"Binary execution failed (exit code: {result.returncode})")
-        except subprocess.TimeoutExpired:
-            issues.append("Binary execution timed out")
-        except Exception as e:
-            issues.append(f"Binary execution error: {e}")
-    
+                warnings.append(f"Sensor returned no energy data (elapsed {t:.3f}s)")
+        except Exception as ex:
+            issues.append(f"Sensor test failed: {ex}")
+
     # Summary
     console.print("\n[bold]Diagnosis Summary:[/bold]")
     
@@ -1894,11 +1935,6 @@ def diagnose(
         for warning in warnings:
             console.print(f"  [yellow]![/yellow] {warning}")
     
-    if fixes_applied:
-        console.print("[green]Fixes applied:[/green]")
-        for fix in fixes_applied:
-            console.print(f"  [green][ok][/green] {fix}")
-    
     if not issues and not warnings:
         console.print("[green][ok] No issues found! CodeGreen appears to be properly installed.[/green]")
     
@@ -1910,7 +1946,7 @@ def diagnose(
         console.print("4. Report issues at: https://github.com/SMART-Dal/codegreen/issues")
 
 
-@app.command("validate")
+@app.command("validate", hidden=True, rich_help_panel="Validation")
 def validate_accuracy(
     reference: Annotated[str, typer.Option("--reference", help="Reference tool (rapl, perf, both)")] = "both",
     duration: Annotated[int, typer.Option("--duration", "-d", help="Duration in seconds")] = 5,
@@ -1945,7 +1981,7 @@ def validate_accuracy(
         raise typer.Exit(1)
     
     # Check if running as root
-    if os.geteuid() != 0:
+    if not _is_root():
         console.print("[red]Error: Root access required for validation![/red]")
         console.print("Hardware energy interfaces (RAPL, MSR) require privileged access.")
         console.print(f"Please run: [cyan]sudo codegreen validate[/cyan]")
@@ -2003,7 +2039,7 @@ def validate_accuracy(
         console.print(f"[red]Validation error: {e}[/red]")
         raise typer.Exit(1)
 
-@app.command("config")
+@app.command("config", rich_help_panel="Setup")
 def config_management(
     show: Annotated[bool, typer.Option("--show", help="Show current configuration")] = False,
     edit: Annotated[bool, typer.Option("--edit", help="Edit configuration file")] = False,
@@ -2016,42 +2052,79 @@ def config_management(
     measurement accuracy settings, performance tuning, and environment-specific
     optimizations. All changes are validated before saving.
 
-    [bold]Configuration categories:[/bold]
-    - Sensor preferences and validation settings
-    - Measurement accuracy and precision levels
-    - Performance optimization parameters
-    - Environment-specific adaptations
-    - Database and logging configurations
+    Works out of the box with sensible defaults. Customize by creating
+    a user config at [cyan]~/.codegreen/config.json[/cyan] (overrides package defaults).
+
+    [bold]Key settings:[/bold]
+    - [cyan]measurement_interval_ms[/cyan]: RAPL polling rate (default: 1ms)
+    - [cyan]measurement_buffer_size[/cyan]: ring buffer capacity (default: 100000)
+    - [cyan]cross_validation_threshold[/cyan]: provider agreement threshold (default: 0.05)
+    - Provider enable/disable: [cyan]intel_rapl[/cyan], [cyan]nvidia_nvml[/cyan], [cyan]amd_rocm[/cyan]
 
     [bold]Examples:[/bold]
-    - [cyan]codegreen config --show[/cyan] - Display current configuration
-    - [cyan]codegreen config --edit[/cyan] - Edit configuration interactively
-    - [cyan]codegreen config --reset[/cyan] - Reset to system defaults
+    - [cyan]codegreen config[/cyan]         - Show active settings summary
+    - [cyan]codegreen config --show[/cyan]  - Full JSON dump
+    - [cyan]codegreen config --edit[/cyan]  - Open user config in editor (creates if needed)
+    - [cyan]codegreen config --reset[/cyan] - Delete user config, revert to defaults
     """
     config_path = get_config_path()
-    
+    user_config = Path.home() / ".codegreen" / "config.json"
+
     if show:
         if config_path:
-            console.print(f"[green]Configuration file:[/green] {config_path}")
+            console.print(f"[green]Active config:[/green] {config_path}")
+            if config_path == user_config:
+                console.print(f"  [dim](user override -- delete to revert to defaults)[/dim]")
             config = load_config(config_path)
             console.print(json.dumps(config, indent=2))
         else:
-            console.print("[yellow]No configuration file found[/yellow]")
-    
-    elif edit:
-        if config_path:
-            console.print(f"[blue]Opening configuration file:[/blue] {config_path}")
-            # Could add editor opening logic here
-        else:
-            console.print("[yellow]No configuration file found to edit[/yellow]")
-    
-    elif reset:
-        console.print("[yellow]Configuration reset not implemented yet[/yellow]")
-    
-    else:
-        console.print("[yellow]Please specify an action: --show, --edit, or --reset[/yellow]")
+            console.print("[yellow]No configuration file found (using built-in defaults)[/yellow]")
 
-@app.command("init-sensors")
+    elif edit:
+        if not user_config.exists():
+            if config_path:
+                user_config.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(config_path, user_config)
+                console.print(f"[green]Created user config:[/green] {user_config}")
+                console.print(f"  [dim]Copied defaults from {config_path}[/dim]")
+            else:
+                console.print("[red]No default config to copy[/red]")
+                raise typer.Exit(1)
+        editor = os.environ.get("EDITOR", os.environ.get("VISUAL", "nano"))
+        console.print(f"[blue]Opening {user_config} with {editor}[/blue]")
+        os.execvp(editor, [editor, str(user_config)])
+
+    elif reset:
+        if user_config.exists():
+            user_config.unlink()
+            console.print(f"[green]Removed user config:[/green] {user_config}")
+            console.print(f"  Using package defaults from: {get_config_path() or 'built-in'}")
+        else:
+            console.print("[dim]No user config to reset (already using defaults)[/dim]")
+
+    else:
+        # No flag: show summary of what's active and how to customize
+        console.print(f"[bold]Configuration[/bold]")
+        if config_path:
+            console.print(f"  Active: {config_path}")
+        else:
+            console.print(f"  Active: built-in defaults")
+        if user_config.exists():
+            console.print(f"  User override: {user_config}")
+        else:
+            console.print(f"  User override: [dim]none (using defaults)[/dim]")
+        config = load_config(config_path) if config_path else {}
+        nemb = config.get("measurement", {}).get("nemb", {})
+        coord = nemb.get("coordinator", {})
+        console.print(f"\n[bold]Measurement Settings[/bold]")
+        console.print(f"  Sampling interval:  {coord.get('measurement_interval_ms', 10)} ms")
+        console.print(f"  Buffer size:        {coord.get('measurement_buffer_size', 1000)}")
+        console.print(f"  Cross-validation:   {coord.get('cross_validation', True)}")
+        console.print(f"\n[dim]To customize: codegreen config --edit[/dim]")
+        console.print(f"[dim]Full dump:    codegreen config --show[/dim]")
+
+@app.command("init-sensors", rich_help_panel="Setup")
 def init_sensors():
     """
     [bold]Initialize energy sensor permissions[/bold].
@@ -2078,13 +2151,13 @@ def init_sensors():
             console.print("Current user has permission to read RAPL sensors.")
             console.print("You can now use CodeGreen commands without sudo:")
             console.print("  codegreen info")
-            console.print("  codegreen benchmark cpu_stress --duration 3")
+            console.print("  codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'")
             return
         except PermissionError:
             pass
 
     # Check if running as root
-    if os.geteuid() != 0:
+    if not _is_root():
         console.print("[red]This command must be run with sudo[/red]")
         console.print("[yellow]Usage: sudo codegreen init-sensors[/yellow]")
         raise typer.Exit(1)
@@ -2158,7 +2231,7 @@ SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"
         console.print("")
         console.print("After relogin, test with:")
         console.print("  codegreen info")
-        console.print("  codegreen benchmark cpu_stress --duration 3")
+        console.print("  codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'")
         console.print("")
         console.print("[green]No sudo needed after this![/green]")
 
@@ -2166,7 +2239,7 @@ SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", GROUP="codegreen", MODE="0640"
         console.print(f"[red]Setup failed: {e}[/red]")
         raise typer.Exit(1)
 
-@app.command("measure-workload")
+@app.command("measure-workload", hidden=True, rich_help_panel="Validation")
 def run_measure_workload(
     duration: Annotated[int, typer.Option("--duration", help="Duration in seconds to run the workload")] = 3,
     workload: Annotated[str, typer.Option("--workload", help="Type of workload to measure (cpu_stress, memory_stress)")] = "cpu_stress",
@@ -2242,7 +2315,7 @@ def run_measure_workload(
         console.print(f"[red]Error during workload measurement: {e}[/red]")
         raise typer.Exit(1)
 
-@app.command("benchmark")
+@app.command("benchmark", rich_help_panel="Validation")
 def run_benchmark(
     suite_name: Annotated[str, typer.Option("--suite", help="Benchmark suite: benchmarksgame, perfopt")] = "benchmarksgame",
     problems: Annotated[Optional[List[str]], typer.Option("--problem", "-p", help="Problems/tasks to run")] = None,
@@ -2346,38 +2419,154 @@ def run_benchmark(
     finally:
         harness.cleanup()
 
-@app.command("run")
+@app.command("run", rich_help_panel="Measurement")
 def run_command(
     command: Annotated[List[str], typer.Argument(help="Command to measure energy for")],
     repeat: Annotated[int, typer.Option("--repeat", "-n", help="Number of repetitions")] = 10,
     warmup: Annotated[int, typer.Option("--warmup", "-w", help="Warmup runs")] = 1,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     budget: Annotated[Optional[float], typer.Option("--budget", help="Energy budget in Joules (fail if exceeded)")] = None,
+    include_warmup: Annotated[bool, typer.Option("--include-warmup", help="Measure energy during warmup and include in results")] = False,
 ):
-    """Measure energy of any shell command (like hyperfine but for energy).
+    """[bold]Measure energy[/bold] of any shell command (like hyperfine but for energy).
 
-    Examples:
-    - codegreen run python script.py
-    - codegreen run --repeat 20 ./my_binary arg1 arg2
-    - codegreen run --budget 10.0 python train.py
+    [bold]Important:[/bold] Use [cyan]--[/cyan] before commands that have their own flags.
+    Without it, flags like -c or -jar are parsed as codegreen options and will fail.
+
+    [bold]Examples:[/bold]
+    - [cyan]codegreen run python3 script.py[/cyan]
+    - [cyan]codegreen run -- python3 -c "sum(range(10**7))"[/cyan]
+    - [cyan]codegreen run --repeat 20 -- ./my_binary -v arg1[/cyan]
+    - [cyan]codegreen run --budget 10.0 --json -- python train.py[/cyan]
+    - [cyan]codegreen run -- java -cp build MyClass[/cyan]
     """
     import subprocess, time, math
     from benchmark.results import StatisticalAnalysis
 
-    backend = _get_energy_backend()
-    if not json_output:
-        console.print(f"[dim]Energy backend: {backend.name}[/dim]")
+    if repeat < 1:
+        console.print("[red]--repeat must be >= 1[/red]")
+        raise typer.Exit(1)
+    if warmup < 0:
+        console.print("[red]--warmup must be >= 0[/red]")
+        raise typer.Exit(1)
 
-    for i in range(warmup):
-        if not json_output:
-            console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
-        subprocess.run(command, capture_output=True, timeout=300)
+    # Resolve the executable: check it exists before doing anything
+    exe = command[0]
+    ext = Path(exe).suffix.lower()
+    _SCRIPT_INTERPRETERS = {".py": "python3", ".js": "node", ".rb": "ruby", ".sh": "bash", ".pl": "perl"}
+    def _run_error(msg: str):
+        if json_output:
+            print(json.dumps({"success": False, "error": msg}))
+        else:
+            console.print(f"[red]{msg}[/red]")
+        raise typer.Exit(1)
+
+    if ext in _SCRIPT_INTERPRETERS and not shutil.which(exe):
+        if not Path(exe).is_file():
+            _run_error(f"File not found: {exe}")
+        else:
+            interp = _SCRIPT_INTERPRETERS[ext]
+            if json_output:
+                _run_error(f"'{exe}' is a script. Use: codegreen run {interp} {' '.join(command)}")
+            else:
+                console.print(f"[red]'{exe}' is a script, not an executable.[/red]")
+                console.print(f"[dim]Try: codegreen run {interp} {' '.join(command)}[/dim]")
+                raise typer.Exit(1)
+    if not shutil.which(exe) and not Path(exe).is_file():
+        hint = " (try 'python3' on macOS)" if exe == "python" else ""
+        _run_error(f"Command not found: {exe}{hint}")
+
+    backend = _get_energy_backend()
+
+    # Refuse to run without real energy data -- no silent fallbacks
+    if isinstance(backend, _TimeOnlyBackend):
+        err_lines = ["No energy measurement backend available."]
+        fix_lines = []
+        if sys.platform == "linux":
+            perms = check_energy_permissions()
+            rapl = perms.get("rapl_cpu", {})
+            if rapl.get("denied_files"):
+                err_lines.append(rapl.get("details", "RAPL permission denied"))
+                fix_lines = rapl.get("fix_instructions", [])
+            else:
+                err_lines.append("NEMB library not found and no RAPL access.")
+                fix_lines = ["Install NEMB: pip install --force-reinstall --no-cache-dir codegreen",
+                             "Or install perf: sudo apt install linux-tools-common linux-tools-$(uname -r)"]
+        elif sys.platform == "darwin":
+            err_lines.append("NEMB native library not built.")
+            fix_lines = ["Install cmake: brew install cmake",
+                         "Rebuild: pip install --force-reinstall --no-cache-dir codegreen",
+                         "Or run with sudo for powermetrics: sudo codegreen run ..."]
+        elif sys.platform == "win32":
+            err_lines.append("NEMB native library not found.")
+            fix_lines = ["Reinstall with cmake: pip install --force-reinstall --no-cache-dir codegreen"]
+        if json_output:
+            print(json.dumps({"success": False, "error": " ".join(err_lines), "fix": fix_lines}))
+        else:
+            for line in err_lines:
+                console.print(f"[red]{line}[/red]")
+            for hint in fix_lines:
+                console.print(f"  [yellow]{hint}[/yellow]")
+            console.print(f"\n  Run [cyan]codegreen doctor[/cyan] for full diagnostics.")
+        raise typer.Exit(1)
+
+    # Warn if using a lower-priority backend (perf instead of NEMB)
+    if not json_output:
+        if isinstance(backend, _PerfBackend):
+            console.print(f"[yellow]Energy backend: {backend.name} (perf stat wrapper)[/yellow]")
+            console.print(f"  [dim]For per-domain breakdown + GPU energy, install NEMB: pip install --force-reinstall codegreen[/dim]")
+        elif isinstance(backend, _PowermetricsBackend):
+            console.print(f"[yellow]Energy backend: {backend.name} (estimated from power samples)[/yellow]")
+            console.print(f"  [dim]For direct measurement, install NEMB: pip install --force-reinstall codegreen[/dim]")
+        else:
+            console.print(f"[dim]Energy backend: {backend.name}[/dim]")
+
+    # Linux RAPL permission check even for NEMB (partial access scenario)
+    if sys.platform == "linux" and isinstance(backend, _PerfBackend):
+        perms = check_energy_permissions()
+        rapl = perms.get("rapl_cpu", {})
+        if not rapl.get("accessible", False) and rapl.get("denied_files"):
+            err = rapl.get("details", "RAPL permission denied")
+            if json_output:
+                print(json.dumps({"success": False, "error": err,
+                                  "fix": rapl.get("fix_instructions", [])}))
+            else:
+                console.print(f"[red]{err}[/red]")
+                for hint in rapl.get("fix_instructions", []):
+                    console.print(f"  [yellow]{hint}[/yellow]")
+            raise typer.Exit(1)
+
+    # Always capture output during measurement for consistent timing (B1 fix).
+    # Display captured output afterward in human mode.
+    backend._quiet = True
+
+    # Dry run: validate command executes successfully before measuring energy
+    try:
+        check = subprocess.run(command, capture_output=True, timeout=300)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        msg = f"Command not found: {exe}" if isinstance(e, FileNotFoundError) else "Command timed out during validation"
+        if json_output:
+            print(json.dumps({"success": False, "error": msg}))
+        else:
+            console.print(f"[red]{msg}[/red]")
+        raise typer.Exit(1)
+    if check.returncode != 0:
+        stderr = (check.stderr or b"").decode(errors="replace").strip()
+        msg = f"Command failed (exit {check.returncode})"
+        if json_output:
+            print(json.dumps({"success": False, "error": msg, "stderr": stderr[:500]}))
+        else:
+            console.print(f"[red]{msg}:[/red]")
+            if stderr:
+                console.print(f"[red]{stderr[:500]}[/red]")
+        raise typer.Exit(1)
 
     energies, times = [], []
-    domain_runs = []  # per-domain breakdown per run
-    for i in range(repeat):
+    domain_runs = []
+
+    def _collect_run(label: str, idx: int, total: int):
         if not json_output:
-            console.print(f"[dim]Run {i+1}/{repeat}[/dim]")
+            console.print(f"[dim]{label} {idx+1}/{total}[/dim]")
         energy_j, elapsed = backend.measure(command)
         times.append(elapsed)
         if energy_j is not None and energy_j > 0:
@@ -2387,10 +2576,51 @@ def run_command(
                 if domains:
                     domain_runs.append(domains)
 
+    for i in range(warmup):
+        if include_warmup:
+            try:
+                _collect_run("Warmup", i, warmup)
+            except RuntimeError as e:
+                if json_output:
+                    print(json.dumps({"success": False, "error": f"Warmup failed: {e}"}))
+                else:
+                    console.print(f"[red]Warmup failed: {e}[/red]")
+                raise typer.Exit(1)
+        else:
+            if not json_output:
+                console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
+            try:
+                subprocess.run(command, capture_output=True, timeout=300)
+            except subprocess.TimeoutExpired:
+                if json_output:
+                    print(json.dumps({"success": False, "error": "Warmup timed out"}))
+                else:
+                    console.print(f"[red]Warmup timed out[/red]")
+                raise typer.Exit(1)
+
+    for i in range(repeat):
+        try:
+            _collect_run("Run", i, repeat)
+        except RuntimeError as e:
+            if json_output:
+                print(json.dumps({"success": False, "error": str(e)}))
+            else:
+                console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+
     if not energies:
-        msg = f"No energy data from {backend.name}"
+        msg = f"No energy data collected ({backend.name})"
+        diag = ""
+        if sys.platform == "linux":
+            perms = check_energy_permissions()
+            rapl = perms.get("rapl_cpu", {})
+            if not rapl.get("accessible", False):
+                diag = ". " + rapl.get("details", "")
+        elif sys.platform == "darwin":
+            diag = ". powermetrics requires sudo: run 'sudo codegreen run ...'"
         if isinstance(backend, _TimeOnlyBackend):
-            msg += " (need perf on Linux, or NEMB library not found)"
+            diag = ". No energy sensor found (need NEMB library, or perf on Linux)"
+        msg += diag
         if json_output:
             t_mean = sum(times) / len(times) if times else 0
             print(json.dumps({"success": False, "error": msg,
@@ -2405,22 +2635,44 @@ def run_command(
     e_stats = StatisticalAnalysis.summarize(energies)
     t_stats = StatisticalAnalysis.summarize(times)
 
+    # Compute domain averages (shared by JSON and human output)
+    avg_domains = {}
+    if domain_runs:
+        all_domain_keys = set()
+        for dr in domain_runs:
+            all_domain_keys.update(dr.keys())
+        for d in all_domain_keys:
+            vals = [dr.get(d, 0) for dr in domain_runs if dr.get(d, 0) > 0]
+            if vals:
+                avg_domains[d] = sum(vals) / len(vals)
+
+    budget_exceeded = budget is not None and e_stats.mean > budget
+
+    cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0.0
+    avg_power = e_stats.mean / t_stats.mean if t_stats.mean > 0 else 0.0
+
     if json_output:
-        print(json.dumps({
-            "command": " ".join(command), "runs": len(energies),
+        out = {
+            "command": command, "backend": backend.name,
+            "runs": len(energies), "outliers_removed": e_stats.outliers_removed,
             "energy_joules": {"mean": e_stats.mean, "std": e_stats.std, "min": e_stats.min, "max": e_stats.max,
-                              "ci95": [e_stats.ci95_lower, e_stats.ci95_upper]},
+                              "ci95": [e_stats.ci95_lower, e_stats.ci95_upper], "cv_percent": round(cv, 2)},
             "time_seconds": {"mean": t_stats.mean, "std": t_stats.std, "min": t_stats.min, "max": t_stats.max},
-            "budget_exceeded": budget is not None and e_stats.mean > budget
-        }, indent=2))
+            "power_watts": round(avg_power, 2),
+            "budget_exceeded": budget_exceeded,
+        }
+        if avg_domains:
+            out["domains"] = {d: round(j, 6) for d, j in sorted(avg_domains.items(), key=lambda x: -x[1])}
+        print(json.dumps(out, indent=2))
+        if budget_exceeded:
+            raise typer.Exit(1)
     else:
-        # Coefficient of variation: signal-to-noise indicator
-        cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0
         ci_width = e_stats.ci95_upper - e_stats.ci95_lower
         ci_pct = (ci_width / e_stats.mean * 100) if e_stats.mean > 0 else 0
 
-        # Color-code by measurement quality
-        if cv < 5:
+        if len(energies) < 3:
+            quality, color = "N/A (need 3+ runs)", "dim"
+        elif cv < 5:
             quality, color = "excellent", "green"
         elif cv < 15:
             quality, color = "good", "yellow"
@@ -2435,28 +2687,20 @@ def run_command(
         console.print(f"  CV:    [{color}]{cv:.1f}% ({quality})[/{color}]")
         console.print(f"[bold]Time:[/bold]   {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
         console.print(f"[bold]Power:[/bold]  {e_stats.mean / t_stats.mean:.2f} W (avg)")
-        console.print(f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}")
+        runs_note = f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}"
+        if include_warmup and warmup > 0:
+            runs_note += f" (includes {warmup} warmup)"
+        console.print(runs_note)
 
-        # Per-domain energy breakdown (averaged across runs, same as total)
-        if domain_runs:
-            all_domains = set()
-            for dr in domain_runs:
-                all_domains.update(dr.keys())
-            avg_domains = {}
-            for d in all_domains:
-                vals = [dr.get(d, 0) for dr in domain_runs if dr.get(d, 0) > 0]
-                if vals:
-                    avg_domains[d] = sum(vals) / len(vals)
-            if avg_domains:
-                console.print(f"\n[bold]Domain Breakdown (avg of {len(domain_runs)} runs):[/bold]")
-                max_j = max(avg_domains.values()) if avg_domains else 1
-                for domain, joules in sorted(avg_domains.items(), key=lambda x: -x[1]):
-                    if joules <= 0: continue
-                    # Bar proportional to the largest domain (not percentage)
-                    bar_len = min(20, int(joules / max_j * 20)) if max_j > 0 else 0
-                    bar = "[cyan]" + "=" * bar_len + "[/cyan]" + " " * (20 - bar_len)
-                    power = joules / t_stats.mean if t_stats.mean > 0 else 0
-                    console.print(f"  {domain:<25} {joules:>8.4f} J  {power:>7.2f} W  {bar}")
+        if avg_domains:
+            console.print(f"\n[bold]Domain Breakdown (avg of {len(domain_runs)} runs):[/bold]")
+            max_j = max(avg_domains.values()) if avg_domains else 1
+            for domain, joules in sorted(avg_domains.items(), key=lambda x: -x[1]):
+                if joules <= 0: continue
+                bar_len = min(20, int(joules / max_j * 20)) if max_j > 0 else 0
+                bar = "[cyan]" + "=" * bar_len + "[/cyan]" + " " * (20 - bar_len)
+                power = joules / t_stats.mean if t_stats.mean > 0 else 0
+                console.print(f"  {domain:<25} {joules:>8.4f} J  {power:>7.2f} W  {bar}")
 
         if cv > 20:
             console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
@@ -2474,6 +2718,7 @@ class _EnergyBackend:
     No file I/O during measurement -- all data via in-memory APIs or pipes."""
     name: str = "unknown"
     priority: int = 0  # higher = preferred
+    _quiet: bool = False
     def is_available(self) -> bool: return False
     def measure(self, command: list, timeout: int = 300) -> tuple:
         """Returns (energy_joules or None, elapsed_seconds)."""
@@ -2492,6 +2737,7 @@ class _NEMBBackend(_EnergyBackend):
     name = "NEMB (native energy measurement)"
     priority = 100
     _lib = None
+    _quiet = False
 
     def _load(self):
         if self._lib is not None:
@@ -2533,12 +2779,22 @@ class _NEMBBackend(_EnergyBackend):
 
         sid = lib.nemb_start_session(b"run")
         start = time.perf_counter()
-        subprocess.run(command, capture_output=True, timeout=timeout)
-        elapsed = time.perf_counter() - start
-        energy = ctypes.c_double(0)
-        power = ctypes.c_double(0)
+        try:
+            result = subprocess.run(command, capture_output=self._quiet, timeout=timeout)
+            elapsed = time.perf_counter() - start
+        except subprocess.TimeoutExpired:
+            elapsed = time.perf_counter() - start
+            energy, power = ctypes.c_double(0), ctypes.c_double(0)
+            lib.nemb_stop_session(sid, ctypes.byref(energy), ctypes.byref(power))
+            raise RuntimeError(f"Command timed out after {timeout}s")
+
+        energy, power = ctypes.c_double(0), ctypes.c_double(0)
         ok = lib.nemb_stop_session(sid, ctypes.byref(energy), ctypes.byref(power))
-        # Fetch per-domain breakdown (post-hoc, no measurement overhead)
+        if result.returncode != 0:
+            stderr = ""
+            if self._quiet and result.stderr:
+                stderr = result.stderr.decode(errors="replace").strip()[:300]
+            raise RuntimeError(f"Command failed (exit {result.returncode}){': ' + stderr if stderr else ''}")
         self._last_domains = {}
         try:
             buf = ctypes.create_string_buffer(4096)
@@ -2590,12 +2846,18 @@ class _PerfBackend(_EnergyBackend):
         try:
             full = ["perf", "stat", "-e", self._events(), "-o", pf, "--"] + command
             start = time.perf_counter()
-            subprocess.run(full, capture_output=True, text=True, timeout=timeout)
+            try:
+                result = subprocess.run(full, capture_output=self._quiet, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"Command timed out after {timeout}s")
+            if result.returncode != 0:
+                raise RuntimeError(f"Command failed (exit {result.returncode})")
             elapsed = time.perf_counter() - start
             energy = self.parse_energy(pf)
             return (energy if energy > 0 else None, elapsed)
         finally:
-            os.unlink(pf)
+            try: os.unlink(pf)
+            except OSError: pass
     def wrap_command(self, cmd_str: str, perf_file: str, checkpoint_file: str) -> str:
         return f"perf stat -e {self._events()} -o {perf_file} -- bash -c '{cmd_str} 2>{checkpoint_file}'"
     def parse_energy(self, perf_file: str) -> float:
@@ -2620,15 +2882,26 @@ class _PowermetricsBackend(_EnergyBackend):
         import subprocess, time, tempfile, os, re
         with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
             pm_file = f.name
+        proc = None
         try:
             proc = subprocess.Popen(
                 ["sudo", "-n", "powermetrics", "--samplers", "cpu_power",
                  "-i", "100", "-o", pm_file],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             time.sleep(0.2)
+            # Check if sudo failed immediately (password required)
+            if proc.poll() is not None:
+                stderr = (proc.stderr.read() or b"").decode(errors="replace").strip()
+                if "password" in stderr.lower() or proc.returncode != 0:
+                    raise RuntimeError("powermetrics requires sudo. Run: sudo codegreen run ...")
             start = time.perf_counter()
-            subprocess.run(command, capture_output=True, timeout=timeout)
+            try:
+                result = subprocess.run(command, capture_output=self._quiet, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"Command timed out after {timeout}s")
             elapsed = time.perf_counter() - start
+            if result.returncode != 0:
+                raise RuntimeError(f"Command failed (exit {result.returncode})")
             time.sleep(0.3)
             proc.terminate()
             try: proc.wait(timeout=5)
@@ -2637,8 +2910,7 @@ class _PowermetricsBackend(_EnergyBackend):
             try:
                 for line in open(pm_file):
                     if "Combined Power" in line or "CPU Power" in line:
-                        import re as _re
-                        m = _re.search(r'(\d+)\s*mW', line)
+                        m = re.search(r'(\d+)\s*mW', line)
                         if m: mw_samples.append(int(m.group(1)))
             except Exception:
                 pass
@@ -2646,7 +2918,12 @@ class _PowermetricsBackend(_EnergyBackend):
                 return ((sum(mw_samples) / len(mw_samples) / 1000.0) * elapsed, elapsed)
             return (None, elapsed)
         finally:
-            os.unlink(pm_file)
+            if proc and proc.poll() is None:
+                proc.terminate()
+                try: proc.wait(timeout=3)
+                except: proc.kill()
+            try: os.unlink(pm_file)
+            except OSError: pass
     def wrap_command(self, cmd_str: str, perf_file: str, checkpoint_file: str) -> str:
         return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
 
@@ -2657,8 +2934,11 @@ class _TimeOnlyBackend(_EnergyBackend):
     def measure(self, command: list, timeout: int = 300) -> tuple:
         import subprocess, time
         start = time.perf_counter()
-        subprocess.run(command, capture_output=True, timeout=timeout)
-        return (None, time.perf_counter() - start)
+        result = subprocess.run(command, capture_output=self._quiet, timeout=timeout)
+        elapsed = time.perf_counter() - start
+        if result.returncode != 0:
+            raise RuntimeError(f"Command failed (exit {result.returncode})")
+        return (None, elapsed)
 
 
 _ENERGY_BACKENDS = [_NEMBBackend(), _PerfBackend(), _PowermetricsBackend(), _TimeOnlyBackend()]
@@ -2763,7 +3043,7 @@ def _rewrite_instrumented_for_standalone(code: str, rt_cfg: dict) -> str:
     return code
 
 
-@app.command("project")
+@app.command("project", rich_help_panel="Measurement")
 def project_energy(
     language: Annotated[Language, typer.Argument(help="Project language")],
     project_dir: Annotated[Path, typer.Argument(help="Project root directory")],
@@ -3270,7 +3550,7 @@ def project_energy(
                 console.print(f"  [dim]  3. Restore with: git checkout -- {project_dir}[/dim]")
 
 
-@app.command("validate-accuracy")
+@app.command("validate-accuracy", hidden=True, rich_help_panel="Validation")
 def run_validation(
     experiment: Annotated[str, typer.Argument(help="Experiment: overhead, accuracy, scalability, crosslang, linearity, all")] = "all",
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Output directory")] = Path("validation_results"),

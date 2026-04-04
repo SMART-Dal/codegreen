@@ -35,7 +35,7 @@ bool MeasurementCoordinator::add_provider(std::unique_ptr<EnergyProvider> provid
     }
     
     std::string provider_name = provider->get_name();
-    std::cout << "Adding energy provider: " << provider_name << std::endl;
+    std::cerr << "Adding energy provider: " << provider_name << std::endl;
     
     if (!provider->is_available()) {
         std::cerr << "  Provider not available: " << provider_name << std::endl;
@@ -64,7 +64,7 @@ bool MeasurementCoordinator::add_provider(std::unique_ptr<EnergyProvider> provid
     
     providers_[provider_name] = std::move(state);
     
-    std::cout << "  Provider added successfully: " << provider_name << std::endl;
+    std::cerr << "  Provider added successfully: " << provider_name << std::endl;
     return true;
 }
 
@@ -82,7 +82,7 @@ bool MeasurementCoordinator::remove_provider(const std::string& provider_name) {
         return false;
     }
     
-    std::cout << "Removing energy provider: " << provider_name << std::endl;
+    std::cerr << "Removing energy provider: " << provider_name << std::endl;
     it->second.provider->shutdown();
     providers_.erase(it);
     
@@ -103,7 +103,7 @@ bool MeasurementCoordinator::start_measurements() {
         }
     }
     
-    std::cout << "Starting coordinated measurements..." << std::endl;
+    std::cerr << "Starting coordinated measurements..." << std::endl;
     
     // Reset statistics and filtering state
     {
@@ -119,7 +119,7 @@ bool MeasurementCoordinator::start_measurements() {
     measurement_thread_ = std::thread(&MeasurementCoordinator::measurement_loop, this);
     provider_health_thread_ = std::thread(&MeasurementCoordinator::provider_health_loop, this);
     
-    std::cout << "  Measurements started" << std::endl;
+    std::cerr << "  Measurements started" << std::endl;
     return true;
 }
 
@@ -478,7 +478,7 @@ void MeasurementCoordinator::check_provider_health() {
             auto time_since_restart = now - state.last_restart_attempt;
             
             if (time_since_restart >= config_.provider_restart_interval) {
-                std::cout << "Attempting to restart failed provider: " << name << std::endl;
+                std::cerr << "Attempting to restart failed provider: " << name << std::endl;
                 state.last_restart_attempt = now;
                 
                 if (state.provider->initialize()) {
@@ -486,7 +486,7 @@ void MeasurementCoordinator::check_provider_health() {
                     state.active = true;
                     state.consecutive_failures = 0;
                     state.last_successful_reading = now;
-                    std::cout << "Successfully restarted provider: " << name << std::endl;
+                    std::cerr << "Successfully restarted provider: " << name << std::endl;
                 }
             }
         }

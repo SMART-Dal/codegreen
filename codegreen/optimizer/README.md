@@ -57,4 +57,4 @@ std::string optimized_code = optimizer->apply_optimizations(source_code);
 
 ## License
 
-MIT License - see LICENSE file for details
+MPL-2.0 License - see LICENSE file for details

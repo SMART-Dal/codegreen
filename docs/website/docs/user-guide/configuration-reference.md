@@ -480,7 +480,7 @@ sudo codegreen init-sensors
 
 ```bash
 # Check measurement overhead
-codegreen doctor --verbose
+codegreen doctor --test-sensors
 
 # Reduce precision if needed
 {

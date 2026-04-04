@@ -170,7 +170,7 @@ nav:
     - Citation: about/citing.md
 
 extra:
-  version_label: v0.3.6
+  version_label: v0.3.15
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/SMART-Dal/codegreen

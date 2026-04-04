@@ -80,4 +80,4 @@ The core module integrates with:
 
 ## License
 
-MIT License - see LICENSE file for details
+MPL-2.0 License - see LICENSE file for details

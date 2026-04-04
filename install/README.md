@@ -36,7 +36,7 @@ sudo install/install.sh
 
 ### After Setup
 1. **Log out and log back in** (or restart) for group membership to take effect
-2. **Test with**: `codegreen benchmark cpu_stress --duration 5`
+2. **Test with**: `codegreen run --repeat 3 -- python3 -c "sum(range(10**7))"`
 3. **Verify groups**: `groups` (should show `powercap`)
 
 ## 🔒 Security

@@ -75,7 +75,15 @@ endif()
 
 target_compile_definitions(codegreen-nemb PRIVATE NEMB_EXPORTS)
 
+if(HAVE_NVML)
+    target_compile_definitions(codegreen-nemb PRIVATE HAVE_NVML)
+    target_include_directories(codegreen-nemb PRIVATE ${NVML_INCLUDE_DIR})
+endif()
+
 target_link_libraries(codegreen-nemb Threads::Threads)
+if(HAVE_NVML)
+    target_link_libraries(codegreen-nemb ${NVML_LIBRARY})
+endif()
 if(NOT WIN32)
     target_link_libraries(codegreen-nemb m)
 endif()

@@ -166,5 +166,5 @@ codegreen doctor
 ### Getting Help
 
 1. Check the [CLI Reference](../user-guide/cli-reference.md)
-2. Run `codegreen doctor --verbose`
+2. Run `codegreen doctor --test-sensors`
 3. Open an issue on [GitHub](https://github.com/SMART-Dal/codegreen/issues)

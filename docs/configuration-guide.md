@@ -374,7 +374,7 @@ codegreen config --validate --verbose
 codegreen config --show
 
 # Test with minimal workload
-codegreen benchmark cpu_stress --duration 5
+codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'
 ```
 
 ### Common Validation Errors
@@ -497,7 +497,7 @@ sudo chmod 644 /sys/class/powercap/intel-rapl:*/energy_uj
 
 ```bash
 # Check measurement overhead
-codegreen doctor --verbose
+codegreen doctor --test-sensors
 
 # Reduce precision if needed
 {

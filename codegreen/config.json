@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.3.15",
   "paths": {
     "runtime_modules": {
       "python": "runtime/codegreen_runtime.py",
@@ -155,23 +155,17 @@
     }
   },
   "developer": {
-    "debug_mode": true,
-    "verbose_logging": true,
-    "preserve_temp_files": true,
+    "debug_mode": false,
+    "verbose_logging": false,
+    "preserve_temp_files": false,
     "measurement_validation": true,
     "performance_profiling": false
   },
   "initialization": {
-    "completed": true,
-    "timestamp": "2025-09-03T14:59:43.100634",
-    "environment_type": "personal",
-    "detected_sensors": [
-      "intel_rapl",
-      "amd_cpu",
-      "nvidia_gpu",
-      "amd_gpu",
-      "external_sensors"
-    ],
-    "version": "0.1.0"
+    "completed": false,
+    "timestamp": null,
+    "environment_type": "unknown",
+    "detected_sensors": [],
+    "version": "0.3.15"
   }
 }

@@ -67,22 +67,22 @@ std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provid
 std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
     std::vector<std::unique_ptr<EnergyProvider>> providers;
 
-    std::cout << "Detecting available energy providers..." << std::endl;
+    std::cerr << "Detecting available energy providers..." << std::endl;
 
     auto registered = EnergyProvider::get_registered_providers();
     for (const auto& name : registered) {
         auto provider = EnergyProvider::create(name);
         if (!provider) continue;
         if (provider->initialize()) {
-            std::cout << "  " << provider->get_name() << " initialized" << std::endl;
+            std::cerr << "  " << provider->get_name() << " initialized" << std::endl;
             providers.push_back(std::move(provider));
         }
     }
 
     if (providers.empty()) {
-        std::cout << "  No energy providers available" << std::endl;
+        std::cerr << "  No energy providers available" << std::endl;
     } else {
-        std::cout << "  Successfully initialized " << providers.size() << " energy provider(s)" << std::endl;
+        std::cerr << "  Successfully initialized " << providers.size() << " energy provider(s)" << std::endl;
     }
     
     return providers;

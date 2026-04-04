@@ -198,7 +198,7 @@ codegreen benchmark [OPTIONS] WORKLOAD
 
 **Example:**
 ```bash
-codegreen benchmark cpu_stress --duration 5
+codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'
 ```
 
 ---

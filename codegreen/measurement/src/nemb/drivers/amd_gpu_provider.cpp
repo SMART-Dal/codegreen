@@ -402,7 +402,7 @@ bool AMDGPUProvider::detect_amd_gpus_fallback() {
                 gpu_state.energy_integrator = std::make_unique<AMDGPUEnergyIntegrator>();
             }
             
-            std::cout << "AMD GPU fallback detection found " << gpu_count_ << " GPUs (no power monitoring)" << std::endl;
+            std::cerr << "AMD GPU fallback detection found " << gpu_count_ << " GPUs (no power monitoring)" << std::endl;
             return true;
         }
         

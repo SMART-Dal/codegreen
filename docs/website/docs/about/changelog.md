@@ -2,7 +2,70 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.3.10 (Current)
+## v0.3.15 (Current)
+
+### Crash Fixes
+- Fix core dump when RAPL permission denied (C++ exception no longer crosses ctypes boundary)
+- Fix `os.geteuid()` crash on Windows (AttributeError)
+- Fix NEMB session leak on subprocess timeout (always calls `nemb_stop_session`)
+- Fix random crash from unhandled `TimeoutExpired` in all measurement backends
+
+### NVML / GPU
+- Fix NVML never working: `HAVE_NVML` compile definition now passed to `codegreen-nemb` target
+- Add Windows NVML search paths (`C:/Windows/System32`, CUDA toolkit)
+- NVIDIA GPU detected and reported in `codegreen doctor`
+
+### Measurement Accuracy
+- Consistent `capture_output=True` across JSON and human modes (was 22% energy difference)
+- RAPL provider skips inaccessible domains instead of failing entirely (partial access works)
+- JSON output budget exit code fixed (was exit 0 even when exceeded)
+
+### CLI Improvements
+- `codegreen doctor` now checks NEMB library, energy backend, RAPL permissions, GPU
+- `--include-warmup` flag: measure energy during warmup and include in results
+- `--repeat` validation (must be >= 1)
+- Permission check before measurement runs (fail fast with fix instructions)
+- No silent fallbacks: refuses to run without real energy backend
+- JSON output includes `backend`, `domains`, `cv_percent`, `power_watts`, `outliers_removed`
+- JSON `command` field is now a list (preserves argument boundaries)
+- Command grouping: Measurement / Setup / Diagnostics / Validation panels
+- Shutdown message suppressed in non-debug mode
+
+### Build & Packaging
+- cmake errors now visible under pip install (stderr with captured build output)
+- Python 3.14 classifier added
+- Version single source of truth via `importlib.metadata`
+- Config path alignment between Python CLI and NEMB C++ backend
+- Production defaults: `debug_mode: false`, `verbose_logging: false`
+
+### Documentation
+- 57 documentation issues fixed across README, INSTALL, CITATION, config, help text
+- License classifier corrected (MIT -> MPL-2.0)
+- All broken `benchmark cpu_stress` references replaced with working commands
+- JavaScript added to Language enum (analysis works; instrumented measurement WIP)
+
+## v0.3.14
+
+### Build
+- Remove dead tree-sitter from CMake (fixes sdist build on Python 3.14+)
+- Better build error messages in setup.py
+
+## v0.3.13
+
+### Diagnostics
+- `--verbose` shows full NEMB init log, provider detection, load errors, alternate paths
+
+## v0.3.12
+
+### Fixes
+- Verbose shows exact NEMB load error and searches alternate paths
+
+## v0.3.11
+
+### Diagnostics
+- `--verbose`/`--debug` flag shows CPU model, cores, RAM, dependency versions, NEMB status, backend detection
+
+## v0.3.10
 
 ### Energy Domain Accuracy
 - Correct PSYS-aware domain summation: uses PSYS alone when present (was 82-91% overcount on Skylake+ laptops)

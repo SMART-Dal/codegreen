@@ -96,7 +96,7 @@ JSON (default for `--json`), CSV, Markdown table, and text summary. The JSON out
 
 Adding a new language requires only a JSON config file in `codegreen/instrumentation/configs/` plus the tree-sitter grammar. No Python code changes needed.
 
-Currently supported: Python, C, C++, JavaScript, Java.
+Currently supported: Python, C, C++, Java. JavaScript config exists but is not yet exposed via CLI.
 
 ## Benchmarking
 

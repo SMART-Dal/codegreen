@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CodeGreen setup with C++ backend compilation for wheel builds."""
 
-from __future__ import annotations
+from __future__ import annotations  # Required for Path | None on 3.10
 
 import os
 import platform
@@ -48,22 +48,32 @@ class BuildWithCMake(build_py):
         try:
             build_dir = source_dir / "build"
             build_dir.mkdir(exist_ok=True)
-            subprocess.check_call(
+            r = subprocess.run(
                 ["cmake", str(source_dir), "-DCMAKE_BUILD_TYPE=Release",
                  f"-DPython3_EXECUTABLE={sys.executable}"],
-                cwd=build_dir)
-            subprocess.check_call(
+                cwd=build_dir, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
+            r = subprocess.run(
                 ["cmake", "--build", ".", "--config", "Release",
                  "-j", str(os.cpu_count() or 2)],
-                cwd=build_dir)
+                cwd=build_dir, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print(f"\n{'='*60}")
-            print(f"NEMB C++ build failed: {e.__class__.__name__}: {e}")
-            print(f"Installing Python-only (CLI, instrumentation, analysis work).")
-            print(f"Energy measurement requires the NEMB native library.")
-            print(f"To fix: install cmake (brew install cmake / apt install cmake)")
-            print(f"then: pip install --force-reinstall --no-cache-dir codegreen")
-            print(f"{'='*60}\n")
+            msg = [f"\n{'='*60}",
+                   "NEMB C++ build failed. Energy measurement will not be available.",
+                   "Installing Python-only (CLI, instrumentation, analysis work)."]
+            if isinstance(e, subprocess.CalledProcessError):
+                if e.stderr:
+                    msg.append(f"stderr:\n{e.stderr.strip()[-400:]}")
+                if e.stdout:
+                    msg.append(f"stdout:\n{e.stdout.strip()[-400:]}")
+            elif isinstance(e, FileNotFoundError):
+                msg.append("cmake not found. Install: brew install cmake / apt install cmake")
+            msg.append("To retry: pip install --force-reinstall --no-cache-dir codegreen")
+            msg.append(f"{'='*60}\n")
+            sys.stderr.write("\n".join(msg) + "\n")
 
     def _install_native_artifacts(self, source_dir: Path, native_lib: Path | None) -> None:
         build_src = Path(self.build_lib) / "codegreen"

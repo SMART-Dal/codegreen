@@ -47,8 +47,8 @@ codegreen doctor
 
 **Required:**
 - Linux (Ubuntu 20.04+, Debian 11+, Fedora 35+)
-- Python 3.8 or higher
-- CMake 3.15+
+- Python 3.9 or higher
+- CMake 3.16+
 - C++ compiler (gcc 9+ or clang 10+)
 - Make
 
@@ -137,9 +137,9 @@ codegreen info
 codegreen doctor
 ```
 
-Run benchmark:
+Test energy measurement:
 ```bash
-codegreen benchmark cpu_stress --duration 5
+codegreen run --repeat 3 -- python3 -c "sum(range(10**7))"
 ```
 
 ---

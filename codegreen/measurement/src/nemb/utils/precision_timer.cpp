@@ -25,22 +25,22 @@ namespace codegreen::nemb::utils {
 PrecisionTimer::PrecisionTimer() = default;
 
 bool PrecisionTimer::initialize() {
- std::cout << " Initializing precision timing subsystem..." << std::endl;
+ std::cerr << " Initializing precision timing subsystem..." << std::endl;
  
  // Try TSC first (x86/x64 only)
  if (is_tsc_available() && initialize_tsc()) {
  clock_source_ = ClockSource::TSC_INVARIANT;
- std::cout << " Using TSC (Time Stamp Counter) - highest precision" << std::endl;
- std::cout << " TSC frequency: " << (tsc_frequency_hz_ / 1000000) << " MHz" << std::endl;
- std::cout << " Resolution: ~" << (1000.0 / (tsc_frequency_hz_ / 1e9)) << " ns" << std::endl;
+ std::cerr << " Using TSC (Time Stamp Counter) - highest precision" << std::endl;
+ std::cerr << " TSC frequency: " << (tsc_frequency_hz_ / 1000000) << " MHz" << std::endl;
+ std::cerr << " Resolution: ~" << (1000.0 / (tsc_frequency_hz_ / 1e9)) << " ns" << std::endl;
  return true;
  }
  
 #ifdef __APPLE__
  if (initialize_mach_continuous()) {
  clock_source_ = ClockSource::MACH_CONTINUOUS;
- std::cout << " Using mach_continuous_time (ARM generic timer)" << std::endl;
- std::cout << " Resolution: " << resolution_ns_ << " ns" << std::endl;
+ std::cerr << " Using mach_continuous_time (ARM generic timer)" << std::endl;
+ std::cerr << " Resolution: " << resolution_ns_ << " ns" << std::endl;
  return true;
  }
 #endif
@@ -51,13 +51,13 @@ bool PrecisionTimer::initialize() {
  LARGE_INTEGER freq;
  QueryPerformanceFrequency(&freq);
  resolution_ns_ = 1e9 / freq.QuadPart;
- std::cout << " Using QueryPerformanceCounter" << std::endl;
+ std::cerr << " Using QueryPerformanceCounter" << std::endl;
  return true;
 #else
  // Fallback to POSIX clocks
  if (initialize_posix_clock()) {
- std::cout << " Using " << get_clock_source_name() << std::endl;
- std::cout << " Resolution: " << resolution_ns_ << " ns" << std::endl;
+ std::cerr << " Using " << get_clock_source_name() << std::endl;
+ std::cerr << " Resolution: " << resolution_ns_ << " ns" << std::endl;
  return true;
  }
 #endif
@@ -331,7 +331,7 @@ ScopedTimer::~ScopedTimer() {
  uint64_t end_time_ns = timer_->get_timestamp_ns();
  uint64_t elapsed = end_time_ns - start_time_ns_;
  
- std::cout << " " << name_ << " elapsed: " 
+ std::cerr << " " << name_ << " elapsed: " 
  << PrecisionTimer::ns_to_seconds(elapsed) << " seconds ("
  << elapsed << " ns)" << std::endl;
 }

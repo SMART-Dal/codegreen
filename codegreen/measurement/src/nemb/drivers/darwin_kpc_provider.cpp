@@ -203,8 +203,8 @@ bool DarwinKPCProvider::initialize() {
     if (!configure_default_events()) return false;
 
     initialized_ = true;
-    std::cout << " Darwin KPC perf counter provider initialized (PMU v" << pmu_ver << ")" << std::endl;
-    std::cout << " Counters: " << counter_count_ << " (2 fixed + "
+    std::cerr << " Darwin KPC perf counter provider initialized (PMU v" << pmu_ver << ")" << std::endl;
+    std::cerr << " Counters: " << counter_count_ << " (2 fixed + "
               << (counter_count_ - 2) << " configurable)" << std::endl;
     return true;
 }

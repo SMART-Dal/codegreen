@@ -16,8 +16,12 @@ find_package(PkgConfig)
 find_package(Threads REQUIRED)
 
 # Optional GPU library detection
-find_library(NVML_LIBRARY nvidia-ml PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu)
-find_path(NVML_INCLUDE_DIR nvml.h PATHS /usr/local/cuda/include /usr/include/nvidia/gdk)
+find_library(NVML_LIBRARY nvidia-ml PATHS
+    /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu
+    "C:/Windows/System32" "$ENV{ProgramFiles}/NVIDIA Corporation/NVSMI")
+find_path(NVML_INCLUDE_DIR nvml.h PATHS
+    /usr/local/cuda/include /usr/include/nvidia/gdk
+    "$ENV{CUDA_PATH}/include")
 find_library(ROCM_SMI_LIBRARY rocm_smi64 PATHS /opt/rocm/lib)
 find_path(ROCM_SMI_INCLUDE_DIR rocm_smi.h PATHS /opt/rocm/include/rocm_smi)
 

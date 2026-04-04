@@ -114,9 +114,9 @@ bool WindowsEMIProvider::initialize() {
     PdhCollectQueryData(query_);
 
     initialized_ = true;
-    std::cout << " Windows EMI energy provider initialized (" << domains_.size() << " domains:";
-    for (auto& d : domains_) std::cout << " " << d.domain;
-    std::cout << ")" << std::endl;
+    std::cerr << " Windows EMI energy provider initialized (" << domains_.size() << " domains:";
+    for (auto& d : domains_) std::cerr << " " << d.domain;
+    std::cerr << ")" << std::endl;
     return true;
 }
 

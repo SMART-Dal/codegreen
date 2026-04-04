@@ -129,7 +129,7 @@ bool DarwinIOReportProvider::initialize() {
 
     last_ts_ns_ = utils::PrecisionTimer::monotonic_timestamp_ns();
     initialized_ = true;
-    std::cout << " Darwin IOReport energy provider initialized" << std::endl;
+    std::cerr << " Darwin IOReport energy provider initialized" << std::endl;
     return true;
 }
 

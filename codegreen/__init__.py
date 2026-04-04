@@ -1,14 +1,21 @@
 """
-CodeGreen: Energy-aware software development tool
+CodeGreen: Know the true energy cost of your code.
 
-A comprehensive energy measurement and code optimization tool for developers
-and researchers who need precise, fine-grained energy consumption analysis.
+Precise, hardware-level energy measurement for any program. Reads directly
+from CPU and GPU energy counters (Intel/AMD RAPL, NVIDIA NVML, Apple
+IOReport, Windows EMI). No estimation, no modeling -- just what the
+hardware reports. Per-domain attribution, function-level profiling,
+statistical analysis, and CI/CD-ready JSON output.
 """
 
-__version__ = "0.3.14"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("codegreen")
+except Exception:
+    __version__ = "0.3.15"  # fallback for dev/editable installs
 __author__ = "Saurabhsingh Rajput"
 __email__ = "saurabh@dal.ca"
-__description__ = "Energy-aware software development tool"
+__description__ = "Know the true energy cost of your code -- hardware-level measurement via RAPL, NVML, IOReport, EMI"
 
 # Ensure package root is on sys.path for imports
 import sys as _sys

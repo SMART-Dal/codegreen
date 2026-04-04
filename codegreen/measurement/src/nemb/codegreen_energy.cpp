@@ -419,8 +419,14 @@ extern "C" {
         if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
-            c_api_meter = std::make_unique<codegreen::EnergyMeter>();
-            c_api_init_pid = _nemb_getpid();
+            try {
+                c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+                c_api_init_pid = _nemb_getpid();
+            } catch (const std::exception& e) {
+                std::cerr << "NEMB init failed: " << e.what() << std::endl;
+                c_api_meter.reset();
+                return 0;
+            }
         }
         return c_api_meter->is_available() ? 1 : 0;
     }
@@ -485,8 +491,12 @@ extern "C" {
         if (c_api_is_forked_child) return;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
-            c_api_meter = std::make_unique<codegreen::EnergyMeter>();
-            c_api_init_pid = _nemb_getpid();
+            try {
+                c_api_meter = std::make_unique<codegreen::EnergyMeter>();
+                c_api_init_pid = _nemb_getpid();
+            } catch (const std::exception&) {
+                return;
+            }
             static bool atexit_registered = false;
             if (!atexit_registered) {
                 std::atexit(nemb_report_at_exit);

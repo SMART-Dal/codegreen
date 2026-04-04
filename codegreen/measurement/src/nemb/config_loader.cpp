@@ -77,12 +77,18 @@ namespace {
 }
 
 std::string ConfigLoader::find_config_file() {
-    std::vector<std::string> search_paths = {
-        "./config/codegreen.json",
-        "./codegreen.json",
-        std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.codegreen/config.json",
-        "/etc/codegreen/config.json"
-    };
+    std::vector<std::string> search_paths;
+    // Check CODEGREEN_INSTALL_DIR first (set by Python CLI entrypoint)
+    const char* install_dir = std::getenv("CODEGREEN_INSTALL_DIR");
+    if (install_dir) {
+        search_paths.push_back(std::string(install_dir) + "/codegreen/config.json");
+        search_paths.push_back(std::string(install_dir) + "/config/codegreen.json");
+    }
+    const char* home = std::getenv("HOME");
+    search_paths.push_back("./config/codegreen.json");
+    search_paths.push_back("./codegreen.json");
+    search_paths.push_back(std::string(home ? home : "/tmp") + "/.codegreen/config.json");
+    search_paths.push_back("/etc/codegreen/config.json");
     
     for (const auto& path : search_paths) {
         if (std::filesystem::exists(path)) {

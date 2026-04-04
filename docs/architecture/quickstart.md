@@ -162,7 +162,7 @@ codegreen doctor                  # Diagnose issues
 
 ### Benchmarking
 ```bash
-codegreen benchmark cpu_stress    # CPU stress test
+codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'    # CPU stress test
 codegreen benchmark io_intensive  # I/O benchmark
 ```
 

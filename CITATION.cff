@@ -1,11 +1,13 @@
-cff-version: 1.1.0
+cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 authors:
 - family-names: Rajput
   given-names: Saurabhsingh
-orcid: https://orcid.org/0000-0002-4630-2288
-title: "CodeGreen: A Modular Energy Measurement System for Multi-Language Software"
-version: v0.1.0
+  orcid: https://orcid.org/0000-0002-4630-2288
+- family-names: Sharma
+  given-names: Tushar
+title: "CodeGreen: Towards Improving Precision and Portability in Software Energy Measurement"
+version: v0.3.15
 date-released: 2026-01-26
 url: "https://smart-dal.github.io/codegreen/"
 doi: 10.5281/zenodo.18371772

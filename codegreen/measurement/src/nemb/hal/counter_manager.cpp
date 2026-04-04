@@ -238,7 +238,7 @@ double CounterManager::convert_to_joules(uint64_t raw_value, const CounterConfig
 }
 
 void CounterManager::log_counter_event(const std::string& event, const std::string& counter_id) const {
- std::cout << " Counter " << event << ": " << counter_id << std::endl;
+ std::cerr << " Counter " << event << ": " << counter_id << std::endl;
 }
 
 // RAPLCounterManager implementation
@@ -247,9 +247,9 @@ bool RAPLCounterManager::initialize_rapl_counters(double energy_unit, uint32_t a
  energy_unit_ = energy_unit;
  available_domains_ = available_domains;
  
- std::cout << "Initializing RAPL counters..." << std::endl;
- std::cout << " Energy unit: " << (energy_unit * 1e6) << " μJ" << std::endl;
- std::cout << " Available domains: 0x" << std::hex << available_domains << std::dec << std::endl;
+ std::cerr << "Initializing RAPL counters..." << std::endl;
+ std::cerr << " Energy unit: " << (energy_unit * 1e6) << " μJ" << std::endl;
+ std::cerr << " Available domains: 0x" << std::hex << available_domains << std::dec << std::endl;
  
  // Register each available domain
  std::vector<Domain> domains_to_register;
@@ -285,7 +285,7 @@ bool RAPLCounterManager::initialize_rapl_counters(double energy_unit, uint32_t a
  all_registered = false;
  std::cerr << "Failed to register RAPL domain: " << get_domain_name(domain) << std::endl;
  } else {
- std::cout << " Registered " << get_domain_name(domain) << std::endl;
+ std::cerr << " Registered " << get_domain_name(domain) << std::endl;
  }
  }
  
