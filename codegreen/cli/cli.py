@@ -2428,7 +2428,7 @@ def run_command(
     budget: Annotated[Optional[float], typer.Option("--budget", help="Energy budget in Joules (fail if exceeded)")] = None,
     include_warmup: Annotated[bool, typer.Option("--include-warmup", help="Measure energy during warmup and include in results")] = False,
 ):
-    """[bold]Measure energy[/bold] of any shell command (like hyperfine but for energy).
+    """[bold]Measure energy[/bold] of any shell command with hardware-level precision.
 
     [bold]Important:[/bold] Use [cyan]--[/cyan] before commands that have their own flags.
     Without it, flags like -c or -jar are parsed as codegreen options and will fail.

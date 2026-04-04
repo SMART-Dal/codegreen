@@ -58,7 +58,7 @@ Open `energy.html` in a browser to see:
 
 ### Quick Energy Measurement (any command)
 
-Measure the energy of any shell command without instrumentation, similar to hyperfine:
+Measure the energy of any shell command without instrumentation:
 
 ```bash
 codegreen run python my_script.py --repeat 10 --warmup 1

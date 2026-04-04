@@ -51,7 +51,7 @@ CodeGreen is an energy measurement tool that helps developers understand the ene
 ### Key Features
 
 - **Energy Measurement**: Per-function energy attribution via RAPL (Linux), IOReport + kpc (macOS), EMI (Windows), NVML, ROCm
-- **Quick Measurement**: `codegreen run` measures energy of any shell command (like hyperfine for energy)
+- **Quick Measurement**: `codegreen run` measures energy of any shell command with hardware-level precision
 - **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
 - **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
 - **Granularity Control**: Coarse mode (main only) or fine mode (all functions)

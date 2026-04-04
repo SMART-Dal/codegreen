@@ -55,7 +55,7 @@ sudo ./install.sh   # or: sudo codegreen init-sensors
 
 ## Usage
 
-### Measure energy of any command (like hyperfine, but for energy)
+### Measure energy of any command
 
 ```bash
 codegreen run -- python script.py

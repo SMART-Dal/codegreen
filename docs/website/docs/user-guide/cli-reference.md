@@ -72,7 +72,7 @@ codegreen measure python main.py -o results.json
 
 ### `run`
 
-Measure energy consumption of any shell command using perf RAPL. Works like hyperfine but reports energy instead of just time. No code instrumentation required.
+Measure energy consumption of any shell command with hardware-level precision via RAPL, NVML, or IOReport. No code instrumentation required.
 
 ```bash
 codegreen run [OPTIONS] COMMAND [ARGS...]
