@@ -214,11 +214,22 @@ def _report_at_exit():
     print("--- CODEGREEN_RESULT_END ---", flush=True)
 
 import atexit
-atexit.register(_report_at_exit)
+_atexit_registered = False
 
-def measure_checkpoint(checkpoint_id: str, checkpoint_type: str, 
+def _ensure_atexit():
+    """Defer atexit registration until something is actually measured.
+    Avoids polluting stdout for processes that import codegreen for purposes
+    other than measurement (CLI subcommands, library introspection, etc.)."""
+    global _atexit_registered
+    if not _atexit_registered:
+        atexit.register(_report_at_exit)
+        _atexit_registered = True
+
+
+def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
                       name: str, line_number: int, context: str):
     """Record a checkpoint marker with ultra-low overhead."""
+    _ensure_atexit()
     client = _get_nemb_client()
     # Signal name contains ID and metadata for later correlation
     signal_name = f"{checkpoint_type}:{name}:{checkpoint_id}"
@@ -454,6 +465,7 @@ class Session:
         self._started = True
         self._t0_wall = time.time()
         _register_pid()
+        _ensure_atexit()
         if self._record_ts:
             self._ts_stop.clear()
             self._ts_thread = threading.Thread(
