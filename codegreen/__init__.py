@@ -25,16 +25,19 @@ _install_dir = str(_Path(__file__).resolve().parent.parent)
 if _install_dir not in _sys.path:
     _sys.path.insert(0, _install_dir)
 
-try:
-    from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
-        Session,
-        TaskResult,
-        task,
-    )
-except Exception as _e:
-    Session = None
-    TaskResult = None
-    task = None
+# Manual API symbols are lazy-loaded so that `import codegreen` (for the CLI,
+# instrumenter, or analyzer) does NOT pull in the runtime module and register
+# its atexit hook. The runtime is loaded only when a user actually accesses
+# Session / TaskResult / task.
+_LAZY_RUNTIME_ATTRS = {"Session", "TaskResult", "task"}
+
+
+def __getattr__(name):
+    if name in _LAZY_RUNTIME_ATTRS:
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as _rt
+        return getattr(_rt, name)
+    raise AttributeError(f"module 'codegreen' has no attribute {name!r}")
+
 
 __all__ = [
     "__version__",

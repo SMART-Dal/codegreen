@@ -190,9 +190,9 @@ def _report_at_exit():
     measurements = client.get_final_measurements()
     payload = {"measurements": measurements}
 
-    if _active_session is not None:
+    sess = _active_session
+    if sess is not None:
         # User forgot to call stop(); flush + persist whatever was captured.
-        sess = _active_session
         try:
             sess.stop()
         except Exception:
@@ -202,6 +202,12 @@ def _report_at_exit():
                 pass
         if sess._finalized_report:
             payload.update(sess._finalized_report)
+
+    # Suppress envelope when there's nothing to report. Avoids polluting the
+    # stdout of callers that imported codegreen for unrelated reasons (CLI
+    # `codegreen analyze --json`, library introspection, etc.).
+    if not measurements and (sess is None or not sess._tasks):
+        return
 
     print("\n--- CODEGREEN_RESULT_START ---", flush=True)
     print(json.dumps(payload), flush=True)
