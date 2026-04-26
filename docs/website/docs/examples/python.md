@@ -238,6 +238,147 @@ codegreen analyze python script.py --verbose
 5. **Avoid I/O during profiling**: File I/O adds measurement noise
 6. **Return results**: Use function return values to prevent dead code elimination
 
+## Manual measurement with `codegreen.Session`
+
+For span-based measurement of arbitrary code regions — no AST instrumentation, no CLI runner — import `codegreen` directly.
+
+### Context-manager form (recommended)
+
+```python
+import codegreen
+
+with codegreen.Session("training-run") as s:
+    with s.task("data_load"):
+        load_data()
+    with s.task("train"):
+        train_model()
+    with s.task("eval"):
+        evaluate()
+# at exit: writes codegreen_<pid>.json with per-task energy + per-domain breakdown
+```
+
+### Explicit `start_task` / `stop_task`
+
+For sequential measurement points where a `with` block is awkward:
+
+```python
+import codegreen
+
+s = codegreen.Session("pipeline").start()
+
+s.start_task("preprocess")
+preprocess_data()
+s.stop_task("preprocess")          # name is asserted; mismatch raises RuntimeError
+
+s.start_task("train")
+model.fit(...)
+s.stop_task("train")
+
+s.start_task("eval")
+score = model.evaluate(...)
+s.stop_task("eval")
+
+report = s.stop()                  # returns dict; writes codegreen_<pid>.json
+```
+
+Identical semantics to the context-manager form — both call the same internal `_begin_task` / `_end_task`. Pass `expected_name` to `stop_task()` to assert you're closing the right task; omit it to just close the innermost.
+
+### Decorator form
+
+```python
+@codegreen.task("inference")
+def infer(batch): ...
+
+with codegreen.Session("svc"):
+    for b in batches:
+        infer(b)        # each call is one task
+```
+
+### Accessing raw results
+
+`Session.stop()` returns a dict you can inspect directly. The same dict gets written to `codegreen_<pid>.json` (or your `output_file=`).
+
+```python
+with codegreen.Session("training", record_time_series=True) as s:
+    with s.task("epoch1"): train_epoch()
+    with s.task("epoch2"): train_epoch()
+
+# Mid-flight access via .tasks (list of TaskResult dataclasses)
+for t in s.tasks:
+    print(t.name, t.energy_j, t.avg_power_w, t.duration_s)
+    print("  per-domain (J):", t.domains)        # {"package-0": ..., "core": ..., "gpu0": ...}
+    if t.timeseries:
+        for sample in t.timeseries[:3]:
+            print("  sample:", sample)
+            # {"t": 20364878312447553, "j": 7.94, "w": 37.4,
+            #  "d": {"package-0": 7.92, "core": 0.0018, "gpu0": 0.022}}
+
+# Or load from disk afterwards
+import json
+with open(f"codegreen_{os.getpid()}.json") as f:
+    report = json.load(f)
+```
+
+`TaskResult` fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `str` | task name passed to `start_task` / `task()` |
+| `energy_j` | `float` | total joules consumed during the task (atomic via `nemb_stop_session_v2`) |
+| `avg_power_w` | `float` | average watts over the task window |
+| `duration_s` | `float` | wall-clock seconds |
+| `started_at`, `ended_at` | `float` | wall-clock epoch seconds |
+| `depth`, `parent` | `int`, `Optional[str]` | nesting info |
+| `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
+| `timeseries` | `Optional[List[Dict]]` | sampled (`t`, `j`, `w`, `d`) tuples; present only when `record_time_series=True` |
+
+Each `timeseries` sample has:
+
+- `t` — CLOCK_MONOTONIC nanoseconds
+- `j` — cumulative system energy (J) at that timestamp
+- `w` — instantaneous power (W)
+- `d` — per-domain joules consumed during this sample's interval
+
+To get power-vs-time arrays for any plotting library:
+
+```python
+t = s.tasks[0]
+times_s = [(p["t"] - t.timeseries[0]["t"]) / 1e9 for p in t.timeseries]
+powers  = [p["w"] for p in t.timeseries]
+# integrate to recover energy:
+import numpy as np
+energy = np.trapz(powers, times_s)   # ≈ t.energy_j to within ~0.2%
+```
+
+### Plot export — `Session.export_plot(path)`
+
+The format is chosen from the file extension; no extra arguments:
+
+```python
+with codegreen.Session("infer", record_time_series=True) as s:
+    with s.task("warmup"): warmup()
+    with s.task("batch1"): infer(batch1)
+    with s.task("batch2"): infer(batch2)
+
+    s.export_plot("infer.html")    # interactive Plotly (zoom/pan/hover)
+    s.export_plot("infer.png")     # static matplotlib
+    s.export_plot("infer.svg")     # vector
+    s.export_plot("infer.pdf")     # publication-ready
+```
+
+Each task is a separate trace. Y-axis = power (W), x-axis = wall time relative to first sample. **Area under each task's curve = that task's energy** (verified ≤0.2% deviation against the NEMB-reported total via trapezoidal integration on a 5 s task with ~4,800 samples).
+
+`export_plot` requires `record_time_series=True`. Without time series, the call is a no-op.
+
+### Caveats
+
+- **One Session per process.** Constructing a second while one is active raises `RuntimeError`.
+- **Mismatched `stop_task("X")`** raises `RuntimeError` naming the actually-innermost task.
+- **Forgotten `stop()`** is recovered by an `atexit` hook; file written, drain thread joined.
+- **Forked children** become no-ops automatically; only the parent reports.
+- **Concurrent CodeGreen processes on the same host** trigger a warning at construction (RAPL is system-wide; readings overlap).
+- **No NEMB lib loaded** → graceful no-op with a one-time warning; your program still runs.
+
 ## See Also
 
 - [CLI Reference](../user-guide/cli-reference.md)

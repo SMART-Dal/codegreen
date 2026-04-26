@@ -250,6 +250,13 @@ std::vector<SynchronizedReading> MeasurementCoordinator::get_buffered_readings()
     return result;
 }
 
+void MeasurementCoordinator::set_measurement_interval_ms(int interval_ms) {
+    if (interval_ms < 1) interval_ms = 1;
+    if (interval_ms > 60000) interval_ms = 60000;
+    std::lock_guard<std::mutex> lock(readings_mutex_);
+    config_.measurement_interval = std::chrono::milliseconds(interval_ms);
+}
+
 void MeasurementCoordinator::set_buffer_size(size_t size) {
     std::lock_guard<std::mutex> lock(readings_mutex_);
 

@@ -45,6 +45,9 @@
 
 namespace codegreen {
 
+namespace nemb { struct SynchronizedReading; }
+
+
 /**
  * @brief Energy measurement result
  * 
@@ -245,7 +248,19 @@ public:
      * @return Energy consumed during the entire session
      */
     EnergyDifference end_session(uint64_t session_id);
-    
+
+    /**
+     * @brief Get sampled time-series readings buffered since a timestamp
+     * @param since_ts_ns Lower bound (ns since epoch); 0 = all buffered
+     */
+    std::vector<nemb::SynchronizedReading> get_time_series_since(uint64_t since_ts_ns) const;
+
+    /** @brief Resize the coordinator's circular sampling buffer (clears existing). */
+    void set_buffer_size(size_t n);
+
+    /** @brief Set sampling interval at runtime; clamped to [1, 60000] ms. */
+    void set_measurement_interval_ms(int ms);
+
     /**
      * @brief Get current measurement configuration
      * @return Current configuration settings

@@ -70,6 +70,32 @@ With JSON output and energy budget enforcement:
 codegreen run --budget 10.0 --json python train.py
 ```
 
+### Manual Measurement (Session API)
+
+For span-based measurement directly from your Python code -- no CLI, no instrumentation:
+
+```python
+import codegreen
+
+with codegreen.Session("training") as s:
+    with s.task("data_load"):
+        load_data()
+    with s.task("train"):
+        train()
+# writes codegreen_<pid>.json with per-task energy + per-domain breakdown
+```
+
+For power-vs-time plots (area under curve = energy):
+
+```python
+with codegreen.Session("infer", record_time_series=True) as s:
+    with s.task("inference"):
+        run_inference()
+    s.export_plot("infer.html")    # or .png / .svg / .pdf
+```
+
+See [Python API](../api/python.md) and [Examples → Python](../examples/python.md) for the full reference.
+
 ### C/C++ Programs
 
 ```bash

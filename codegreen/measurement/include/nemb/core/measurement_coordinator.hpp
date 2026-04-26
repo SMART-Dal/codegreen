@@ -149,6 +149,12 @@ public:
      */
     void set_buffer_size(size_t size);
 
+    /**
+     * @brief Set the sampling interval at runtime.
+     * @param interval_ms New interval in milliseconds; clamped to [1, 60000]
+     */
+    void set_measurement_interval_ms(int interval_ms);
+
     // Statistics and diagnostics
     
     /**

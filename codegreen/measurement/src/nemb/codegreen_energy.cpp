@@ -44,6 +44,9 @@ public:
     EnergyDifference end_session(uint64_t session_id);
     void mark_checkpoint(const std::string& name);
     std::vector<EnergyMeter::CorrelatedCheckpoint> get_checkpoint_measurements();
+    std::vector<nemb::SynchronizedReading> get_time_series_since(uint64_t since_ts_ns) const;
+    void set_buffer_size(size_t n);
+    void set_measurement_interval_ms(int ms);
     const NEMBConfig& get_config() const;
     bool self_test();
     std::map<std::string, std::string> get_diagnostics() const;
@@ -304,6 +307,26 @@ EnergyDifference EnergyMeter::Impl::end_session(uint64_t id) {
     return diff;
 }
 
+std::vector<nemb::SynchronizedReading> EnergyMeter::Impl::get_time_series_since(uint64_t since_ts_ns) const {
+    if (!coordinator_) return {};
+    auto all = coordinator_->get_buffered_readings();
+    if (since_ts_ns == 0) return all;
+    std::vector<nemb::SynchronizedReading> filtered;
+    filtered.reserve(all.size());
+    for (auto& r : all) {
+        if (r.common_timestamp_ns >= since_ts_ns) filtered.push_back(r);
+    }
+    return filtered;
+}
+
+void EnergyMeter::Impl::set_buffer_size(size_t n) {
+    if (coordinator_) coordinator_->set_buffer_size(n);
+}
+
+void EnergyMeter::Impl::set_measurement_interval_ms(int ms) {
+    if (coordinator_) coordinator_->set_measurement_interval_ms(ms);
+}
+
 const NEMBConfig& EnergyMeter::Impl::get_config() const { return config_; }
 bool EnergyMeter::Impl::is_available() const { return coordinator_ && !coordinator_->get_active_providers().empty(); }
 std::vector<std::string> EnergyMeter::Impl::get_provider_info() const { return coordinator_ ? coordinator_->get_active_providers() : std::vector<std::string>{}; }
@@ -332,6 +355,9 @@ std::vector<std::string> EnergyMeter::get_provider_info() const { return impl_->
 EnergyResult EnergyMeter::read() { return impl_->read(); }
 uint64_t EnergyMeter::start_session(const std::string& n) { return impl_->start_session(n); }
 EnergyDifference EnergyMeter::end_session(uint64_t i) { return impl_->end_session(i); }
+std::vector<nemb::SynchronizedReading> EnergyMeter::get_time_series_since(uint64_t since_ts_ns) const { return impl_->get_time_series_since(since_ts_ns); }
+void EnergyMeter::set_buffer_size(size_t n) { impl_->set_buffer_size(n); }
+void EnergyMeter::set_measurement_interval_ms(int ms) { impl_->set_measurement_interval_ms(ms); }
 const NEMBConfig& EnergyMeter::get_config() const { return impl_->get_config(); }
 bool EnergyMeter::self_test() { return impl_->self_test(); }
 std::map<std::string, std::string> EnergyMeter::get_diagnostics() const { return impl_->get_diagnostics(); }
@@ -438,17 +464,94 @@ extern "C" {
     // Store last session diff for domain breakdown retrieval
     static codegreen::EnergyDifference last_session_diff;
 
-    int nemb_stop_session(uint64_t i, double* e, double* p) {
+    int nemb_abi_version() { return 3; }
+
+    // Drain buffered samples since `since_ts_ns` into a JSON array of
+    // {"t":<ns>,"j":<joules>,"w":<watts>,"d":{...}} objects. Caller filters
+    // further by start/end timestamps if desired. Returns bytes written or
+    // -required_size if buffer too small.
+    int nemb_get_time_series_json(char* buf, int size, uint64_t since_ts_ns) {
+        if (c_api_is_forked_child) return 0;
+        std::lock_guard<std::mutex> l(c_api_mutex);
+        if(!c_api_meter || !buf || size <= 0) return 0;
+        auto readings = c_api_meter->get_time_series_since(since_ts_ns);
+        std::ostringstream ss;
+        ss << std::setprecision(15) << "[";
+        bool first = true;
+        for (auto& r : readings) {
+            if (!first) ss << ",";
+            ss << "{\"t\":" << r.common_timestamp_ns
+               << ",\"j\":" << r.total_system_energy_joules
+               << ",\"w\":" << r.total_system_power_watts
+               << ",\"d\":{";
+            bool dfirst = true;
+            for (auto& pr : r.provider_readings) {
+                for (auto& [domain, joules] : pr.domain_energy_joules) {
+                    if (!dfirst) ss << ",";
+                    ss << "\"" << domain << "\":" << joules;
+                    dfirst = false;
+                }
+            }
+            ss << "}}";
+            first = false;
+        }
+        ss << "]";
+        std::string s = ss.str();
+        if((int)s.length() >= size) return -(int)s.length();
+        std::copy(s.begin(), s.end(), buf); buf[s.length()] = '\0';
+        return (int)s.length();
+    }
+
+    int nemb_set_buffer_size(int n) {
+        if (c_api_is_forked_child || n <= 0) return 0;
+        std::lock_guard<std::mutex> l(c_api_mutex);
+        if(!c_api_meter) return 0;
+        c_api_meter->set_buffer_size((size_t)n);
+        return 1;
+    }
+
+    int nemb_set_measurement_interval_ms(int ms) {
+        if (c_api_is_forked_child || ms <= 0) return 0;
+        std::lock_guard<std::mutex> l(c_api_mutex);
+        if(!c_api_meter) return 0;
+        c_api_meter->set_measurement_interval_ms(ms);
+        return 1;
+    }
+
+    // Atomic stop: returns total energy, power, duration, and per-domain JSON
+    // breakdown of THIS session in a single locked operation. Race-free under
+    // concurrent task tracking. Pass nullptr/0 for json_buf to skip serialization.
+    // Returns: positive bytes written to json_buf on success (0 if buf null/empty),
+    //          0 if session invalid, -required_size if buf too small.
+    int nemb_stop_session_v2(uint64_t i, double* e, double* p, double* dur,
+                              char* json_buf, int json_size) {
         if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) return 0;
-        last_session_diff = c_api_meter->end_session(i);
-        if(last_session_diff.is_valid) {
-            if(e)*e=last_session_diff.energy_joules;
-            if(p)*p=last_session_diff.average_power_watts;
-            return 1;
+        auto diff = c_api_meter->end_session(i);
+        last_session_diff = diff;
+        if(!diff.is_valid) return 0;
+        if(e)   *e   = diff.energy_joules;
+        if(p)   *p   = diff.average_power_watts;
+        if(dur) *dur = diff.duration_seconds;
+        if(!json_buf || json_size <= 0) return 1;
+        std::ostringstream ss;
+        ss << std::setprecision(15) << "{";
+        bool first = true;
+        for(auto& [domain, joules] : diff.component_energy) {
+            if(!first) ss << ",";
+            ss << "\"" << domain << "\":" << joules;
+            first = false;
         }
-        return 0;
+        ss << "}";
+        std::string s = ss.str();
+        if((int)s.length() >= json_size) return -(int)s.length();
+        std::copy(s.begin(), s.end(), json_buf); json_buf[s.length()] = '\0';
+        return (int)s.length();
+    }
+
+    int nemb_stop_session(uint64_t i, double* e, double* p) {
+        return nemb_stop_session_v2(i, e, p, nullptr, nullptr, 0);
     }
     int nemb_read_current(double* e, double* p) {
         if (c_api_is_forked_child) return 0;

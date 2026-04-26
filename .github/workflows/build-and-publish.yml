@@ -46,7 +46,7 @@ jobs:
         CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
         CIBW_BEFORE_ALL_LINUX: >
           yum install -y epel-release &&
-          yum install -y cmake gcc-c++ make pkgconfig &&
+          yum install -y cmake gcc-c++ make pkgconfig java-17-openjdk-devel &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
           cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build {project}/build --config Release -j$(nproc) && cmake --install {project}/build --config Release && ls -la {project}/lib/libcodegreen-nemb.so
@@ -64,7 +64,7 @@ jobs:
         CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
         CIBW_BEFORE_ALL_LINUX: >
           yum install -y epel-release &&
-          yum install -y cmake gcc-c++ make pkgconfig &&
+          yum install -y cmake gcc-c++ make pkgconfig java-17-openjdk-devel &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
           cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build {project}/build --config Release -j$(nproc) && cmake --install {project}/build --config Release && ls -la {project}/lib/libcodegreen-nemb.so
@@ -80,7 +80,7 @@ jobs:
         CIBW_BUILD: "cp310-macosx_arm64 cp311-macosx_arm64 cp312-macosx_arm64 cp313-macosx_arm64"
         CIBW_ARCHS_MACOS: arm64
         CIBW_BEFORE_ALL_MACOS: >
-          brew install cmake pkg-config &&
+          brew install cmake pkg-config openjdk@17 &&
           git submodule update --init --recursive
         CIBW_BEFORE_BUILD: >
           cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX={project} -DCMAKE_INSTALL_RPATH=@loader_path/../lib -DPython3_EXECUTABLE=$(which python) && cmake --build {project}/build --config Release -j$(sysctl -n hw.ncpu) && cmake --install {project}/build --config Release && ls -la {project}/lib/libcodegreen-nemb.dylib

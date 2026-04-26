@@ -76,6 +76,34 @@ codegreen measure python script.py -g fine --json
 codegreen measure python script.py -g fine --export-plot energy.html
 ```
 
+### Manual measurement from Python (Session API)
+
+For span-based measurement of arbitrary code regions, import `codegreen.Session` directly — no CLI, no AST instrumentation:
+
+```python
+import codegreen
+
+with codegreen.Session("training-run") as s:
+    with s.task("data_load"):
+        load_data()
+    with s.task("train"):
+        model.fit(...)
+    with s.task("eval"):
+        score = model.evaluate(...)
+# writes codegreen_<pid>.json with per-task energy + per-domain breakdown
+```
+
+Time-series sampling for power-vs-time plots (area under curve = energy):
+
+```python
+with codegreen.Session("infer", record_time_series=True) as s:
+    with s.task("batch1"):
+        run_inference()
+    s.export_plot("infer.html")   # interactive Plotly chart
+```
+
+The Session API uses the same NEMB backend as the CLI (RAPL/NVML/IOReport), supports nested + concurrent tasks, and degrades gracefully if the native library is unavailable. See [API → Python](docs/website/docs/api/python.md) for the full reference.
+
 ### Static analysis (no execution)
 
 ```bash

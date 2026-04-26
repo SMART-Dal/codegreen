@@ -249,3 +249,71 @@ def _render_matplotlib(points: list[dict[str, Any]], path: Path) -> None:
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=BG)
     plt.close(fig)
+
+
+def export_session_plot(report: dict, path: Path) -> None:
+    """Render a power-vs-time chart from a codegreen.Session report.
+    Expects report["tasks"] with each task having `timeseries` of {t,j,w,d}."""
+    tasks = [t for t in report.get("tasks", []) if t.get("timeseries")]
+    if not tasks:
+        return
+    path = Path(path)
+    if path.suffix == ".html":
+        _render_session_plotly(tasks, path)
+    elif path.suffix in (".png", ".svg", ".pdf"):
+        _render_session_matplotlib(tasks, path)
+    else:
+        _render_session_plotly(tasks, path.with_suffix(".html"))
+
+
+def _render_session_plotly(tasks: list, path: Path) -> None:
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return
+    fig = go.Figure()
+    t0_ns = min(s["t"] for t in tasks for s in t["timeseries"])
+    for t in tasks:
+        ts = t["timeseries"]
+        x = [(s["t"] - t0_ns) / 1e9 for s in ts]
+        y = [s["w"] for s in ts]
+        fig.add_trace(go.Scatter(
+            x=x, y=y, mode="lines", name=t["name"],
+            line=dict(width=1),
+            hovertemplate="t=%{x:.3f}s  P=%{y:.1f}W<extra>" + t["name"] + "</extra>",
+        ))
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=BG, plot_bgcolor=CARD,
+        title=f"CodeGreen Session Power Trace  ({len(tasks)} task(s))",
+        xaxis_title="Time (s)", yaxis_title="Power (W)",
+        height=420, showlegend=True,
+        font=dict(color=TXT),
+    )
+    fig.write_html(str(path), include_plotlyjs=True, full_html=True)
+
+
+def _render_session_matplotlib(tasks: list, path: Path) -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    fig, ax = plt.subplots(figsize=(10, 4), facecolor=BG)
+    ax.set_facecolor(CARD)
+    t0_ns = min(s["t"] for t in tasks for s in t["timeseries"])
+    for t in tasks:
+        ts = t["timeseries"]
+        x = [(s["t"] - t0_ns) / 1e9 for s in ts]
+        y = [s["w"] for s in ts]
+        ax.plot(x, y, lw=0.8, label=t["name"])
+    ax.set_xlabel("Time (s)", color=TXT)
+    ax.set_ylabel("Power (W)", color=TXT)
+    ax.set_title("CodeGreen Session Power Trace", color=CG)
+    ax.legend(loc="upper right", fontsize=8)
+    ax.grid(alpha=0.15)
+    ax.tick_params(colors=TXT)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=BG)
+    plt.close(fig)
