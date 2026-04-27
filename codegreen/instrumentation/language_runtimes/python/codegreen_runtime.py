@@ -255,6 +255,7 @@ import functools
 import os as _os
 import sys as _sys
 import warnings as _warnings
+import statistics as _statistics
 from contextlib import contextmanager as _contextmanager
 
 _active_session: Optional["Session"] = None
@@ -332,11 +333,58 @@ class TaskResult:
     parent: Optional[str]
     domains: Dict[str, float]
     timeseries: Optional[List[Dict[str, float]]] = None  # [{t_ns,j,w,d:{...}}]
+    noise: Optional[Dict[str, float]] = None             # populated when timeseries present
 
 
 # Sample size estimate (matches SynchronizedReading on 64-bit) for buffer sizing
 _BYTES_PER_SAMPLE_EST = 800
 _DEFAULT_SAMPLE_INTERVAL_MS = 10  # NEMB default; mirror in Session for sizing math
+
+
+def _bundled_sample_interval_ms() -> int:
+    """Read the C++ NEMB default sample interval from bundled config.json."""
+    cfg = Path(__file__).resolve().parents[3] / "config.json"
+    try:
+        with open(cfg) as f:
+            d = json.load(f)
+        return int(d.get("coordinator", {}).get("measurement_interval_ms", 1))
+    except Exception:
+        return 1
+
+
+def _quality_label(cv_percent: float) -> str:
+    if cv_percent < 2.0:  return "excellent"
+    if cv_percent < 5.0:  return "good"
+    if cv_percent < 10.0: return "moderate"
+    return "high-noise"
+
+
+def _compute_task_noise(task: "TaskResult", sample_interval_ms: int) -> Optional[Dict]:
+    """Power-CV + sample-drop summary for one task. None if no time-series."""
+    ts = task.timeseries
+    if not ts:
+        return None
+    powers = [s.get("w", 0.0) for s in ts if s.get("w") is not None]
+    n = len(powers)
+    if n >= 2:
+        mean_w = _statistics.fmean(powers)
+        std_w  = _statistics.pstdev(powers, mean_w) if mean_w > 0 else 0.0
+    else:
+        mean_w = powers[0] if n == 1 else 0.0
+        std_w = 0.0
+    cv = (100.0 * std_w / mean_w) if mean_w > 0 else 0.0
+    expected = max(1, int(round(task.duration_s * 1000.0 / max(1, sample_interval_ms))))
+    drop_ratio = max(0.0, 1.0 - n / expected)
+    return {
+        "samples_captured":  n,
+        "samples_expected":  expected,
+        "drop_ratio":        round(drop_ratio, 4),
+        "power_mean_w":      round(mean_w, 4),
+        "power_std_w":       round(std_w,  4),
+        "power_cv_percent":  round(cv,     3),
+        "sample_interval_ms": sample_interval_ms,
+        "quality":           _quality_label(cv),
+    }
 
 
 class Session:
@@ -455,6 +503,9 @@ class Session:
                         )
                     except Exception:
                         pass
+        # Effective sample interval for noise / drop-ratio math.
+        self._sample_interval_ms = int(sample_interval_ms) if sample_interval_ms is not None \
+                                   else _bundled_sample_interval_ms()
         self._sampling_mode = sampling_mode  # "adaptive" reserved for future
 
     def start(self) -> "Session":
@@ -650,14 +701,32 @@ class Session:
             return self._finalized_report
         total_e = sum(t.energy_j for t in self._tasks if t.depth == 0)
         total_d = (time.time() - self._t0_wall) if self._started else 0.0
+        warnings_list: List[str] = []
+        worst_cv = 0.0
+        for t in self._tasks:
+            if t.timeseries:
+                t.noise = _compute_task_noise(t, self._sample_interval_ms)
+                if t.noise:
+                    cv = t.noise["power_cv_percent"]
+                    drop = t.noise["drop_ratio"]
+                    if cv > worst_cv: worst_cv = cv
+                    if cv >= 10.0 or drop >= 0.20:
+                        msg = (f"task '{t.name}': noisy reading "
+                               f"(power CV={cv:.1f}%, sample drop={drop*100:.1f}%, "
+                               f"quality={t.noise['quality']})")
+                        warnings_list.append(msg)
+                        _warnings.warn("codegreen: " + msg, RuntimeWarning, stacklevel=4)
+        totals = {
+            "energy_j": total_e,
+            "duration_s": total_d,
+            "n_tasks": len(self._tasks),
+            "worst_power_cv_percent": round(worst_cv, 3) if self._record_ts else None,
+            "noise_warnings": warnings_list,
+        }
         report = {
             "session_name": self.name,
             "tasks": [t.__dict__ for t in self._tasks],
-            "totals": {
-                "energy_j": total_e,
-                "duration_s": total_d,
-                "n_tasks": len(self._tasks),
-            },
+            "totals": totals,
             "providers": [],
             "abi_version": self._client.lib.nemb_abi_version() if not self._noop else 0,
         }
@@ -707,13 +776,19 @@ class Session:
                     "session", "task", "depth", "parent",
                     "energy_j", "avg_power_w", "duration_s",
                     "started_at", "ended_at", "domains_json",
+                    "power_cv_percent", "samples_captured", "samples_expected",
+                    "drop_ratio", "quality",
                 ])
             for t in self._tasks:
+                n = t.noise or {}
                 w.writerow([
                     self.name, t.name, t.depth, t.parent or "",
                     f"{t.energy_j:.9f}", f"{t.avg_power_w:.6f}", f"{t.duration_s:.6f}",
                     f"{t.started_at:.6f}", f"{t.ended_at:.6f}",
                     json.dumps(t.domains, separators=(",", ":")),
+                    n.get("power_cv_percent", ""), n.get("samples_captured", ""),
+                    n.get("samples_expected", ""), n.get("drop_ratio", ""),
+                    n.get("quality", ""),
                 ])
 
     @property

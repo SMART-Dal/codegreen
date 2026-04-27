@@ -122,6 +122,8 @@ Each task is a separate trace. Y-axis = power (W), x-axis = wall time relative t
 
 `export_plot` requires `record_time_series=True`. Without time series, the call is a no-op.
 
+> **Note.** Enabling `record_time_series=True` runs an in-process drain thread that pulls samples out of the C++ ring buffer. The mean of total energy is unchanged (≤ 0.3 % vs sampling off, well within run-to-run jitter), but the run-to-run **spread is slightly wider** because the drain thread occasionally competes with the workload for CPU. Use it during development for plots and the noise/quality summary; turn it off for production benchmark runs that want the tightest possible CV. See the [API reference](../api/python.md#noise--quality-reporting) for the full breakdown.
+
 ### Real-world example: text generation with per-domain attribution
 
 A mixed CPU/GPU workload: tokenization runs on the CPU, the transformer forward pass runs on the GPU when present, and CodeGreen breaks the resulting energy down by hardware domain so you can see where the joules went.

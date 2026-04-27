@@ -2,7 +2,19 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.0 (Current)
+## v0.4.1 (Current)
+
+### Noise / quality reporting in `Session` JSON
+- Each task carries a `noise` dict when `record_time_series=True`: `samples_captured`, `samples_expected`, `drop_ratio`, `power_mean_w`, `power_std_w`, `power_cv_percent`, `sample_interval_ms`, `quality` (`excellent` <2 %, `good` <5 %, `moderate` <10 %, `high-noise` >=10 %).
+- `totals.worst_power_cv_percent` and `totals.noise_warnings` roll up across tasks.
+- `RuntimeWarning` emitted at `stop()` for any task with CV >=10 % or sample drop >=20 %, so unreliable readings are never silent.
+- Computation runs once at finalize on already-captured samples; bias-checked at -0.05 % vs `record_time_series=False` on identical workloads (3 fresh subprocesses each, GPT-2 generation).
+- CSV export gains `power_cv_percent`, `samples_captured`, `samples_expected`, `drop_ratio`, `quality` columns.
+
+### Documentation
+- API reference now documents `record_time_series=True` overhead: mean unchanged (<=0.3 %), run-to-run spread slightly widens because the drain thread competes briefly with the workload for CPU.
+
+## v0.4.0
 
 ### Manual span-based measurement (`codegreen.Session`)
 - New `codegreen.Session` class -- import directly, bracket code regions as named tasks; reads RAPL/NVML hardware counters in-process.

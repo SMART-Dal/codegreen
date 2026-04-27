@@ -76,8 +76,41 @@ Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_
 | `depth`, `parent` | `int`, `Optional[str]` | nesting info |
 | `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
 | `timeseries` | `Optional[List[Dict]]` | `[{t, j, w, d}]` samples; present only when `record_time_series=True` |
+| `noise` | `Optional[Dict]` | quality summary for the time-series; populated only when `record_time_series=True` |
 
 Each `timeseries` sample: `t` = `CLOCK_MONOTONIC` ns, `j` = cumulative system energy (J), `w` = instantaneous power (W), `d` = `{domain: joules-this-interval}`.
+
+### Noise / quality reporting
+
+When `record_time_series=True`, every task carries a `noise` dict and `totals` carry a roll-up:
+
+```json
+"noise": {
+  "samples_captured":  2847,
+  "samples_expected":  3000,
+  "drop_ratio":        0.0510,
+  "power_mean_w":      102.3,
+  "power_std_w":         7.4,
+  "power_cv_percent":    7.25,
+  "sample_interval_ms":     1,
+  "quality":           "moderate"
+},
+"totals": {
+  ...,
+  "worst_power_cv_percent": 7.25,
+  "noise_warnings": []
+}
+```
+
+`quality` is bucketed by `power_cv_percent`: `excellent` <2 %, `good` <5 %, `moderate` <10 %, `high-noise` ≥10 %. A `RuntimeWarning` is emitted (and the task is added to `totals.noise_warnings`) when CV ≥10 % or `drop_ratio` ≥20 % so the user is told that the measurement is unreliable instead of silently using a noisy number. Computation runs once at `stop()` time (purely on already-captured samples) and is independently verified to add no measurement bias of its own (~0.05 % vs `record_time_series=False` on identical workloads).
+
+**Note — slight overhead when `record_time_series=True`.**
+The drain thread that pulls samples out of the C++ ring buffer is cheap but not free. On reproducibility benchmarks (3 fresh subprocesses each, identical workload):
+
+- The **mean** energy/duration is unchanged: `record_time_series=True` vs `=False` agreed to ≤ 0.3 % (within run-to-run jitter).
+- The **run-to-run spread** is slightly wider with sampling on (CV of total energy ~5 % vs ~1 % off) because the drain wakes up at irregular intervals and competes briefly with the workload for CPU.
+
+So enabling time-series gives you per-sample power, plot export and the noise/quality summary, at the cost of a marginally noisier *individual* total. Best-of-both-worlds: use it during development to inspect power traces and pick the right code regions, then turn it off for production benchmark runs where you want the tightest possible run-to-run CV.
 
 ### Power-vs-time plotting
 
