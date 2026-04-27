@@ -2,7 +2,7 @@
 
 End-to-end workloads. New here? Start with the [Quickstart](../getting-started/quickstart.md). Looking up a parameter or field? Jump to the [Python API](../api/python.md).
 
-The first half of this page covers the in-process `codegreen.Session`, which is the v0.4.0 headline feature. The second half covers the `codegreen measure` auto-instrumenter for legacy / no-source-edit scenarios.
+The first half of this page covers the in-process `codegreen.Session`, the recommended interface. The second half covers the `codegreen measure` auto-instrumenter for legacy / no-source-edit scenarios.
 
 ## Manual measurement with `codegreen.Session`
 

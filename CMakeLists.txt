@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
-project(CodeGreen VERSION 0.3.0 LANGUAGES CXX)
+
+# Single source of truth: pyproject.toml [project].version
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" _PYPROJECT_TOML)
+string(REGEX MATCH "version *= *\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _VERSION_MATCH "${_PYPROJECT_TOML}")
+if(NOT CMAKE_MATCH_1)
+    message(FATAL_ERROR "Could not parse [project].version from pyproject.toml")
+endif()
+set(_CODEGREEN_VERSION "${CMAKE_MATCH_1}")
+
+project(CodeGreen VERSION ${_CODEGREEN_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

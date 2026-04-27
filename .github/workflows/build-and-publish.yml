@@ -276,6 +276,7 @@ jobs:
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: final_dist/
+        skip-existing: true     # idempotent re-uploads (e.g. tag re-pushed) are a no-op, not a failure
 
   create-release:
     name: Create GitHub Release
@@ -291,4 +292,10 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         TAG=${GITHUB_REF#refs/tags/}
-        gh release create "$TAG" --title "$TAG" --latest --generate-notes
+        # Idempotent: create on first run, mark latest on re-runs (tag re-push, etc.)
+        if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "$TAG" --draft=false --latest --verify-tag
+            echo "release $TAG already existed; re-marked as latest published"
+        else
+            gh release create "$TAG" --title "$TAG" --latest --generate-notes
+        fi

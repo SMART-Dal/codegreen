@@ -36,11 +36,37 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
-      - name: Update changelog version from pyproject.toml
+      - name: Sync docs version labels from pyproject.toml (single source of truth)
         run: |
           VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           sed -i "s/## v[0-9.]* (Current)/## v${VERSION} (Current)/" docs/website/docs/about/changelog.md
-          echo "Changelog version set to v${VERSION}"
+          sed -i "s/^  version_label: v[0-9.]*/  version_label: v${VERSION}/" docs/website/mkdocs.yml
+          sed -i "s/__version__ = \"[0-9.]*\"/__version__ = \"${VERSION}\"/" codegreen/__init__.py
+          echo "Docs/runtime version pinned to v${VERSION} (changelog + mkdocs nav + __init__.py fallback)"
+
+      - name: Verify no version drift across the repo
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          drift=0
+          # Sources expected to pin to the pyproject.toml version exactly:
+          for ref in \
+              "codegreen/__init__.py:__version__ = \"${VERSION}\"" \
+              "docs/website/mkdocs.yml:  version_label: v${VERSION}" \
+              "docs/website/docs/about/changelog.md:## v${VERSION} (Current)"; do
+              file="${ref%%:*}"; needle="${ref#*:}"
+              if ! grep -qF "$needle" "$file"; then
+                  echo "DRIFT: $file does not contain expected pin '$needle'"; drift=1
+              fi
+          done
+          # Sources that must NOT pin a version (must be derived):
+          if grep -E "^project\\(CodeGreen VERSION [0-9]" CMakeLists.txt; then
+              echo "DRIFT: CMakeLists.txt has a hardcoded VERSION literal; it must be derived from pyproject.toml"; drift=1
+          fi
+          if grep -E "\"version\":\\s*\"[0-9]+\\.[0-9]+\\.[0-9]+\"" codegreen/config.json; then
+              echo "DRIFT: codegreen/config.json carries a 'version' field; remove (single source of truth is pyproject.toml)"; drift=1
+          fi
+          [ $drift -eq 0 ] && echo "Version pin OK across all surfaces (v${VERSION})"
+          exit $drift
 
       - name: Build documentation
         run: |
