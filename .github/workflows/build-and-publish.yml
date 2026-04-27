@@ -157,9 +157,10 @@ jobs:
         if __name__ == "__main__":
             main()
         PYEOF
-        codegreen analyze python /tmp/cg_test.py --json | python -c "
-        import json, sys
-        d = json.load(sys.stdin)
+        codegreen analyze python /tmp/cg_test.py --output /tmp/cg_analysis.json --json > /dev/null
+        python -c "
+        import json
+        d = json.load(open('/tmp/cg_analysis.json'))
         pts = d.get('instrumentation_points', [])
         assert len(pts) >= 2, f'Expected >= 2 instrumentation points, got {len(pts)}'
         print(f'Instrumentation: {len(pts)} points found')
@@ -201,9 +202,10 @@ jobs:
         codegreen --help
 
         echo 'def f(n): return f(n-1) if n > 0 else 0' > /tmp/t.py
-        codegreen analyze python /tmp/t.py --json | python -c "
-        import json, sys
-        d = json.load(sys.stdin)
+        codegreen analyze python /tmp/t.py --output /tmp/t_analysis.json --json > /dev/null
+        python -c "
+        import json
+        d = json.load(open('/tmp/t_analysis.json'))
         pts = d.get('instrumentation_points', [])
         print(f'Instrumentation: {len(pts)} points on macOS ARM64')
         assert len(pts) >= 1
