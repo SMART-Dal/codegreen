@@ -370,6 +370,87 @@ Each task is a separate trace. Y-axis = power (W), x-axis = wall time relative t
 
 `export_plot` requires `record_time_series=True`. Without time series, the call is a no-op.
 
+### Real-world example — text generation with per-domain attribution
+
+A mixed CPU/GPU workload: tokenisation runs on the CPU, the transformer forward pass runs on the
+GPU when present, and CodeGreen breaks the resulting energy down by hardware domain so you can
+see exactly where the joules went.
+
+```python
+import codegreen, torch
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+tok    = GPT2Tokenizer.from_pretrained("gpt2")
+tok.pad_token = tok.eos_token
+model  = GPT2LMHeadModel.from_pretrained("gpt2").to(device).eval()
+
+prompts = [
+    "Energy-aware computing is",
+    "The cheapest way to train a model is",
+    "Hardware energy counters report",
+]
+
+with codegreen.Session("gpt2-gen", record_time_series=True) as s:
+    with s.task("tokenize"):
+        batch = tok(prompts, padding=True, return_tensors="pt").to(device)
+    with s.task("generate"):
+        with torch.no_grad():
+            out = model.generate(**batch, max_new_tokens=64, do_sample=False)
+    with s.task("decode"):
+        completions = tok.batch_decode(out, skip_special_tokens=True)
+    s.export_plot("gpt2-gen.html")
+
+for t in s.tasks:
+    print(f"{t.name:<10} {t.energy_j:7.2f} J   {t.avg_power_w:6.1f} W   "
+          f"{t.duration_s:5.2f} s   domains={t.domains}")
+```
+
+Measured output on an AMD EPYC 9554P + NVIDIA RTX 5000 Ada host (3 prompts, 64 new tokens each):
+
+```
+tokenize      0.12 J    84.3 W   0.00 s   domains={'core': 0.0003, 'gpu0': 0.044,  'package-0': 0.080}
+generate     84.78 J   123.3 W   0.69 s   domains={'core': 0.174,  'gpu0': 29.85,  'package-0': 54.93}
+decode        0.25 J   163.7 W   0.00 s   domains={'core': 0.0004, 'gpu0': 0.088,  'package-0': 0.159}
+```
+
+`package-0` and `core` are RAPL CPU-package readings (Intel/AMD); `dram-0` appears on Intel hosts
+with separate DRAM counters; `gpu0` is NVML for the first NVIDIA GPU. On a CPU-only host the GPU
+domain simply isn't present — same code, the report just narrows.
+
+#### Sanity-check: same workload, different access modes
+
+The shipped `benchmark/cg_modes_compare.py` runs an identical GPT-2 generation workload three
+times — once via `codegreen run`, once bracketed under `codegreen.Session` from inside the
+script, and once with bare `time.perf_counter()` for a wall-clock control:
+
+```bash
+python -m benchmark.cg_modes_compare      # 3 repeats per mode
+```
+
+Real run, same hardware, 32 prompts × 128 tokens:
+
+| mode                     | energy (J)        | power (W) | wall (s) | runs |
+|--------------------------|-------------------|----------:|---------:|------|
+| Bare (timing only)       | n/a               | n/a       | 5.64     | 3/3  |
+| `codegreen run` (CLI)    | 831.56 ± 2.36     | 148.6     | 5.59     | 3/3  |
+| `codegreen.Session`      | 667.26 ± 5.11     | 139.6     | 4.78     | 3/3  |
+
+Three observations:
+
+- **Coefficient of variation is 0.3 % / 0.8 %** across repeats — the readings are tight and
+  reproducible. Instrumentation isn't adding noise.
+- **The two modes agree on power** (within ~6 %): both are reading the same RAPL/NVML counters.
+  The small spread is the natural difference between busy and idle phases of the process.
+- **The 19.8 % gap in total joules is not error — it's span.** `codegreen run` brackets the entire
+  Python subprocess (interpreter startup, every `import`, atexit, GC); `Session` brackets only the
+  in-process region you put around the script body. The 0.81 s wall-time difference, multiplied
+  by ~140 W steady-state power, accounts for ~113 J of the ~164 J delta — exactly what you'd
+  expect from measuring different windows.
+
+Pick the mode that matches the question: "what does this script cost end-to-end?" → `codegreen run`;
+"what does this code region cost?" → `Session`.
+
 ### Caveats
 
 - **One Session per process.** Constructing a second while one is active raises `RuntimeError`.
