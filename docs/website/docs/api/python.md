@@ -1,6 +1,6 @@
 # Python API
 
-CodeGreen exposes two Python entry points:
+Reference for the two Python entry points. For a guided tour with full workloads, see [Python examples](../examples/python.md). For a 60-second introduction, see the [Quickstart](../getting-started/quickstart.md).
 
 1. **`codegreen.Session`** — manual span-based measurement, imported and used directly in your code.
 2. **CLI auto-instrumenter** — runs `codegreen measure ...` over a script, injects checkpoints automatically.
@@ -8,6 +8,8 @@ CodeGreen exposes two Python entry points:
 Both share the same NEMB C++ backend, the same JSON output envelope, and the same `libcodegreen-nemb.so` ABI (v2+). They can coexist in one process.
 
 ## Manual API: `codegreen.Session`
+
+For end-to-end examples, see [Python examples → Manual measurement with `codegreen.Session`](../examples/python.md#manual-measurement-with-codegreensession).
 
 ```python
 import codegreen
@@ -21,31 +23,7 @@ with codegreen.Session("training-run") as s:
 
 By default, results are written to `codegreen_<pid>.json` in the working directory. CSV is opt-in (pass `output_file="x.csv"` or `output_format="csv"`). Pass `save_to_file=False` to suppress file output.
 
-### Form 1 — context manager (recommended)
-
-```python
-with codegreen.Session("my-run") as s:
-    with s.task("phase1"):
-        ...
-```
-
-### Form 2 — explicit start/stop
-
-```python
-s = codegreen.Session("my-run").start()
-s.start_task("phase1"); do_phase1(); s.stop_task("phase1")
-report = s.stop()    # returns dict; writes file
-```
-
-### Form 3 — decorator
-
-```python
-@codegreen.task("inference")
-def infer(x): ...
-
-with codegreen.Session():
-    infer(data)         # measured automatically
-```
+Three usage forms are supported — context manager, explicit `start_task` / `stop_task`, and `@codegreen.task` decorator. Full code for each is in [Python examples](../examples/python.md#manual-measurement-with-codegreensession).
 
 ### Constructor parameters
 
@@ -62,6 +40,8 @@ with codegreen.Session():
 | `sampling_mode` | `"fixed"` | `"adaptive"` is reserved for a future runtime-rate-control mode; today only `"fixed"` is implemented |
 
 ### Output schema
+
+Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_j`, `duration_s`, `n_tasks`), `providers`, `abi_version`. Per-task fields match the `TaskResult` dataclass.
 
 ```json
 {
@@ -84,6 +64,21 @@ with codegreen.Session():
 - `domains` — per-domain RAPL/NVML energy for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
 - `timeseries` — per-sample (`t`=CLOCK_MONOTONIC ns, `j`=cumulative joules, `w`=instantaneous watts, `d`={domain: joules per-interval}). Present only when `record_time_series=True` (ABI v3+).
 
+### TaskResult fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `str` | task name passed to `start_task` / `task()` |
+| `energy_j` | `float` | total joules during the task (atomic via `nemb_stop_session_v2`) |
+| `avg_power_w` | `float` | average watts over the task window |
+| `duration_s` | `float` | wall-clock seconds |
+| `started_at`, `ended_at` | `float` | wall-clock epoch seconds |
+| `depth`, `parent` | `int`, `Optional[str]` | nesting info |
+| `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
+| `timeseries` | `Optional[List[Dict]]` | `[{t, j, w, d}]` samples; present only when `record_time_series=True` |
+
+Each `timeseries` sample: `t` = `CLOCK_MONOTONIC` ns, `j` = cumulative system energy (J), `w` = instantaneous power (W), `d` = `{domain: joules-this-interval}`.
+
 ### Power-vs-time plotting
 
 `record_time_series=True` collects samples at the coordinator's configured rate (`config.json`'s `coordinator.measurement_interval_ms`, default 1 ms on this build). The `Session.export_plot(path)` helper renders a power-vs-time chart per task; area under the curve equals the task's energy.
@@ -100,7 +95,7 @@ Numerically, integrating `w(t)` over a task's window with the trapezoidal rule r
 
 ### Time-series correctness for long tasks
 
-The C++ sampling ring buffer is fixed-size (default 1000 samples ≈ 1 s window at 1 ms intervals). To prevent silent loss on long tasks, the Session runs a Python drain thread that pulls samples out faster than the buffer rotates. Drain is **adaptive**:
+The C++ sampling ring buffer is fixed-size (default 1000 samples — at the default 1 ms interval that's a ~1 s window; with `sample_interval_ms=10` it's a ~10 s window, etc.). To prevent silent loss on long tasks, the Session runs a Python drain thread that pulls samples out faster than the buffer rotates. Drain is **adaptive**:
 
 - starts at 0.5 s,
 - halves to a 50 ms floor when buffer >50% saturated on a single drain pass,
@@ -115,7 +110,7 @@ Pre-existing: `config.json`'s `coordinator.measurement_interval_ms` is the start
 
 Per-session override: pass `sample_interval_ms=N` to `Session(...)` — it calls `nemb_set_measurement_interval_ms` which writes the **same** `config_.measurement_interval` field the sample loop reads. No parallel sampling-rate state, no duplicate config parsing.
 
-### Behaviour rules
+### Behavior rules
 
 - **Single session per process.** Constructing a second `Session` while one is active raises `RuntimeError`.
 - **Mismatched stops** raise `RuntimeError` with the actual innermost task name.
@@ -128,9 +123,9 @@ Per-session override: pass `sample_interval_ms=N` to `Session(...)` — it calls
 
 RAPL counters are **system-wide, not per-process**. If two CodeGreen sessions overlap in wall time on the same socket, both readings include the other's energy (double-counting). The Session constructor warns when it detects another live CodeGreen pid via `$XDG_RUNTIME_DIR/codegreen-<uid>.pids`. For benchmarks, run sequentially or accept "system energy during this window" semantics.
 
-## Runtime Module (auto-instrumenter)
+## Runtime module (auto-instrumenter)
 
-`src/instrumentation/language_runtimes/python/codegreen_runtime.py`
+`codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py`
 
 This module is injected into instrumented code automatically. It uses ctypes to call `libcodegreen-nemb.so`.
 
@@ -163,7 +158,7 @@ def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
 
 Lower-level function with additional context. `checkpoint()` delegates to this.
 
-## Output Format
+## Auto-instrumenter output format
 
 At process exit (`atexit`), the runtime prints checkpoint data to stdout:
 
@@ -178,39 +173,31 @@ At process exit (`atexit`), the runtime prints checkpoint data to stdout:
 
 The CLI parses this output to extract measurement results.
 
-## CLI Usage
+## CLI usage
 
-CodeGreen does not expose a Python decorator or programmatic API. All measurement is done via the CLI:
+These commands drive the auto-instrumenter; the [Quickstart](../getting-started/quickstart.md) and [CLI reference](../user-guide/cli-reference.md) cover them in full:
 
 ```bash
-# Basic measurement
-codegreen measure python script.py
-
-# Fine granularity with visualization
+codegreen measure python script.py                              # basic
 codegreen measure python script.py -g fine --export-plot energy.html
-
-# JSON output
 codegreen measure python script.py --json
-
-# Save instrumented code for inspection
 codegreen analyze python script.py --save-instrumented --output-dir ./out
 ```
 
-## Package Structure
+## Package structure
 
 ```
-src/
-  cli/cli.py                    # Typer CLI (11 commands)
+codegreen/
+  cli/cli.py                              # Typer CLI
   instrumentation/
-    engine.py                   # MeasurementEngine (orchestrates instrumentation)
-    language_engine.py          # Tree-sitter parsing + query matching
-    ast_processor.py            # Checkpoint injection into AST
-    configs/*.json              # Language-specific instrumentation configs
+    engine.py                             # MeasurementEngine
+    language_engine.py                    # Tree-sitter parsing + query matching
+    ast_processor.py                      # Checkpoint injection
+    configs/*.json                        # Language-specific instrumentation configs
     language_runtimes/
-      python/codegreen_runtime.py   # Python ctypes bridge to NEMB
-      java/CodeGreenRuntime.java    # Java JNI bridge to NEMB
-  analyzer/
-    plot.py                     # Plotly/matplotlib visualization
+      python/codegreen_runtime.py         # Python ctypes bridge to NEMB + Session
+      java/CodeGreenRuntime.java          # Java JNI bridge to NEMB
+  analyzer/plot.py                        # Plotly / matplotlib visualization
   measurement/src/nemb/
-    codegreen_energy.cpp        # C API + EnergyMeter implementation
+    codegreen_energy.cpp                  # C API + EnergyMeter implementation
 ```

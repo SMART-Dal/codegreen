@@ -4,8 +4,8 @@ For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal
 
 ## v0.4.0 (Current)
 
-### Manual Span-Based Measurement (`codegreen.Session`)
-- New `codegreen.Session` class -- import directly, mark code regions as named tasks (CodeCarbon-style UX, hardware-direct measurement).
+### Manual span-based measurement (`codegreen.Session`)
+- New `codegreen.Session` class -- import directly, bracket code regions as named tasks; reads RAPL/NVML hardware counters in-process.
 - Three forms: context manager (`with s.task(...)`), explicit `start_task("X")` / `stop_task("X")`, decorator (`@codegreen.task("name")`).
 - Per-task energy + per-RAPL/NVML domain breakdown (`package-0`, `core`, `gpu0`, etc.) computed atomically in NEMB ABI v2.
 - Nested tasks supported; per-thread task stacks for concurrent use.
@@ -13,26 +13,26 @@ For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal
 - Atexit cleanup -- file written and drain thread joined even if user forgets `.stop()`.
 - JSON output by default (`codegreen_<pid>.json`); CSV opt-in via `.csv` extension or `output_format="csv"`.
 
-### Time-Series Sampling + Plotting (ABI v3)
+### Time-series sampling + plotting (ABI v3)
 - New C ABI: `nemb_get_time_series_json(buf, size, since_ts_ns)` returns sampled (timestamp, energy, power, per-domain) tuples since a timestamp.
 - New C ABI: `nemb_set_buffer_size(n)`, `nemb_set_measurement_interval_ms(ms)` -- runtime mutators on existing coordinator state (no parallel config).
 - `Session(record_time_series=True)` captures samples per-task (CLOCK_MONOTONIC ns timestamps) using an adaptive Python drain thread (50 ms floor / 2 s ceiling, auto-tunes from observed buffer saturation).
 - Verified: 30-second task with defaults only -- 28,460 samples, full span, zero gaps >50 ms.
 - `Session.export_plot(path)` renders power-vs-time charts; format chosen from extension (`.html` Plotly / `.png` `.svg` `.pdf` matplotlib).
-- Trapezoidal integration of `w(t)` recovers task `energy_j` to within 0.02%.
+- Trapezoidal integration of `w(t)` recovers task `energy_j` to within ~0.2% (verified on a 5 s task with ~4,800 samples).
 
-### Multi-Language Distribution
+### Multi-language distribution
 - Java runtime JAR (`codegreen-runtime.jar`) auto-built via `javac`/`jar` in `setup.py` and bundled into the wheel under `codegreen/lib/runtime/java/`.
 - C/C++ runtime headers (`codegreen_runtime.h`, `runtime.hpp`) bundled under `codegreen/lib/runtime/{c,cpp}/`.
 - CI: manylinux + macOS images install JDK 17 so the JAR ships with every published wheel.
 
-### Backward Compatibility
+### Backward compatibility
 - `nemb_stop_session(id, e, p)` retained as a thin shim over `nemb_stop_session_v2`.
 - Auto-instrumenter checkpoints + manual Session output emit into the same JSON envelope.
 - `config.json -> coordinator.measurement_interval_ms` unchanged; `Session(sample_interval_ms=N)` is an opt-in per-session runtime override on the same field.
 
 ### Documentation
-- Updated README, Quickstart, Examples → Python, and API → Python pages with verified code samples for every form.
+- Updated README, Quickstart, Examples → Python, and API → Python pages with verified code samples for every form. See [Quickstart](../getting-started/quickstart.md) → [Python examples](../examples/python.md) → [Python API](../api/python.md).
 
 ## v0.3.16 (previous)
 

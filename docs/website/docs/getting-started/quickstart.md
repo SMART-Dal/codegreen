@@ -1,6 +1,6 @@
-# Quick Start
+# Quick start
 
-Get up and running with CodeGreen in minutes.
+Get a real energy measurement in three steps. For end-to-end examples (training loops, GPT-2 inference, mode comparison), continue to [Python examples](../examples/python.md). For every parameter and field, see the [Python API](../api/python.md).
 
 ## 1. Install
 
@@ -10,13 +10,13 @@ cd codegreen
 ./install.sh
 ```
 
-## 2. Initialize Sensors
+## 2. Initialize sensors
 
 ```bash
 sudo codegreen init-sensors
 ```
 
-## 3. Verify Setup
+## 3. Verify setup
 
 ```bash
 codegreen measure-workload --duration 5 --workload cpu_stress
@@ -24,55 +24,13 @@ codegreen measure-workload --duration 5 --workload cpu_stress
 
 If you see energy values (Joules/Watts), sensors are working.
 
-## 4. Measure Your Code
+## 4. Measure your code
 
-### Coarse Mode (default)
+Three idioms, pick one:
 
-Total program energy -- instruments only main entry/exit:
+### From Python (recommended for libraries / scripts)
 
-```bash
-codegreen measure python my_script.py
-```
-
-### Fine Mode
-
-Per-function energy breakdown -- instruments all functions:
-
-```bash
-codegreen measure python my_script.py -g fine
-```
-
-### With Visualization
-
-Export an interactive energy timeline:
-
-```bash
-codegreen measure python my_script.py -g fine --export-plot energy.html
-```
-
-Open `energy.html` in a browser to see:
-
-- Per-function energy bar chart with hotspot detection
-- Zoomable timeline with hover tooltips
-- Summary stats (total energy, wall time, power)
-
-### Quick Energy Measurement (any command)
-
-Measure the energy of any shell command without instrumentation:
-
-```bash
-codegreen run python my_script.py --repeat 10 --warmup 1
-```
-
-With JSON output and energy budget enforcement:
-
-```bash
-codegreen run --budget 10.0 --json python train.py
-```
-
-### Manual Measurement (Session API)
-
-For span-based measurement directly from your Python code -- no CLI, no instrumentation:
+Bracket the regions you care about with `codegreen.Session`. Hardware counters are read in-process; no CLI wrapper, no AST instrumentation:
 
 ```python
 import codegreen
@@ -85,55 +43,62 @@ with codegreen.Session("training") as s:
 # writes codegreen_<pid>.json with per-task energy + per-domain breakdown
 ```
 
-For power-vs-time plots (area under curve = energy):
+For all three forms (context manager, explicit `start_task`/`stop_task`, decorator) and power-vs-time plots, see [Python examples](../examples/python.md). For every parameter and field, see the [Python API](../api/python.md).
 
-```python
-with codegreen.Session("infer", record_time_series=True) as s:
-    with s.task("inference"):
-        run_inference()
-    s.export_plot("infer.html")    # or .png / .svg / .pdf
+### Whole-script measurement (any command)
+
+Wrap an unmodified command. No source changes:
+
+```bash
+codegreen run python my_script.py --repeat 10 --warmup 1
+codegreen run --budget 10.0 --json python train.py     # CI energy budget
 ```
 
-See [Python API](../api/python.md) and [Examples → Python](../examples/python.md) for the full reference.
+### Per-function auto-instrumentation
 
-### C/C++ Programs
+Inject checkpoints at function boundaries via tree-sitter:
+
+```bash
+codegreen measure python my_script.py                              # coarse: main only
+codegreen measure python my_script.py -g fine                      # all functions
+codegreen measure python my_script.py -g fine --export-plot energy.html
+```
+
+The HTML plot has a per-function bar chart with hotspot highlighting and a zoomable timeline.
+
+### C/C++ programs
 
 ```bash
 codegreen measure cpp main.cpp -- 5000
 codegreen measure c algorithm.c
 ```
 
-### Java Programs
+### Java programs
 
 ```bash
 codegreen measure java Main.java
 ```
 
-## How It Works
+## How `codegreen measure` works
 
-When you run `codegreen measure`:
+1. Tree-sitter parses the source and locates function boundaries.
+2. Lightweight checkpoint calls are injected at enter/exit.
+3. A background C++ thread samples hardware sensors at the configured interval (default 1 ms; see `coordinator.measurement_interval_ms` in `config.json`, or pass `sample_interval_ms=N` to `Session`).
+4. At process exit, checkpoints are correlated with sample timestamps via binary search + linear interpolation.
+5. Energy between enter/exit = function energy.
 
-1. **Tree-sitter AST Parsing**: Identifies function boundaries and instrumentation points
-2. **Code Instrumentation**: Injects lightweight checkpoint calls
-3. **Background Polling**: C++ thread samples hardware sensors at 1ms intervals
-4. **Execution**: Your code runs with ~100-200ns overhead per checkpoint
-5. **Time-Series Correlation**: Binary search + linear interpolation matches checkpoints to energy readings
-6. **Attribution**: Energy difference between enter/exit checkpoints = function energy
+Checkpoints are timestamp markers (~100 ns), not synchronous hardware reads (~5-20 us), giving 25-100x lower overhead than traditional profiling.
 
-Checkpoints are timestamp markers (~100ns), not synchronous hardware reads (~5-20us). This achieves 25-100x lower overhead than traditional profiling.
+`codegreen.Session` skips steps 1-2 entirely: you mark the regions yourself, the same backend reads counters directly.
 
-## 5. Analyze Results
+## 5. Analyze results
 
-Output includes:
+Output includes total energy (J), average power (W), per-function breakdown with invocation counts (fine mode), and hotspot highlighting (>90th percentile).
 
-- **Total Energy**: Consumption in Joules
-- **Average Power**: Draw in Watts
-- **Function Breakdown**: Per-function energy with invocation counts (fine mode)
-- **Hotspot Detection**: Functions consuming >90th percentile energy highlighted
+## Next steps
 
-## Next Steps
-
-- [CLI Reference](../user-guide/cli-reference.md) - All commands and options
-- [Configuration](configuration.md) - Customize measurement settings
-- [Reports & Visualization](../user-guide/reports.md) - Energy timeline plots
-- [CI/CD Integration](../user-guide/cicd-integration.md) - Continuous energy monitoring
+- [Python examples](../examples/python.md) - end-to-end workloads, GPT-2 inference, CLI vs Session comparison
+- [Python API](../api/python.md) - every `Session` parameter, every `TaskResult` field
+- [CLI reference](../user-guide/cli-reference.md) - all commands and options
+- [Configuration](configuration.md) - sampling rate, output paths
+- [CI/CD integration](../user-guide/cicd-integration.md) - continuous energy monitoring
