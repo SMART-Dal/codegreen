@@ -157,7 +157,8 @@ jobs:
         if __name__ == "__main__":
             main()
         PYEOF
-        codegreen analyze python /tmp/cg_test.py --output /tmp/cg_analysis.json --json > /dev/null
+        # Plain (non-JSON) so any errors print to stderr and are visible in CI logs.
+        codegreen analyze python /tmp/cg_test.py --output /tmp/cg_analysis.json
         python -c "
         import json
         d = json.load(open('/tmp/cg_analysis.json'))
@@ -202,7 +203,7 @@ jobs:
         codegreen --help
 
         echo 'def f(n): return f(n-1) if n > 0 else 0' > /tmp/t.py
-        codegreen analyze python /tmp/t.py --output /tmp/t_analysis.json --json > /dev/null
+        codegreen analyze python /tmp/t.py --output /tmp/t_analysis.json
         python -c "
         import json
         d = json.load(open('/tmp/t_analysis.json'))
