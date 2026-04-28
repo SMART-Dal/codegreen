@@ -52,8 +52,9 @@ Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_
      "started_at": 1714155600.123, "ended_at": 1714155603.234,
      "domains": {"package-0": 10.2, "core": 0.8, "gpu0": 1.4},
      "timeseries": [
-       {"t": 20364878312447553, "j": 7.94, "w": 37.4,
-        "d": {"core": 0.0018, "package-0": 7.92, "gpu0": 0.022}}
+       {"t_ns": 20364878312447553, "energy_j": 7.94, "power_w": 37.4,
+        "domain_j": {"core": 0.0018, "package-0": 7.92, "gpu0": 0.022},
+        "domain_w": {"core": 0.27,   "package-0": 31.5, "gpu0": 5.6}}
      ]}
   ],
   "totals": {"energy_j": 857.4, "duration_s": 123.1, "n_tasks": 2},
@@ -62,7 +63,17 @@ Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_
 ```
 
 - `domains` — per-domain RAPL/NVML energy for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
-- `timeseries` — per-sample (`t`=CLOCK_MONOTONIC ns, `j`=cumulative joules, `w`=instantaneous watts, `d`={domain: joules per-interval}). Present only when `record_time_series=True` (ABI v3+).
+- `timeseries` — present only when `record_time_series=True` (ABI v3+). Each sample is self-describing:
+
+| Key | Type | Unit | Meaning |
+|---|---|---|---|
+| `t_ns` | `int` | nanoseconds | `CLOCK_MONOTONIC` timestamp at sample (Linux); `mach_continuous_time` on macOS; `QueryPerformanceCounter` on Windows — all converted to ns |
+| `energy_j` | `float` | joules | system-wide cumulative energy from session start (sum across all providers) |
+| `power_w` | `float` | watts | system-wide instantaneous power at this sample (sum across all domains) |
+| `domain_j` | `Dict[str,float]` | joules | per-domain cumulative energy from session start (e.g. `package-0`, `core`, `dram`, `gpu0`) |
+| `domain_w` | `Dict[str,float]` | watts | per-domain average power since the previous sample. Domains whose provider does not expose per-domain power (Darwin IOReport, Windows EMI, AMD RAPL) are absent rather than reported as 0, so callers can distinguish "0 W" from "not measured" |
+
+So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]`.
 
 ### TaskResult fields
 
@@ -75,10 +86,10 @@ Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_
 | `started_at`, `ended_at` | `float` | wall-clock epoch seconds |
 | `depth`, `parent` | `int`, `Optional[str]` | nesting info |
 | `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
-| `timeseries` | `Optional[List[Dict]]` | `[{t, j, w, d}]` samples; present only when `record_time_series=True` |
+| `timeseries` | `Optional[List[Dict]]` | `[{t_ns, energy_j, power_w, domain_j, domain_w}]` samples; present only when `record_time_series=True` |
 | `noise` | `Optional[Dict]` | quality summary for the time-series; populated only when `record_time_series=True` |
 
-Each `timeseries` sample: `t` = `CLOCK_MONOTONIC` ns, `j` = cumulative system energy (J), `w` = instantaneous power (W), `d` = `{domain: joules-this-interval}`.
+See the schema table above for each timeseries sample's keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`) — all keys carry their unit suffix.
 
 ### Noise / quality reporting
 

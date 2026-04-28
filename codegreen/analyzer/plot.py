@@ -272,11 +272,11 @@ def _render_session_plotly(tasks: list, path: Path) -> None:
     except ImportError:
         return
     fig = go.Figure()
-    t0_ns = min(s["t"] for t in tasks for s in t["timeseries"])
+    t0_ns = min(s["t_ns"] for t in tasks for s in t["timeseries"])
     for t in tasks:
         ts = t["timeseries"]
-        x = [(s["t"] - t0_ns) / 1e9 for s in ts]
-        y = [s["w"] for s in ts]
+        x = [(s["t_ns"] - t0_ns) / 1e9 for s in ts]
+        y = [s["power_w"] for s in ts]
         fig.add_trace(go.Scatter(
             x=x, y=y, mode="lines", name=t["name"],
             line=dict(width=1),
@@ -302,11 +302,11 @@ def _render_session_matplotlib(tasks: list, path: Path) -> None:
         return
     fig, ax = plt.subplots(figsize=(10, 4), facecolor=BG)
     ax.set_facecolor(CARD)
-    t0_ns = min(s["t"] for t in tasks for s in t["timeseries"])
+    t0_ns = min(s["t_ns"] for t in tasks for s in t["timeseries"])
     for t in tasks:
         ts = t["timeseries"]
-        x = [(s["t"] - t0_ns) / 1e9 for s in ts]
-        y = [s["w"] for s in ts]
+        x = [(s["t_ns"] - t0_ns) / 1e9 for s in ts]
+        y = [s["power_w"] for s in ts]
         ax.plot(x, y, lw=0.8, label=t["name"])
     ax.set_xlabel("Time (s)", color=TXT)
     ax.set_ylabel("Power (W)", color=TXT)

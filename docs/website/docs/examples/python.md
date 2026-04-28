@@ -81,8 +81,11 @@ for t in s.tasks:
     if t.timeseries:
         for sample in t.timeseries[:3]:
             print("  sample:", sample)
-            # {"t": 20364878312447553, "j": 7.94, "w": 37.4,
-            #  "d": {"package-0": 7.92, "core": 0.0018, "gpu0": 0.022}}
+            # {"t_ns":     20364878312447553,                  # CLOCK_MONOTONIC ns
+            #  "energy_j": 7.94,                                # cumulative system energy (J)
+            #  "power_w":  37.4,                                # system instantaneous power (W)
+            #  "domain_j": {"package-0": 7.92, "core": 0.0018, "gpu0": 0.022},  # cumulative J per domain
+            #  "domain_w": {"package-0": 31.5, "core": 0.27,   "gpu0": 5.6}}    # avg W per domain
 
 # Or load from disk afterwards
 with open(f"codegreen_{os.getpid()}.json") as f:
@@ -97,9 +100,12 @@ To get power-vs-time arrays for any plotting library:
 import numpy as np
 
 t = s.tasks[0]
-times_s = [(p["t"] - t.timeseries[0]["t"]) / 1e9 for p in t.timeseries]
-powers  = [p["w"] for p in t.timeseries]
+times_s = [(p["t_ns"] - t.timeseries[0]["t_ns"]) / 1e9 for p in t.timeseries]
+powers  = [p["power_w"] for p in t.timeseries]
 energy  = np.trapz(powers, times_s)   # ~ t.energy_j to within ~0.2%
+
+# Per-domain power straight off the sample (e.g. GPU only):
+gpu_w = [p["domain_w"].get("gpu0", 0.0) for p in t.timeseries]
 ```
 
 ### Plot export — `Session.export_plot(path)`
@@ -167,6 +173,23 @@ decode        0.25 J   163.7 W   0.00 s   domains={'core': 0.0004, 'gpu0': 0.088
 ```
 
 `package-0` and `core` are RAPL CPU-package readings (Intel/AMD); `dram-0` appears on Intel hosts with separate DRAM counters; `gpu0` is NVML for the first NVIDIA GPU. On a CPU-only host the GPU domain simply isn't present — same code, the report just narrows.
+
+#### Per-domain power directly from `domain_w`
+
+Each timeseries sample carries a `domain_w` map giving the average watts for each hardware domain since the previous sample, so you can extract a per-domain power trace with no manual `Δenergy/Δt` arithmetic:
+
+```python
+gen = next(t for t in s.tasks if t.name == "generate")
+ts  = gen.timeseries
+
+t0     = ts[0]["t_ns"]
+times  = [(p["t_ns"] - t0) / 1e9 for p in ts]
+gpu_w  = [p["domain_w"].get("gpu0", 0.0)      for p in ts]    # NVIDIA GPU only
+cpu_w  = [p["domain_w"].get("package-0", 0.0) for p in ts]    # CPU package only
+total_w = [p["power_w"]                       for p in ts]    # sum of all domains
+```
+
+`domain_w` is computed in C++ as `(domain_j[now] - domain_j[prev]) / (t_ns[now] - t_ns[prev])` — i.e. an interval-average from the underlying counter, not a derived figure — so trapezoidal integration recovers `domain_j` to within 0.05 % across 1 ms / 5 ms / 20 ms sampling rates. Domains whose provider does not expose per-domain wattage (Darwin IOReport, Windows EMI, AMD RAPL) are absent rather than reported as `0.0`, so a missing key means "not measured", not "zero watts".
 
 #### Sanity-check: same workload, different access modes
 

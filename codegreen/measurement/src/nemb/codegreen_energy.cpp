@@ -466,10 +466,18 @@ extern "C" {
 
     int nemb_abi_version() { return 3; }
 
-    // Drain buffered samples since `since_ts_ns` into a JSON array of
-    // {"t":<ns>,"j":<joules>,"w":<watts>,"d":{...}} objects. Caller filters
-    // further by start/end timestamps if desired. Returns bytes written or
-    // -required_size if buffer too small.
+    // Drain buffered samples since `since_ts_ns` into a JSON array of self-
+    // describing samples:
+    //   {
+    //     "t_ns":     CLOCK_MONOTONIC nanoseconds at sample time,
+    //     "energy_j": cumulative system-wide joules from session start (sum across providers),
+    //     "power_w":  system-wide instantaneous watts at this sample (sum across domains),
+    //     "domain_j": {<domain>: cumulative joules from session start},
+    //     "domain_w": {<domain>: average watts since previous sample}
+    //   }
+    // Domains whose provider does not expose per-domain power (e.g. Darwin
+    // IOReport, Windows EMI, AMD RAPL) are simply absent from `domain_w` rather
+    // than reported as zero, so callers can distinguish "0 W" from "unmeasured".
     int nemb_get_time_series_json(char* buf, int size, uint64_t since_ts_ns) {
         if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
@@ -480,16 +488,25 @@ extern "C" {
         bool first = true;
         for (auto& r : readings) {
             if (!first) ss << ",";
-            ss << "{\"t\":" << r.common_timestamp_ns
-               << ",\"j\":" << r.total_system_energy_joules
-               << ",\"w\":" << r.total_system_power_watts
-               << ",\"d\":{";
+            ss << "{\"t_ns\":"     << r.common_timestamp_ns
+               << ",\"energy_j\":" << r.total_system_energy_joules
+               << ",\"power_w\":"  << r.total_system_power_watts
+               << ",\"domain_j\":{";
             bool dfirst = true;
             for (auto& pr : r.provider_readings) {
                 for (auto& [domain, joules] : pr.domain_energy_joules) {
                     if (!dfirst) ss << ",";
                     ss << "\"" << domain << "\":" << joules;
                     dfirst = false;
+                }
+            }
+            ss << "},\"domain_w\":{";
+            bool wfirst = true;
+            for (auto& pr : r.provider_readings) {
+                for (auto& [domain, watts] : pr.domain_power_watts) {
+                    if (!wfirst) ss << ",";
+                    ss << "\"" << domain << "\":" << watts;
+                    wfirst = false;
                 }
             }
             ss << "}}";

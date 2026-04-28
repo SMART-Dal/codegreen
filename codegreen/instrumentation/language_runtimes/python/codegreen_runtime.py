@@ -364,7 +364,7 @@ def _compute_task_noise(task: "TaskResult", sample_interval_ms: int) -> Optional
     ts = task.timeseries
     if not ts:
         return None
-    powers = [s.get("w", 0.0) for s in ts if s.get("w") is not None]
+    powers = [s.get("power_w", 0.0) for s in ts if s.get("power_w") is not None]
     n = len(powers)
     if n >= 2:
         mean_w = _statistics.fmean(powers)
@@ -549,7 +549,7 @@ class Session:
             return 0
         with self._ts_lock:
             self._ts_samples.extend(samples)
-        self._ts_last_ts = samples[-1]["t"]
+        self._ts_last_ts = samples[-1]["t_ns"]
         return len(samples)
 
     def _drain_loop(self):
@@ -659,7 +659,7 @@ class Session:
             self._drain_once()  # ensure latest samples are pulled before filtering
             with self._ts_lock:
                 ts = [s for s in self._ts_samples
-                      if t_mono_ns <= s["t"] <= t_end_mono_ns]
+                      if t_mono_ns <= s["t_ns"] <= t_end_mono_ns]
         result = TaskResult(
             name=name, energy_j=e.value, avg_power_w=p.value,
             duration_s=dur.value if dur.value > 0 else (t_end - t_start),

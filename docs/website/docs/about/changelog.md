@@ -2,7 +2,15 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.1 (Current)
+## v0.4.2 (Current)
+
+### Self-describing time-series schema
+- Each timeseries sample now uses unit-suffixed keys: `t_ns` (ns), `energy_j` (J cumulative system total), `power_w` (W system total), `domain_j` (per-domain cumulative joules), `domain_w` (per-domain average watts since previous sample). Replaces the older `t/j/w/d` shorthand which was ambiguous about units and granularity.
+- New `domain_w` field exposes per-domain instantaneous power directly. Previously users had to derive GPU/CPU power manually from successive `d[t]` joule deltas; now `s["domain_w"]["gpu0"]` is reported per sample. Domains whose provider does not expose per-domain wattage (Darwin IOReport, Windows EMI, AMD RAPL) are absent rather than zero, so callers can distinguish "0 W" from "not measured".
+- Verified across 1 ms / 5 ms / 20 ms sampling intervals: `∫ domain_w · dt` recovers `domain_j` to within 0.05 % for CPU package and GPU domains; computation is independent of polling rate (each domain's watts is itself an interval-average from the underlying counter).
+- `Session.export_plot()`, the plot.py renderer, and noise computation updated; `t_ns` confirmed to be `CLOCK_MONOTONIC` nanoseconds on Linux, `mach_continuous_time` on macOS, `QueryPerformanceCounter` on Windows -- all explicitly converted to nanoseconds.
+
+## v0.4.1
 
 ### Noise / quality reporting in `Session` JSON
 - Each task carries a `noise` dict when `record_time_series=True`: `samples_captured`, `samples_expected`, `drop_ratio`, `power_mean_w`, `power_std_w`, `power_cv_percent`, `sample_interval_ms`, `quality` (`excellent` <2 %, `good` <5 %, `moderate` <10 %, `high-noise` >=10 %).
