@@ -62,7 +62,7 @@ sudo cp config/codegreen.json /etc/codegreen/
     "nemb": {
       "enabled": true,
       "coordinator": {
-        "measurement_interval_ms": 1
+        "measurement_interval_ms": 10
       },
       "timing": {
         "precision": "high"
@@ -86,7 +86,7 @@ sudo cp config/codegreen.json /etc/codegreen/
       "enabled": true,
 
       "coordinator": {
-        "measurement_interval_ms": 1,
+        "measurement_interval_ms": 10,
         "measurement_buffer_size": 100000,
         "auto_restart_failed_providers": true,
         "provider_restart_interval": 5000,
@@ -206,7 +206,7 @@ sudo cp config/codegreen.json /etc/codegreen/
 
 | Setting | Default | Options | Description |
 |---------|---------|---------|-------------|
-| `measurement_interval_ms` | 1 | 1-100 | Background polling interval (lower = more accurate) |
+| `measurement_interval_ms` | 10 | 1-1000 | Background polling interval in ms (lower = finer resolution; 10 ms balances accuracy and trace size). Pass `sample_interval_ms=N` to `codegreen.Session(...)` to override per-run. |
 | `measurement_buffer_size` | 100000 | 1000-1000000 | Circular buffer size for energy readings |
 | `auto_restart_failed_providers` | true | true/false | Automatically restart crashed providers |
 | `provider_restart_interval` | 5000 | 1000-60000 | Wait time (ms) before restart |
@@ -408,7 +408,7 @@ codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'
 "nemb": {
   "enabled": true,
   "coordinator": {
-    "measurement_interval_ms": 1
+    "measurement_interval_ms": 10
   }
 }
 ```

@@ -342,14 +342,16 @@ _DEFAULT_SAMPLE_INTERVAL_MS = 10  # NEMB default; mirror in Session for sizing m
 
 
 def _bundled_sample_interval_ms() -> int:
-    """Read the C++ NEMB default sample interval from bundled config.json."""
+    """Read the NEMB default sample interval from bundled config.json. The
+    correct path is `measurement.nemb.coordinator.measurement_interval_ms`;
+    earlier versions looked it up at the top level and silently fell back."""
     cfg = Path(__file__).resolve().parents[3] / "config.json"
     try:
         with open(cfg) as f:
             d = json.load(f)
-        return int(d.get("coordinator", {}).get("measurement_interval_ms", 1))
+        return int(d["measurement"]["nemb"]["coordinator"]["measurement_interval_ms"])
     except Exception:
-        return 1
+        return _DEFAULT_SAMPLE_INTERVAL_MS
 
 
 def _quality_label(cv_percent: float) -> str:
@@ -496,13 +498,12 @@ class Session:
                         self._buffer_samples = int(buffer_samples)
                     except Exception:
                         pass
-                if sample_interval_ms is not None:
-                    try:
-                        self._client.lib.nemb_set_measurement_interval_ms(
-                            int(sample_interval_ms)
-                        )
-                    except Exception:
-                        pass
+                effective_interval = int(sample_interval_ms) if sample_interval_ms is not None \
+                                     else _bundled_sample_interval_ms()
+                try:
+                    self._client.lib.nemb_set_measurement_interval_ms(effective_interval)
+                except Exception:
+                    pass
         # Effective sample interval for noise / drop-ratio math.
         self._sample_interval_ms = int(sample_interval_ms) if sample_interval_ms is not None \
                                    else _bundled_sample_interval_ms()
@@ -720,6 +721,7 @@ class Session:
             "energy_j": total_e,
             "duration_s": total_d,
             "n_tasks": len(self._tasks),
+            "sample_interval_ms": self._sample_interval_ms if self._record_ts else None,
             "worst_power_cv_percent": round(worst_cv, 3) if self._record_ts else None,
             "noise_warnings": warnings_list,
         }

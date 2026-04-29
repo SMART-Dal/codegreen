@@ -12,7 +12,7 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__ = _pkg_version("codegreen")
 except Exception:
-    __version__ = "0.4.2"  # fallback for dev/editable installs
+    __version__ = "0.4.3"  # fallback for dev/editable installs
 __author__ = "Saurabhsingh Rajput"
 __email__ = "saurabh@dal.ca"
 __description__ = "Know the true energy cost of your code"
