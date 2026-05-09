@@ -165,6 +165,116 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
         }
     }
 
+
+# Hotspot taxonomy. OCP-compliant: each verdict is a *rule* declared as
+# data, evaluated in priority order. Adding a new category is a single
+# entry in HOTSPOT_RULES (and optionally a corresponding block in
+# config.json) -- no change to the dispatch logic. The current rule set
+# matches the historical thresholds at the original cli.py:3424-3435
+# block prior to extraction.
+#
+# Each rule: (verdict, priority, predicate, default-thresholds).
+# Predicate is a callable taking the metrics dict + the resolved
+# threshold dict; lower priority wins when multiple rules match.
+HotspotMetrics = Dict[str, float]
+HotspotThresholds = Dict[str, float]
+HotspotRule = Dict[str, Any]
+
+_HOTSPOT_RULES: List[HotspotRule] = [
+    {
+        "verdict": "wrapper",
+        "priority": 10,  # filter rule: fires before any actionable type
+        "thresholds": {"self_ratio_max": 0.2, "inclusive_pct_min": 5.0},
+        "predicate": lambda m, t: (m["self_ratio"] < t["self_ratio_max"]
+                                   and m["inc_pct"] >= t["inclusive_pct_min"]),
+        "doc": "Function attributes inclusive energy but body does little work.",
+    },
+    {
+        "verdict": "TYPE_2_INEFFICIENT",
+        "priority": 20,
+        "thresholds": {"exclusive_pct_min": 5.0, "efficiency_ratio_min": 3.0},
+        "predicate": lambda m, t: (m["exc_pct"] >= t["exclusive_pct_min"]
+                                   and m["efficiency_ratio"] > t["efficiency_ratio_min"]),
+        "doc": "Energy-per-call >> median: microarchitectural inefficiency.",
+    },
+    {
+        "verdict": "TYPE_1_DIRECT",
+        "priority": 30,
+        "thresholds": {"exclusive_pct_min": 10.0},
+        "predicate": lambda m, t: m["exc_pct"] >= t["exclusive_pct_min"],
+        "doc": "High exclusive energy: optimise the function body itself.",
+    },
+    {
+        "verdict": "TYPE_5_FREQUENCY",
+        "priority": 40,
+        "thresholds": {"calls_min": 100000, "exclusive_pct_min": 3.0,
+                       "efficiency_ratio_max": 1.5},
+        "predicate": lambda m, t: (m["calls"] > t["calls_min"]
+                                   and m["exc_pct"] >= t["exclusive_pct_min"]
+                                   and m["efficiency_ratio"] < t["efficiency_ratio_max"]),
+        "doc": "High call count, low per-call cost: batch or cache.",
+    },
+    {
+        "verdict": "TYPE_1_DIRECT",
+        "priority": 50,  # relaxed fallback below the strict 10% bar
+        "thresholds": {"exclusive_pct_min": 3.0},
+        "predicate": lambda m, t: m["exc_pct"] >= t["exclusive_pct_min"],
+        "doc": "Relaxed Type-1 fallback for moderate exclusive shares.",
+    },
+]
+
+
+def _resolved_thresholds(rule: HotspotRule, config: Optional[Dict[str, Any]]) -> HotspotThresholds:
+    """Merge rule's defaults with the user's overrides under
+    ``config["hotspot_taxonomy"]["<verdict>"]``. Per-verdict block keeps
+    name collisions safe across rule additions."""
+    base = dict(rule["thresholds"])
+    if config:
+        tax = config.get("hotspot_taxonomy", {}) or {}
+        # Per-verdict block (preferred, OCP-friendly): tax["<verdict>"]
+        per_verdict = tax.get(rule["verdict"], {})
+        if isinstance(per_verdict, dict):
+            base.update({k: float(v) for k, v in per_verdict.items()
+                         if k in rule["thresholds"]})
+    return base
+
+
+def _classify_hotspot_verdict(self_ratio: float, inc_pct: float, exc_pct: float,
+                               calls: int, efficiency_ratio: float,
+                               config: Optional[Dict[str, Any]] = None,
+                               rules: Optional[List[HotspotRule]] = None) -> str:
+    """Return the verdict for the given per-function metrics. Rules are
+    evaluated in ascending priority order; first match wins. CodeGreen
+    detects ``wrapper`` / ``TYPE_1_DIRECT`` / ``TYPE_2_INEFFICIENT`` /
+    ``TYPE_5_FREQUENCY`` / ``minor``; ``TYPE_3_INDIRECT`` and
+    ``TYPE_4_STRUCTURAL`` require callgraph analysis and are agent-side.
+
+    OCP: pass a custom ``rules`` list to extend without modifying this
+    function. config[hotspot_taxonomy][<verdict>] = {threshold: value}
+    overrides per-verdict thresholds without code change."""
+    metrics: HotspotMetrics = {
+        "self_ratio": self_ratio, "inc_pct": inc_pct, "exc_pct": exc_pct,
+        "calls": calls, "efficiency_ratio": efficiency_ratio,
+    }
+    active_rules = sorted(rules or _HOTSPOT_RULES, key=lambda r: r["priority"])
+    for rule in active_rules:
+        thresholds = _resolved_thresholds(rule, config)
+        try:
+            if rule["predicate"](metrics, thresholds):
+                return rule["verdict"]
+        except (KeyError, TypeError):
+            continue
+    return "minor"
+
+
+# Backwards-compat: callers reading individual threshold values can still
+# query a flat default map.
+_DEFAULT_HOTSPOT_TAXONOMY = {
+    f"{r['verdict'].lower()}_{k}": v
+    for r in _HOTSPOT_RULES for k, v in r["thresholds"].items()
+}
+
+
 # ============================================================================
 # Comprehensive Detection Functions for Init Command
 # ============================================================================
@@ -2651,6 +2761,13 @@ def run_command(
     cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0.0
     avg_power = e_stats.mean / t_stats.mean if t_stats.mean > 0 else 0.0
 
+    # Per-domain power: joules / mean wall time. Same time-base as the
+    # scalar `power_watts` so the two are comparable (sum of domain powers
+    # equals total power up to RAPL's overlapping-domain accounting).
+    avg_domains_power = {}
+    if avg_domains and t_stats.mean > 0:
+        avg_domains_power = {d: j / t_stats.mean for d, j in avg_domains.items()}
+
     if json_output:
         out = {
             "command": command, "backend": backend.name,
@@ -2663,6 +2780,8 @@ def run_command(
         }
         if avg_domains:
             out["domains"] = {d: round(j, 6) for d, j in sorted(avg_domains.items(), key=lambda x: -x[1])}
+            out["domains_power_watts"] = {d: round(w, 4) for d, w in
+                                          sorted(avg_domains_power.items(), key=lambda x: -x[1])}
         print(json.dumps(out, indent=2))
         if budget_exceeded:
             raise typer.Exit(1)
@@ -3421,18 +3540,10 @@ def project_energy(
                 med_epc = median_epc[len(median_epc) // 2] if median_epc else 1
                 epc = data["inclusive_uj"] / calls if calls > 0 else 0
                 efficiency_ratio = epc / med_epc if med_epc > 0 else 0
-                if self_ratio < 0.2 and inc_pct >= 5.0:
-                    verdict = "wrapper"
-                elif exc_pct >= 5.0 and efficiency_ratio > 3.0:
-                    verdict = "TYPE_2_INEFFICIENT"
-                elif exc_pct >= 10.0:
-                    verdict = "TYPE_1_DIRECT"
-                elif calls > 100000 and exc_pct >= 3.0 and efficiency_ratio < 1.5:
-                    verdict = "TYPE_5_FREQUENCY"
-                elif exc_pct >= 3.0:
-                    verdict = "TYPE_1_DIRECT"
-                else:
-                    verdict = "minor"
+                verdict = _classify_hotspot_verdict(
+                    self_ratio=self_ratio, inc_pct=inc_pct, exc_pct=exc_pct,
+                    calls=calls, efficiency_ratio=efficiency_ratio,
+                    config=load_config())
                 func_energy[name] = {
                     "energy_j": round(inc_j, 6),
                     "energy_pct": round(inc_pct, 2),
