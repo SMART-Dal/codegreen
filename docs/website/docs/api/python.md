@@ -50,19 +50,26 @@ Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_
     {"name": "data_load", "depth": 0, "parent": null,
      "energy_j": 12.4, "avg_power_w": 4.0, "duration_s": 3.1,
      "started_at": 1714155600.123, "ended_at": 1714155603.234,
-     "domains": {"package-0": 10.2, "core": 0.8, "gpu0": 1.4},
+     "domains":         {"package-0": 10.2,  "core": 0.8,  "gpu0": 1.4},
+     "domains_power_w": {"package-0": 3.29,  "core": 0.26, "gpu0": 0.45},
      "timeseries": [
        {"t_ns": 20364878312447553, "energy_j": 7.94, "power_w": 37.4,
         "domain_j": {"core": 0.0018, "package-0": 7.92, "gpu0": 0.022},
         "domain_w": {"core": 0.27,   "package-0": 31.5, "gpu0": 5.6}}
      ]}
   ],
-  "totals": {"energy_j": 857.4, "duration_s": 123.1, "n_tasks": 2},
+  "totals": {
+    "energy_j": 857.4, "duration_s": 123.1, "n_tasks": 2,
+    "domains":         {"package-0": 705.1, "core": 56.2, "gpu0": 96.1},
+    "domains_power_w": {"package-0": 5.73,  "core": 0.46, "gpu0": 0.78}
+  },
   "abi_version": 3
 }
 ```
 
-- `domains` — per-domain RAPL/NVML energy for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
+- `domains` — per-domain RAPL/NVML energy (J) for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
+- `domains_power_w` — per-domain average power (W), computed as `domains[d] / duration_s`. Same time-base as `avg_power_w` so the two are directly comparable. (Added v0.4.5.)
+- **Domain nesting caveat**: domain energies are **NOT disjoint**. On Intel, `package` already includes `pp0`/`core` and `pp1` (uncore/igpu); `dram` is usually a separate counter; `gpu*` (NVML) is fully independent. On AMD EPYC, only `package-0` is exposed. So `sum(domains.values()) ≠ energy_j` by design — `energy_j` ≈ `package` + `gpu` + `dram`-when-separate. Read top-level domains (`package-0`, `gpu0`, `dram` if separate); never sum nested ones.
 - `timeseries` — present only when `record_time_series=True` (ABI v3+). Each sample is self-describing:
 
 | Key | Type | Unit | Meaning |
@@ -86,6 +93,7 @@ So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]
 | `started_at`, `ended_at` | `float` | wall-clock epoch seconds |
 | `depth`, `parent` | `int`, `Optional[str]` | nesting info |
 | `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
+| `domains_power_w` | `Dict[str, float]` | per-domain average power (W) = `domains[d] / duration_s`. Same time-base as `avg_power_w`. (v0.4.5+) |
 | `timeseries` | `Optional[List[Dict]]` | `[{t_ns, energy_j, power_w, domain_j, domain_w}]` samples; present only when `record_time_series=True` |
 | `noise` | `Optional[Dict]` | quality summary for the time-series; populated only when `record_time_series=True` |
 

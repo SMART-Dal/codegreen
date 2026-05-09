@@ -331,7 +331,15 @@ class TaskResult:
     ended_at: float
     depth: int
     parent: Optional[str]
-    domains: Dict[str, float]
+    domains: Dict[str, float]                            # joules per domain
+    # NOTE on RAPL domain semantics: domains are NESTED, not disjoint. On
+    # Intel: `package` ALREADY INCLUDES `pp0` (cores) + `pp1` (igpu/uncore);
+    # `dram` is separate on most chips; `gpu*` (NVML) is fully independent.
+    # On AMD EPYC: only `package-0` is exposed. So `sum(domains) != energy_j`
+    # by design — `energy_j` equals the TOP-LEVEL CPU domain (`package-0` or
+    # `pkg-0`) PLUS any independent domains (gpu, dram-when-separate).
+    # Use `pkg-0` for CPU and `gpu0` for accelerator; do not sum nested ones.
+    domains_power_w: Dict[str, float] = None             # watts per domain (j/duration)
     timeseries: Optional[List[Dict[str, float]]] = None  # [{t_ns,j,w,d:{...}}]
     noise: Optional[Dict[str, float]] = None             # populated when timeseries present
 
@@ -661,11 +669,17 @@ class Session:
             with self._ts_lock:
                 ts = [s for s in self._ts_samples
                       if t_mono_ns <= s["t_ns"] <= t_end_mono_ns]
+        _dur = dur.value if dur.value > 0 else (t_end - t_start)
+        # Per-domain power: joules / task duration. Same time-base as
+        # avg_power_w so the two are directly comparable. Mirrors the
+        # `domains` energy split structure 1:1 so consumers can zip them.
+        domains_power = {d: (j / _dur) for d, j in domains.items()} if _dur > 0 else {}
         result = TaskResult(
             name=name, energy_j=e.value, avg_power_w=p.value,
-            duration_s=dur.value if dur.value > 0 else (t_end - t_start),
+            duration_s=_dur,
             started_at=t_start, ended_at=t_end,
-            depth=depth, parent=parent, domains=domains, timeseries=ts,
+            depth=depth, parent=parent, domains=domains,
+            domains_power_w=domains_power, timeseries=ts,
         )
         with self._tasks_lock:
             self._tasks.append(result)
@@ -717,10 +731,24 @@ class Session:
                                f"quality={t.noise['quality']})")
                         warnings_list.append(msg)
                         _warnings.warn("codegreen: " + msg, RuntimeWarning, stacklevel=4)
+        # Aggregate per-domain energy + power across depth-0 tasks. Same
+        # nesting caveat as TaskResult.domains_power_w: domains are NOT
+        # disjoint (Intel package contains pp0/pp1; gpu is separate). We
+        # sum-by-name across top-level tasks only and divide by total_d.
+        agg_domain_e: Dict[str, float] = {}
+        for t in self._tasks:
+            if t.depth != 0 or not t.domains:
+                continue
+            for d, j in t.domains.items():
+                agg_domain_e[d] = agg_domain_e.get(d, 0.0) + j
+        agg_domain_p = ({d: j / total_d for d, j in agg_domain_e.items()}
+                        if total_d > 0 else {})
         totals = {
             "energy_j": total_e,
             "duration_s": total_d,
             "n_tasks": len(self._tasks),
+            "domains": agg_domain_e,
+            "domains_power_w": agg_domain_p,
             "sample_interval_ms": self._sample_interval_ms if self._record_ts else None,
             "worst_power_cv_percent": round(worst_cv, 3) if self._record_ts else None,
             "noise_warnings": warnings_list,
@@ -778,6 +806,7 @@ class Session:
                     "session", "task", "depth", "parent",
                     "energy_j", "avg_power_w", "duration_s",
                     "started_at", "ended_at", "domains_json",
+                    "domains_power_w_json",
                     "power_cv_percent", "samples_captured", "samples_expected",
                     "drop_ratio", "quality",
                 ])
@@ -788,6 +817,7 @@ class Session:
                     f"{t.energy_j:.9f}", f"{t.avg_power_w:.6f}", f"{t.duration_s:.6f}",
                     f"{t.started_at:.6f}", f"{t.ended_at:.6f}",
                     json.dumps(t.domains, separators=(",", ":")),
+                    json.dumps(t.domains_power_w or {}, separators=(",", ":")),
                     n.get("power_cv_percent", ""), n.get("samples_captured", ""),
                     n.get("samples_expected", ""), n.get("drop_ratio", ""),
                     n.get("quality", ""),
