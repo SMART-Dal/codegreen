@@ -2,7 +2,34 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.2 (Current)
+## v0.4.6 (Current)
+
+### Fix: DRAM excluded from total energy on Skylake-SP+ Xeons
+- On Linux 5.x+ kernels, DRAM is exposed as a sub-zone of the package zone (`intel-rapl:0/intel-rapl:0:0/name=dram`). The RAPL provider previously treated all sub-zones as nested-in-package and excluded them from `total_energy` — but per Intel SDM Vol 4 §14.9, MSR_PKG_ENERGY_STATUS (0x611) and MSR_DRAM_ENERGY_STATUS (0x619) are physically disjoint counters.
+- Result was a 10–15 % undercount of `energy_j` on memory-bound workloads on Skylake-SP+ Xeons (verified on Intel Xeon Gold: `perf stat` reported pkg=1118 J + ram=146 J, codegreen reported energy_j=1121 J = pkg+gpu only).
+- Fix: promote any sub-zone whose name starts with `dram` to top-level domain. Idempotent across all platforms — AMD EPYC (no dram exposed), Sandy/Ivy/Haswell-EP (dram already zone-level), and PSYS-present chips are all unchanged.
+- Other sub-zones (`core`/`pp0`, `uncore`/`pp1`) remain excluded — they ARE genuine subsets of package energy.
+
+## v0.4.5
+
+### Per-task domains_power_w in Session JSON
+- `TaskResult` now carries `domains_power_w: Dict[str, float]` (W per domain = `domains[d] / duration_s`), parallel to the existing per-task `domains` energy split. Same time-base as `avg_power_w`.
+- `totals.domains` and `totals.domains_power_w` aggregate across depth-0 tasks.
+- CSV writer adds `domains_power_w_json` column.
+- Dataclass docstring + API docs explain the RAPL nesting semantics (`sum(domains) ≠ energy_j` by design).
+
+## v0.4.4
+
+### Per-domain power split in `codegreen run --json`
+- New `domains_power_watts: Dict[str, float]` field in CLI JSON output, parallel to the existing `domains` (joules-per-domain). Computed as `joules / mean wall time`.
+
+## v0.4.3
+
+### Sample interval default + totals
+- Fixed `sample_interval_ms` default not propagating into recorded sessions.
+- `totals.sample_interval_ms` now surfaces the effective rate that produced the time-series.
+
+## v0.4.2
 
 ### Self-describing time-series schema
 - Each timeseries sample now uses unit-suffixed keys: `t_ns` (ns), `energy_j` (J cumulative system total), `power_w` (W system total), `domain_j` (per-domain cumulative joules), `domain_w` (per-domain average watts since previous sample). Replaces the older `t/j/w/d` shorthand which was ambiguous about units and granularity.

@@ -69,7 +69,8 @@ Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_
 
 - `domains` — per-domain RAPL/NVML energy (J) for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
 - `domains_power_w` — per-domain average power (W), computed as `domains[d] / duration_s`. Same time-base as `avg_power_w` so the two are directly comparable. (Added v0.4.5.)
-- **Domain nesting caveat**: domain energies are **NOT disjoint**. On Intel, `package` already includes `pp0`/`core` and `pp1` (uncore/igpu); `dram` is usually a separate counter; `gpu*` (NVML) is fully independent. On AMD EPYC, only `package-0` is exposed. So `sum(domains.values()) ≠ energy_j` by design — `energy_j` ≈ `package` + `gpu` + `dram`-when-separate. Read top-level domains (`package-0`, `gpu0`, `dram` if separate); never sum nested ones.
+- **Domain nesting caveat**: domain energies are **NOT disjoint**. On Intel, `package` already includes `pp0`/`core` and `pp1` (uncore/igpu); `dram` measures a physically-separate counter (Intel SDM Vol 4 §14.9 — MSR 0x611 vs MSR 0x619); `gpu*` (NVML) is fully independent. On AMD EPYC, only `package-0` is exposed. So `sum(domains.values()) ≠ energy_j` by design — `energy_j` aggregates `package + dram + gpu` and excludes the `pp0`/`pp1`/`core`/`uncore` subsets. Read top-level domains (`package-0`, `dram`, `gpu0`); never sum the `pp*`/`core` subsets.
+- **DRAM is always included** (v0.4.6+): Linux exposes DRAM at `intel-rapl:0/intel-rapl:0:0/name=dram` on Skylake-SP+ Xeons (sub-zone) and at `intel-rapl:1/name=dram-0` on older Xeons (zone-level). v0.4.6 promotes both layouts equivalently into the `energy_j` total — earlier versions undercounted by 10-15% on memory-bound workloads on Skylake-SP+ chips.
 - `timeseries` — present only when `record_time_series=True` (ABI v3+). Each sample is self-describing:
 
 | Key | Type | Unit | Meaning |
