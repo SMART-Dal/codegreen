@@ -66,6 +66,19 @@
         "statistical_validation": true,
         "confidence_threshold": 0.95
       }
+    },
+    "report": {
+      "schema_version": "1",
+      "iso_timestamp_format": "rfc3339_utc",
+      "run_id_bytes": 6,
+      "outlier_method": "iqr_1.5",
+      "noise_warning": {
+        "within_task_power_cv_pct_threshold": 10.0,
+        "sampling_drop_ratio_threshold": 0.20,
+        "quality_excellent_below_cv_pct": 2.0,
+        "quality_good_below_cv_pct": 5.0,
+        "quality_moderate_below_cv_pct": 10.0
+      }
     }
   },
   "instrumentation": {
@@ -151,6 +164,25 @@
       "extensions": [
         ".java"
       ]
+    }
+  },
+  "hotspot_taxonomy": {
+    "_comment": "Per-verdict thresholds for `codegreen project`'s per-function classifier. OCP-compliant: each verdict is a self-contained block; new verdicts can be added without touching dispatch code. Defaults match the historical hardcoded thresholds at codegreen/cli/cli.py:3424-3435 prior to extraction. CodeGreen detects wrapper / TYPE_1_DIRECT / TYPE_2_INEFFICIENT / TYPE_5_FREQUENCY / minor; TYPE_3_INDIRECT and TYPE_4_STRUCTURAL require callgraph analysis and are deferred to the consuming agent.",
+    "wrapper": {
+      "self_ratio_max": 0.2,
+      "inclusive_pct_min": 5.0
+    },
+    "TYPE_1_DIRECT": {
+      "exclusive_pct_min": 10.0
+    },
+    "TYPE_2_INEFFICIENT": {
+      "exclusive_pct_min": 5.0,
+      "efficiency_ratio_min": 3.0
+    },
+    "TYPE_5_FREQUENCY": {
+      "calls_min": 100000,
+      "exclusive_pct_min": 3.0,
+      "efficiency_ratio_max": 1.5
     }
   },
   "developer": {

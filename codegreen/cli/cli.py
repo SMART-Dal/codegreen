@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Annotated, Union
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     import psutil
@@ -644,7 +644,7 @@ def generate_optimized_config(
     # Add initialization metadata
     config["initialization"] = {
         "completed": True,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "environment_type": environment_info["type"],
         "detected_sensors": list(sensor_info.keys()),
         "version": _VERSION
@@ -1382,7 +1382,7 @@ def _save_measurement_results(
     """Save combined analysis and measurement results"""
     
     results = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         'analysis': {
             'language': analysis_result.language,
             'success': analysis_result.success,
@@ -1555,7 +1555,7 @@ def analyze_code_structure(
         
         # Output JSON results if requested or save to file
         analysis_data = {
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(timespec="microseconds"),
             'script': str(script),
             'language': result.language,
             'success': True,
@@ -2671,30 +2671,85 @@ def run_command(
                 console.print(f"[red]{stderr[:500]}[/red]")
         raise typer.Exit(1)
 
-    energies, times = [], []
-    domain_runs = []
+    import socket as _socket
+    import uuid as _uuid
+    from datetime import timezone as _tz
+    from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
+        build_meta_block as _build_meta,
+    )
 
-    def _collect_run(label: str, idx: int, total: int):
+    _meta_started_at = datetime.now(_tz.utc).isoformat(timespec="microseconds")
+    _meta_t0_mono = time.monotonic()
+    try:
+        _meta_hostname = _socket.gethostname()
+    except Exception:
+        _meta_hostname = "unknown"
+    _meta_run_id = _uuid.uuid4().hex[:12]
+
+    def _backend_descriptor() -> Dict[str, Any]:
+        """Structured backend identity. Open for extension: a new backend type
+        slots in by adding an isinstance branch returning the same shape."""
+        nm = backend.name
+        domains_seen: List[str] = []
+        if isinstance(backend, _NEMBBackend):
+            try:
+                domains_seen = list(backend.get_last_domain_breakdown().keys())
+            except Exception:
+                domains_seen = []
+            driver = "nemb_native"
+        elif "perf" in nm.lower():
+            driver = "perf_rapl"
+        elif "powermetrics" in nm.lower():
+            driver = "powermetrics_ioreport"
+        elif isinstance(backend, _TimeOnlyBackend):
+            driver = "time_only"
+        else:
+            driver = "unknown"
+        return {"name": nm, "driver": driver, "domains_seen": domains_seen}
+
+    def _emit_failure_meta(error_msg: str, **extra) -> str:
+        """Always include meta on failure paths so log-correlation works."""
+        meta = _build_meta(
+            run_id=_meta_run_id,
+            started_at_iso=_meta_started_at,
+            ended_at_iso=datetime.now(_tz.utc).isoformat(timespec="microseconds"),
+            duration_total_s=time.monotonic() - _meta_t0_mono,
+            hostname=_meta_hostname,
+            session_name=None,
+            measurement_quality="failed",
+            domain_support="none",
+            domains={},
+            record_time_series=False,
+        )
+        payload = {"success": False, "error": error_msg, "meta": meta,
+                   "command": command, "backend": _backend_descriptor()}
+        payload.update(extra)
+        return json.dumps(payload, indent=2)
+
+    measurement_pairs: List[tuple] = []
+    warmup_pairs: List[tuple] = []
+    domain_runs: List[Dict[str, float]] = []
+
+    def _collect_run(label: str, idx: int, total: int, into: List[tuple]):
         if not json_output:
             console.print(f"[dim]{label} {idx+1}/{total}[/dim]")
         energy_j, elapsed = backend.measure(command)
-        times.append(elapsed)
         if energy_j is not None and energy_j > 0:
-            energies.append(energy_j)
+            into.append((energy_j, elapsed))
             if isinstance(backend, _NEMBBackend):
-                domains = backend.get_last_domain_breakdown()
-                if domains:
-                    domain_runs.append(domains)
+                d = backend.get_last_domain_breakdown()
+                if d and label == "Run":
+                    domain_runs.append(d)
+        else:
+            into.append((None, elapsed))
 
     for i in range(warmup):
         if include_warmup:
             try:
-                _collect_run("Warmup", i, warmup)
+                _collect_run("Warmup", i, warmup, warmup_pairs)
             except RuntimeError as e:
-                if json_output:
-                    print(json.dumps({"success": False, "error": f"Warmup failed: {e}"}))
-                else:
-                    console.print(f"[red]Warmup failed: {e}[/red]")
+                if json_output: print(_emit_failure_meta(f"Warmup failed: {e}"))
+                else: console.print(f"[red]Warmup failed: {e}[/red]")
                 raise typer.Exit(1)
         else:
             if not json_output:
@@ -2702,21 +2757,22 @@ def run_command(
             try:
                 subprocess.run(command, capture_output=True, timeout=300)
             except subprocess.TimeoutExpired:
-                if json_output:
-                    print(json.dumps({"success": False, "error": "Warmup timed out"}))
-                else:
-                    console.print(f"[red]Warmup timed out[/red]")
+                if json_output: print(_emit_failure_meta("Warmup timed out"))
+                else: console.print(f"[red]Warmup timed out[/red]")
                 raise typer.Exit(1)
 
     for i in range(repeat):
         try:
-            _collect_run("Run", i, repeat)
+            _collect_run("Run", i, repeat, measurement_pairs)
         except RuntimeError as e:
-            if json_output:
-                print(json.dumps({"success": False, "error": str(e)}))
-            else:
-                console.print(f"[red]{e}[/red]")
+            if json_output: print(_emit_failure_meta(str(e)))
+            else: console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
+
+    energy_valid_pairs = [(e, t) for (e, t) in measurement_pairs if e is not None]
+    zero_energy_dropped = len(measurement_pairs) - len(energy_valid_pairs)
+    energies = [e for (e, _) in energy_valid_pairs]
+    times = [t for (_, t) in energy_valid_pairs]
 
     if not energies:
         msg = f"No energy data collected ({backend.name})"
@@ -2732,56 +2788,101 @@ def run_command(
             diag = ". No energy sensor found (need NEMB library, or perf on Linux)"
         msg += diag
         if json_output:
-            t_mean = sum(times) / len(times) if times else 0
-            print(json.dumps({"success": False, "error": msg,
-                              "time_seconds": {"mean": t_mean}}))
+            t_only = [t for (_, t) in measurement_pairs]
+            t_mean = sum(t_only) / len(t_only) if t_only else 0
+            print(_emit_failure_meta(msg, duration_s={"mean": t_mean},
+                                     runs={"attempted": len(measurement_pairs),
+                                           "energy_valid": 0,
+                                           "zero_energy_dropped": zero_energy_dropped}))
         else:
             console.print(f"[red]{msg}[/red]")
-            if times:
-                t_stats = StatisticalAnalysis.summarize(times)
+            if measurement_pairs:
+                t_stats = StatisticalAnalysis.summarize([t for (_, t) in measurement_pairs])
                 console.print(f"[bold]Time:[/bold] {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
         raise typer.Exit(1)
 
     e_stats = StatisticalAnalysis.summarize(energies)
-    t_stats = StatisticalAnalysis.summarize(times)
+    pre_iqr_n = len(energies)
+    surviving = set(range(pre_iqr_n))
+    iqr_outliers_removed = e_stats.outliers_removed
+    times_paired = times
+    t_stats = StatisticalAnalysis.summarize(times_paired)
 
-    # Compute domain averages (shared by JSON and human output)
-    avg_domains = {}
+    avg_domains: Dict[str, float] = {}
+    domain_active_count: Dict[str, int] = {}
     if domain_runs:
-        all_domain_keys = set()
-        for dr in domain_runs:
-            all_domain_keys.update(dr.keys())
-        for d in all_domain_keys:
-            vals = [dr.get(d, 0) for dr in domain_runs if dr.get(d, 0) > 0]
-            if vals:
-                avg_domains[d] = sum(vals) / len(vals)
+        all_keys: set = set()
+        for dr in domain_runs: all_keys.update(dr.keys())
+        for d in all_keys:
+            vals = [dr.get(d, 0.0) for dr in domain_runs]
+            avg_domains[d] = sum(vals) / len(domain_runs)
+            domain_active_count[d] = sum(1 for v in vals if v > 0)
 
-    budget_exceeded = budget is not None and e_stats.mean > budget
-
+    per_run_power = [e / t for (e, t) in energy_valid_pairs if t > 0]
+    p_stats = StatisticalAnalysis.summarize(per_run_power) if per_run_power else None
     cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0.0
-    avg_power = e_stats.mean / t_stats.mean if t_stats.mean > 0 else 0.0
+    avg_power = p_stats.mean if p_stats else 0.0
 
-    # Per-domain power: joules / mean wall time. Same time-base as the
-    # scalar `power_watts` so the two are comparable (sum of domain powers
-    # equals total power up to RAPL's overlapping-domain accounting).
-    avg_domains_power = {}
+    avg_domains_power: Dict[str, float] = {}
     if avg_domains and t_stats.mean > 0:
         avg_domains_power = {d: j / t_stats.mean for d, j in avg_domains.items()}
 
+    budget_exceeded = budget is not None and e_stats.mean > budget
+
     if json_output:
+        _meta_ended_at = datetime.now(_tz.utc).isoformat(timespec="microseconds")
+        meta_obj = _build_meta(
+            run_id=_meta_run_id,
+            started_at_iso=_meta_started_at,
+            ended_at_iso=_meta_ended_at,
+            duration_total_s=time.monotonic() - _meta_t0_mono,
+            hostname=_meta_hostname,
+            session_name=None,
+            measurement_quality="ok" if energies else "no_energy",
+            domain_support="full" if avg_domains else ("scalar_only" if energies else "none"),
+            domains=avg_domains,
+            record_time_series=False,
+            extras={"include_warmup": bool(include_warmup), "warmup_runs_configured": warmup},
+        )
         out = {
-            "command": command, "backend": backend.name,
-            "runs": len(energies), "outliers_removed": e_stats.outliers_removed,
-            "energy_joules": {"mean": e_stats.mean, "std": e_stats.std, "min": e_stats.min, "max": e_stats.max,
-                              "ci95": [e_stats.ci95_lower, e_stats.ci95_upper], "cv_percent": round(cv, 2)},
-            "time_seconds": {"mean": t_stats.mean, "std": t_stats.std, "min": t_stats.min, "max": t_stats.max},
-            "power_watts": round(avg_power, 2),
+            "meta": meta_obj,
+            "command": command,
+            "backend": _backend_descriptor(),
+            "runs": {
+                "attempted": len(measurement_pairs),
+                "energy_valid": len(energies),
+                "iqr_outliers_removed": iqr_outliers_removed,
+                "zero_energy_dropped": zero_energy_dropped,
+                "warmup_included_in_stats": bool(include_warmup),
+                "warmup_runs": len(warmup_pairs) if include_warmup else 0,
+                "measurement_runs": repeat,
+            },
+            "energy_j": {
+                "mean": e_stats.mean, "std": e_stats.std, "min": e_stats.min, "max": e_stats.max,
+                "ci95_lower": e_stats.ci95_lower, "ci95_upper": e_stats.ci95_upper,
+                "cv_percent_across_runs": round(cv, 2),
+            },
+            "duration_s": {
+                "mean": t_stats.mean, "std": t_stats.std, "min": t_stats.min, "max": t_stats.max,
+                "outliers_removed": t_stats.outliers_removed,
+            },
+            "power_w": {
+                "mean": (round(p_stats.mean, 4) if p_stats else 0.0),
+                "std":  (round(p_stats.std, 4) if p_stats else 0.0),
+                "min":  (round(p_stats.min, 4) if p_stats else 0.0),
+                "max":  (round(p_stats.max, 4) if p_stats else 0.0),
+                "ci95_lower": (round(p_stats.ci95_lower, 4) if p_stats else 0.0),
+                "ci95_upper": (round(p_stats.ci95_upper, 4) if p_stats else 0.0),
+                "computation": "mean_of_per_run_e_over_t",
+            },
             "budget_exceeded": budget_exceeded,
         }
+        if budget is not None:
+            out["budget_j"] = budget
         if avg_domains:
             out["domains"] = {d: round(j, 6) for d, j in sorted(avg_domains.items(), key=lambda x: -x[1])}
-            out["domains_power_watts"] = {d: round(w, 4) for d, w in
-                                          sorted(avg_domains_power.items(), key=lambda x: -x[1])}
+            out["domains_power_w"] = {d: round(w, 4) for d, w in
+                                      sorted(avg_domains_power.items(), key=lambda x: -x[1])}
         print(json.dumps(out, indent=2))
         if budget_exceeded:
             raise typer.Exit(1)

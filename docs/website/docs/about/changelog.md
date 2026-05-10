@@ -2,7 +2,51 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.6 (Current)
+## v0.4.7 (Current)
+
+### JSON-schema + correctness overhaul (32 fixes from 5-track audit)
+
+**Breaking field renames** (CLI JSON only — Session API was already on the short forms):
+- `energy_joules.{...}` → `energy_j.{...}`
+- `time_seconds.{...}` → `duration_s.{...}`
+- `domains_power_watts.{...}` → `domains_power_w.{...}`
+- `runs: int` → `runs: {attempted, energy_valid, iqr_outliers_removed, zero_energy_dropped, warmup_runs, measurement_runs, ...}` (structured record)
+- `backend: "NEMB (...)"` → `backend: {name, driver, domains_seen}` (structured record)
+- `cv_percent` (across runs) → `cv_percent_across_runs`; `worst_power_cv_percent` (within-task) → `worst_within_task_power_cv_percent`
+- Session: `session_name`/`abi_version`/`providers` at root → moved into `meta` (`meta.session_name`, `meta.nemb_abi_version`); `providers: []` placeholder removed.
+
+**`meta` block expanded** with reproducibility metadata: `schema_version`, `cpu_model`, `kernel`, `cwd`, `argv`, `codegreen_env`, `measurement_quality`, `domain_support`, `outlier_method`, `iso_timestamp_format`, `domain_topology`, `timeseries.{enabled,schema_version,sample_keys,t_ns_clock,inclusive_of_children}`. Failure-path JSONs now also include `meta` for log correlation.
+
+**`totals` block split into time-window-aware fields**: `wall_duration_s` (s.start → s.stop, monotonic), `task_duration_s` (sum of depth-0 instrumented work — matches `energy_j`'s window), `gap_duration_s = wall − union(task intervals)` (uninstrumented work between/around tasks), `concurrent_overlap_s` (positive when tasks ran in parallel threads). `duration_s` retained as alias for `task_duration_s`.
+
+**Math correctness fixes**:
+- CLI `power_w` now computed as `mean(per-run e/t)` with full CI95, not the broken `e_mean/t_mean` over disjoint sample sets. Energy and time arrays are pair-filtered by run index; zero-energy runs drop both members. Surfaces `runs.zero_energy_dropped` so users see the funnel.
+- Session totals aggregate per-domain power as `Σenergy / Σduration_over_tasks_where_domain_was_reported` so a domain present on only some tasks is not diluted.
+- Empty session emits `meta.measurement_quality = "no_tasks"`; TimeOnly backend emits `"no_backend"`; energy=0 emits `"energy_zero"`. No silent zero-J reports.
+
+**Time/clock robustness**:
+- `wall_duration_s` and `duration_total_s` now use `time.monotonic()` end-to-end (NTP-immune).
+- `_dur` fallback in `_close_by_sid` uses monotonic delta (was wall-clock).
+- `TaskResult.started_at_mono_ns` / `ended_at_mono_ns` persisted so consumers can align task windows with `timeseries[].t_ns` exactly.
+- Naive `datetime.now()` calls migrated to `datetime.now(timezone.utc)`; ISO format documented in `meta.iso_timestamp_format = "rfc3339_utc"`.
+
+**Timeseries-mode fixes** (`record_time_series=True`):
+- Per-task timeseries slices are sorted by `t_ns` and de-duplicated before assignment.
+- `_compute_task_noise` distinguishes "timeseries disabled" (returns `None`) from "timeseries enabled but task too short" (returns `drop_ratio=1.0`); uses sample stdev (not population); computes `samples_expected` from observed median interval when n ≥ 3.
+- Buffer-saturation warning reworded to make clear that `buffer_samples` cannot be resized mid-run.
+- `meta.timeseries.inclusive_of_children = true` documents that nested-task timeseries DO contain their children's samples (consumers summing across all tasks would double-count).
+
+**Reliability**:
+- `_write_json` is now atomic (temp + `os.replace`) — concurrent / crash-safe.
+- `_build_report` is wrapped in try/except; an exception in the noise calculation no longer prevents the report from being emitted (`meta.error` carries the failure reason).
+- SIGTERM/SIGINT handlers installed alongside `atexit` so graceful termination still flushes the report; SIGKILL remains unrecoverable by definition.
+- `_auto_finalize` closes open tasks in LIFO order (deepest first) and re-derives `parent` linkage from the remaining open set — eliminates `depth=N, parent=null` inconsistency on forgot-to-stop.
+
+**Open/Closed compliance**: All meta-block construction goes through a single shared `build_meta_block()` (used by both Session API and CLI). Every magic-number threshold (CV%, drop%, run-id length, quality cutoffs) lives in `config.json` under `measurement.report` — open for extension via config edits, closed for modification via callers. Domain-naming patterns are in a `_DOMAIN_PATTERNS` table; new hardware families add a tuple, not an `if`. Hardware-specific resolvers (CPU model, domain topology) sit in a thin adapter layer separate from the core builder.
+
+**Test coverage**: 42 Session-API checks + 26 CLI checks + 39 logical-correctness assertions on real workloads (GPT-2 inference, multi-task pipelines, concurrent threads, nested tasks, empty sessions). All green on AMD EPYC 9554P.
+
+## v0.4.6
 
 ### Fix: DRAM excluded from total energy on Skylake-SP+ Xeons
 - On Linux 5.x+ kernels, DRAM is exposed as a sub-zone of the package zone (`intel-rapl:0/intel-rapl:0:0/name=dram`). The RAPL provider previously treated all sub-zones as nested-in-package and excluded them from `total_energy` — but per Intel SDM Vol 4 §14.9, MSR_PKG_ENERGY_STATUS (0x611) and MSR_DRAM_ENERGY_STATUS (0x619) are physically disjoint counters.

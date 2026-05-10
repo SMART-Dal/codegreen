@@ -39,37 +39,104 @@ Three usage forms are supported — context manager, explicit `start_task` / `st
 | `sample_interval_ms` | `None` (uses `config.json`) | Per-session override of the sampler's measurement interval; routes to the existing `coordinator.measurement_interval_ms` field via `nemb_set_measurement_interval_ms` — no parallel state |
 | `sampling_mode` | `"fixed"` | `"adaptive"` is reserved for a future runtime-rate-control mode; today only `"fixed"` is implemented |
 
-### Output schema
+### Output schema (v0.4.7+)
 
-Top-level keys: `session_name`, `tasks` (list of task dicts), `totals` (`energy_j`, `duration_s`, `n_tasks`), `providers`, `abi_version`. Per-task fields match the `TaskResult` dataclass.
+Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric field carries an explicit unit suffix (`_j`, `_s`, `_w`, `_ns`). Field names are identical between the Session API and `codegreen run` CLI output.
 
 ```json
 {
-  "session_name": "training-run",
+  "meta": {
+    "schema_version": "1",
+    "codegreen_version": "0.4.7",
+    "run_id": "b7856b409d72",
+    "session_name": "training-run",
+    "started_at":  "2026-05-10T18:16:56.209074+00:00",
+    "ended_at":    "2026-05-10T18:17:01.345702+00:00",
+    "duration_total_s": 5.137,
+    "hostname": "amd-epyc-9554p",
+    "pid": 12345,
+    "platform": "linux",
+    "python_version": "3.13.0",
+    "cpu_model": "AMD EPYC 9554P 64-Core Processor",
+    "kernel": "Linux-5.15.0-...",
+    "cwd": "/home/user/work",
+    "argv": ["script.py"],
+    "codegreen_env": {"CODEGREEN_LIB_PATH": "..."},
+    "measurement_quality": "ok",
+    "domain_support": "full",
+    "outlier_method": "iqr_1.5",
+    "iso_timestamp_format": "rfc3339_utc",
+    "nemb_abi_version": 3,
+    "domain_topology": {
+      "package-0": {"top_level": true, "kind": "cpu_package", "includes": ["core"]},
+      "core":      {"top_level": false, "kind": "nested", "includes": []},
+      "gpu0":      {"top_level": true, "kind": "gpu", "includes": []}
+    },
+    "timeseries": {"enabled": true, "schema_version": "1",
+                   "sample_keys": ["t_ns", "energy_j", "power_w", "domains"],
+                   "t_ns_clock": "clock_monotonic",
+                   "inclusive_of_children": true}
+  },
   "tasks": [
     {"name": "data_load", "depth": 0, "parent": null,
      "energy_j": 12.4, "avg_power_w": 4.0, "duration_s": 3.1,
      "started_at": 1714155600.123, "ended_at": 1714155603.234,
+     "started_at_mono_ns": 20364878312447553, "ended_at_mono_ns": 20364881412447553,
      "domains":         {"package-0": 10.2,  "core": 0.8,  "gpu0": 1.4},
      "domains_power_w": {"package-0": 3.29,  "core": 0.26, "gpu0": 0.45},
-     "timeseries": [
-       {"t_ns": 20364878312447553, "energy_j": 7.94, "power_w": 37.4,
-        "domain_j": {"core": 0.0018, "package-0": 7.92, "gpu0": 0.022},
-        "domain_w": {"core": 0.27,   "package-0": 31.5, "gpu0": 5.6}}
-     ]}
+     "timeseries": [/* {t_ns, energy_j, power_w, domains}, ... */]}
   ],
   "totals": {
-    "energy_j": 857.4, "duration_s": 123.1, "n_tasks": 2,
+    "energy_j": 857.4,
+    "duration_s":         123.1,
+    "wall_duration_s":    125.5,
+    "task_duration_s":    123.1,
+    "gap_duration_s":       2.4,
+    "concurrent_overlap_s": 0.0,
+    "n_tasks": 2,
+    "n_top_level_tasks": 2,
     "domains":         {"package-0": 705.1, "core": 56.2, "gpu0": 96.1},
-    "domains_power_w": {"package-0": 5.73,  "core": 0.46, "gpu0": 0.78}
-  },
-  "abi_version": 3
+    "domains_power_w": {"package-0": 5.73,  "core": 0.46, "gpu0": 0.78},
+    "sample_interval_ms": 10,
+    "worst_within_task_power_cv_percent": 7.25,
+    "noise_warnings": []
+  }
 }
 ```
 
+#### `meta` — run identity & environment (every output, including failure paths)
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | output-schema version. Bump indicates a breaking field rename or removal |
+| `codegreen_version` | installed library version |
+| `run_id` | 12-hex-char UUID4 prefix; unique per process invocation, for log correlation |
+| `session_name` | the `Session(name=…)` argument; `null` for CLI runs |
+| `started_at` / `ended_at` | RFC 3339 UTC timestamp with `+00:00` offset, microsecond precision |
+| `duration_total_s` | monotonic-clock delta from session start to report build (NTP-immune) |
+| `hostname`, `pid`, `platform`, `python_version` | process & host identity |
+| `cpu_model`, `kernel` | hardware/OS reproducibility metadata |
+| `cwd`, `argv` | working directory & argv at measurement time |
+| `codegreen_env` | snapshot of all `CODEGREEN_*` environment variables |
+| `measurement_quality` | `ok` \| `no_tasks` \| `no_backend` \| `energy_zero` \| `failed` \| `checkpoints_only` |
+| `domain_support` | `full` (per-domain breakdown) \| `scalar_only` (overall energy only) \| `none` (no backend) |
+| `outlier_method` | which outlier filter was applied to multi-run statistics (default `"iqr_1.5"`) |
+| `iso_timestamp_format` | format contract for `started_at`/`ended_at`; pin in case future versions change it |
+| `nemb_abi_version` | C++ NEMB backend ABI version actually loaded |
+| `domain_topology` | machine-readable domain nesting (so consumers know which keys are top-level vs. nested) |
+| `timeseries` | block describing whether timeseries was recorded + its sample schema |
+
+#### `totals` — aggregate metrics
+
+`task_duration_s` is the sum of depth-0 task durations (matches `energy_j`'s window); `wall_duration_s` is `s.start()`→`s.stop()` from monotonic clock; `gap_duration_s = wall − union(task intervals)` (uninstrumented work between tasks); `concurrent_overlap_s` is positive when tasks ran in parallel threads. `domains_power_w[d]` is the energy-weighted average power: `Σenergy_d / Σduration_over_tasks_where_d_was_reported` (so a domain present on only some tasks is not diluted).
+
+#### Per-task fields
+
+`avg_power_w` = `energy_j / duration_s`. `domains_power_w[d]` = `domains[d] / duration_s` per task. `started_at_mono_ns`/`ended_at_mono_ns` (added v0.4.7) let consumers align task windows with `timeseries[].t_ns` exactly. The `parent` field is the immediately-enclosing task name when nested.
+
 - `domains` — per-domain RAPL/NVML energy (J) for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
-- `domains_power_w` — per-domain average power (W), computed as `domains[d] / duration_s`. Same time-base as `avg_power_w` so the two are directly comparable. (Added v0.4.5.)
-- **Domain nesting caveat**: domain energies are **NOT disjoint**. On Intel, `package` already includes `pp0`/`core` and `pp1` (uncore/igpu); `dram` measures a physically-separate counter (Intel SDM Vol 4 §14.9 — MSR 0x611 vs MSR 0x619); `gpu*` (NVML) is fully independent. On AMD EPYC, only `package-0` is exposed. So `sum(domains.values()) ≠ energy_j` by design — `energy_j` aggregates `package + dram + gpu` and excludes the `pp0`/`pp1`/`core`/`uncore` subsets. Read top-level domains (`package-0`, `dram`, `gpu0`); never sum the `pp*`/`core` subsets.
+- `domains_power_w` — per-domain average power (W), computed as `domains[d] / duration_s`. Same time-base as `avg_power_w` so the two are directly comparable.
+- **Domain nesting caveat**: domain energies are **NOT disjoint**. On Intel, `package` already includes `pp0`/`core` and `pp1` (uncore/igpu); `dram` measures a physically-separate counter (Intel SDM Vol 4 §14.9 — MSR 0x611 vs MSR 0x619); `gpu*` (NVML) is fully independent. On AMD EPYC, only `package-0` is exposed. So `sum(domains.values()) ≠ energy_j` by design — `energy_j` aggregates `package + dram + gpu` and excludes the `pp0`/`pp1`/`core`/`uncore` subsets. Use `meta.domain_topology` to programmatically distinguish top-level from nested domains.
 - **DRAM is always included** (v0.4.6+): Linux exposes DRAM at `intel-rapl:0/intel-rapl:0:0/name=dram` on Skylake-SP+ Xeons (sub-zone) and at `intel-rapl:1/name=dram-0` on older Xeons (zone-level). v0.4.6 promotes both layouts equivalently into the `energy_j` total — earlier versions undercounted by 10-15% on memory-bound workloads on Skylake-SP+ chips.
 - `timeseries` — present only when `record_time_series=True` (ABI v3+). Each sample is self-describing:
 
@@ -89,16 +156,17 @@ So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]
 |---|---|---|
 | `name` | `str` | task name passed to `start_task` / `task()` |
 | `energy_j` | `float` | total joules during the task (atomic via `nemb_stop_session_v2`) |
-| `avg_power_w` | `float` | average watts over the task window |
-| `duration_s` | `float` | wall-clock seconds |
-| `started_at`, `ended_at` | `float` | wall-clock epoch seconds |
-| `depth`, `parent` | `int`, `Optional[str]` | nesting info |
+| `avg_power_w` | `float` | average watts over the task window (= `energy_j / duration_s`) |
+| `duration_s` | `float` | task wall-clock seconds (monotonic-derived) |
+| `started_at`, `ended_at` | `float` | wall-clock POSIX seconds (display only) |
+| `started_at_mono_ns`, `ended_at_mono_ns` | `int` | monotonic-clock stamps for aligning with `timeseries[].t_ns` (v0.4.7+) |
+| `depth`, `parent` | `int`, `Optional[str]` | nesting info; `parent` is the immediately-enclosing task name |
 | `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
-| `domains_power_w` | `Dict[str, float]` | per-domain average power (W) = `domains[d] / duration_s`. Same time-base as `avg_power_w`. (v0.4.5+) |
-| `timeseries` | `Optional[List[Dict]]` | `[{t_ns, energy_j, power_w, domain_j, domain_w}]` samples; present only when `record_time_series=True` |
-| `noise` | `Optional[Dict]` | quality summary for the time-series; populated only when `record_time_series=True` |
+| `domains_power_w` | `Dict[str, float]` | per-domain average power (W) = `domains[d] / duration_s`. Same time-base as `avg_power_w`. |
+| `timeseries` | `Optional[List[Dict]]` | sorted, deduplicated samples within `[started_at_mono_ns, ended_at_mono_ns]`. `None` when `record_time_series=False`; empty list when enabled but the task was shorter than one sample interval. Inclusive of children (a parent's timeseries contains its children's samples — see `meta.timeseries.inclusive_of_children`). |
+| `noise` | `Optional[Dict]` | quality summary computed from `timeseries` |
 
-See the schema table above for each timeseries sample's keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`) — all keys carry their unit suffix.
+See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
 
 ### Noise / quality reporting
 
@@ -106,23 +174,29 @@ When `record_time_series=True`, every task carries a `noise` dict and `totals` c
 
 ```json
 "noise": {
-  "samples_captured":  2847,
-  "samples_expected":  3000,
-  "drop_ratio":        0.0510,
-  "power_mean_w":      102.3,
-  "power_std_w":         7.4,
-  "power_cv_percent":    7.25,
-  "sample_interval_ms":     1,
-  "quality":           "moderate"
+  "samples_captured":         2847,
+  "samples_expected":         3000,
+  "samples_expected_method":  "observed_median",
+  "drop_ratio":               0.0510,
+  "power_mean_w":             102.3,
+  "power_std_w":                7.4,
+  "power_cv_percent":           7.25,
+  "sample_interval_ms":            1,
+  "quality":                  "moderate"
 },
 "totals": {
   ...,
-  "worst_power_cv_percent": 7.25,
-  "noise_warnings": []
+  "worst_within_task_power_cv_percent": 7.25,
+  "noise_warnings": [
+    {"task": "data_load", "depth": 0,
+     "within_task_power_cv_percent": 17.8, "drop_ratio": 0.003,
+     "quality": "high-noise",
+     "reasons": ["within_task_power_cv_above_10pct"]}
+  ]
 }
 ```
 
-`quality` is bucketed by `power_cv_percent`: `excellent` <2 %, `good` <5 %, `moderate` <10 %, `high-noise` ≥10 %. A `RuntimeWarning` is emitted (and the task is added to `totals.noise_warnings`) when CV ≥10 % or `drop_ratio` ≥20 % so the user is told that the measurement is unreliable instead of silently using a noisy number. Computation runs once at `stop()` time (purely on already-captured samples) and is independently verified to add no measurement bias of its own (~0.05 % vs `record_time_series=False` on identical workloads).
+`samples_expected_method` is `"observed_median"` (interval inferred from captured samples; default when n ≥ 3) or `"configured"` (falls back to `sample_interval_ms`). `quality` is bucketed by `power_cv_percent`: `excellent` <2 %, `good` <5 %, `moderate` <10 %, `high-noise` ≥10 %. A `RuntimeWarning` is emitted (and the task is appended as a structured record to `totals.noise_warnings`) when CV ≥10 % or `drop_ratio` ≥20 %. All thresholds live in `config.json` under `measurement.report.noise_warning` so they can be overridden without code changes. Computation runs once at `stop()` time and adds ~0.05 % bias vs `record_time_series=False`.
 
 **Note — slight overhead when `record_time_series=True`.**
 The drain thread that pulls samples out of the C++ ring buffer is cheap but not free. On reproducibility benchmarks (3 fresh subprocesses each, identical workload):
