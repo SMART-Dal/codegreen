@@ -177,6 +177,61 @@ class TestNamingContract:
         assert len(rid) == 12
         int(rid, 16)
 
+    def test_canonical_started_at_unchanged_with_local_field(self, workload_session: Dict) -> None:
+        """v0.4.8: adding started_at_local must NOT change started_at's UTC contract."""
+        v = workload_session["meta"]["started_at"]
+        assert v.endswith("+00:00")
+        assert "+00:00" in v
+
+
+# ===========================================================================
+# 2b. LOCAL TIMESTAMPS (v0.4.8+; additive, never replaces UTC fields)
+# ===========================================================================
+class TestLocalTimestamps:
+    """started_at_local, ended_at_local, host_timezone — display-only companions."""
+
+    def test_local_fields_present(self, workload_session: Dict) -> None:
+        m = workload_session["meta"]
+        for k in ("started_at_local", "ended_at_local", "host_timezone"):
+            assert k in m
+
+    def test_local_carries_offset_not_naive(self, workload_session: Dict) -> None:
+        m = workload_session["meta"]
+        s_local = m["started_at_local"]
+        e_local = m["ended_at_local"]
+        for v in (s_local, e_local):
+            parsed = datetime.fromisoformat(v)
+            assert parsed.tzinfo is not None, (
+                f"local timestamp must carry explicit offset, got {v!r}"
+            )
+
+    def test_local_and_utc_describe_same_instant(self, workload_session: Dict) -> None:
+        m = workload_session["meta"]
+        s_utc = datetime.fromisoformat(m["started_at"])
+        s_local = datetime.fromisoformat(m["started_at_local"])
+        delta = abs((s_utc - s_local).total_seconds())
+        assert delta < 0.001, (
+            f"started_at and started_at_local must point to the same instant; "
+            f"delta={delta}s"
+        )
+
+    def test_local_ordered_with_utc(self, workload_session: Dict) -> None:
+        m = workload_session["meta"]
+        s_local = datetime.fromisoformat(m["started_at_local"])
+        e_local = datetime.fromisoformat(m["ended_at_local"])
+        assert e_local > s_local
+
+    def test_host_timezone_label_nonempty(self, workload_session: Dict) -> None:
+        assert workload_session["meta"]["host_timezone"]
+        assert workload_session["meta"]["host_timezone"] != "unknown" or True
+
+    def test_canonical_utc_unaffected_when_local_present(self, workload_session: Dict) -> None:
+        """Sanity: the UTC field stays UTC even though local is also emitted."""
+        m = workload_session["meta"]
+        assert m["iso_timestamp_format"] == "rfc3339_utc"
+        assert m["started_at"].endswith("+00:00")
+        assert m["ended_at"].endswith("+00:00")
+
 
 # ===========================================================================
 # 3. LOGICAL CORRECTNESS

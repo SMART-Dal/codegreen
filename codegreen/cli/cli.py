@@ -2676,9 +2676,11 @@ def run_command(
     from datetime import timezone as _tz
     from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
         build_meta_block as _build_meta,
+        _iso_local_now,
     )
 
     _meta_started_at = datetime.now(_tz.utc).isoformat(timespec="microseconds")
+    _meta_started_at_local = _iso_local_now()
     _meta_t0_mono = time.monotonic()
     try:
         _meta_hostname = _socket.gethostname()
@@ -2713,6 +2715,8 @@ def run_command(
             run_id=_meta_run_id,
             started_at_iso=_meta_started_at,
             ended_at_iso=datetime.now(_tz.utc).isoformat(timespec="microseconds"),
+            started_at_local_iso=_meta_started_at_local,
+            ended_at_local_iso=_iso_local_now(),
             duration_total_s=time.monotonic() - _meta_t0_mono,
             hostname=_meta_hostname,
             session_name=None,
@@ -2831,10 +2835,13 @@ def run_command(
 
     if json_output:
         _meta_ended_at = datetime.now(_tz.utc).isoformat(timespec="microseconds")
+        _meta_ended_at_local = _iso_local_now()
         meta_obj = _build_meta(
             run_id=_meta_run_id,
             started_at_iso=_meta_started_at,
             ended_at_iso=_meta_ended_at,
+            started_at_local_iso=_meta_started_at_local,
+            ended_at_local_iso=_meta_ended_at_local,
             duration_total_s=time.monotonic() - _meta_t0_mono,
             hostname=_meta_hostname,
             session_name=None,

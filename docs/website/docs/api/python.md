@@ -47,11 +47,14 @@ Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric fi
 {
   "meta": {
     "schema_version": "1",
-    "codegreen_version": "0.4.7",
+    "codegreen_version": "0.4.8",
     "run_id": "b7856b409d72",
     "session_name": "training-run",
-    "started_at":  "2026-05-10T18:16:56.209074+00:00",
-    "ended_at":    "2026-05-10T18:17:01.345702+00:00",
+    "started_at":       "2026-05-10T18:16:56.209074+00:00",
+    "ended_at":         "2026-05-10T18:17:01.345702+00:00",
+    "started_at_local": "2026-05-10T11:16:56.209074-07:00",
+    "ended_at_local":   "2026-05-10T11:17:01.345702-07:00",
+    "host_timezone":    "PDT",
     "duration_total_s": 5.137,
     "hostname": "amd-epyc-9554p",
     "pid": 12345,
@@ -112,7 +115,9 @@ Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric fi
 | `codegreen_version` | installed library version |
 | `run_id` | 12-hex-char UUID4 prefix; unique per process invocation, for log correlation |
 | `session_name` | the `Session(name=…)` argument; `null` for CLI runs |
-| `started_at` / `ended_at` | RFC 3339 UTC timestamp with `+00:00` offset, microsecond precision |
+| `started_at` / `ended_at` | RFC 3339 **UTC** timestamp with `+00:00` offset, microsecond precision. The canonical correlation key — use this for joins, sorts, and cross-machine comparisons |
+| `started_at_local` / `ended_at_local` | (v0.4.8+) Same instant rendered in the host's local timezone with its offset (e.g. `-07:00`). Display-only companion; never use for joins. UTC and local always describe the same instant within microseconds |
+| `host_timezone` | (v0.4.8+) Local timezone label at measurement time (e.g. `PDT`, `ADT`, `+05:30` for non-DST regions) |
 | `duration_total_s` | monotonic-clock delta from session start to report build (NTP-immune) |
 | `hostname`, `pid`, `platform`, `python_version` | process & host identity |
 | `cpu_model`, `kernel` | hardware/OS reproducibility metadata |

@@ -30,6 +30,19 @@ def _iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def _iso_local_now() -> str:
+    """Same instant as `_iso_utc_now()` rendered in the host's local timezone
+    with explicit offset, e.g. "2026-05-10T11:16:56.209074-07:00". Display-only
+    companion to the canonical UTC field; never use for joins/sorts."""
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
+
+
+def _host_timezone_label() -> str:
+    """Best-effort local timezone label, e.g. 'PDT' or '+05:30'."""
+    tz = datetime.now().astimezone().tzinfo
+    return tz.tzname(datetime.now()) if tz else "unknown"
+
+
 def _runtime_version() -> str:
     try:
         from importlib.metadata import version as _v
@@ -145,6 +158,8 @@ def build_meta_block(
     domain_support: str = "none",
     domains: Optional[Dict[str, float]] = None,
     record_time_series: bool = False,
+    started_at_local_iso: str = "",
+    ended_at_local_iso: str = "",
     extras: Optional[Dict] = None,
 ) -> Dict:
     """Single canonical meta-block builder. Shared by Session._build_report()
@@ -171,6 +186,9 @@ def build_meta_block(
         "domain_support": domain_support,
         "outlier_method": rcfg["outlier_method"],
         "iso_timestamp_format": rcfg["iso_timestamp_format"],
+        "started_at_local": started_at_local_iso or _iso_local_now(),
+        "ended_at_local": ended_at_local_iso or _iso_local_now(),
+        "host_timezone": _host_timezone_label(),
         "nemb_abi_version": nemb_abi_version,
         "domain_topology": _domain_topology(domains or {}),
         "timeseries": ({
@@ -675,6 +693,8 @@ class Session:
         self._t0_mono: float = 0.0
         self._started_at_iso: str = ""
         self._ended_at_iso: str = ""
+        self._started_at_local_iso: str = ""
+        self._ended_at_local_iso: str = ""
         self._run_id: str = uuid.uuid4().hex[:12]
         try:
             self._hostname: str = socket.gethostname()
@@ -763,6 +783,7 @@ class Session:
         self._t0_wall = time.time()
         self._t0_mono = time.monotonic()
         self._started_at_iso = _iso_utc_now()
+        self._started_at_local_iso = _iso_local_now()
         _register_pid()
         _ensure_atexit()
         if self._record_ts:
@@ -974,6 +995,7 @@ class Session:
             return self._finalized_report
         if not self._ended_at_iso:
             self._ended_at_iso = _iso_utc_now()
+            self._ended_at_local_iso = _iso_local_now()
         total_e = sum(t.energy_j for t in self._tasks if t.depth == 0)
         wall_d = (time.monotonic() - self._t0_mono) if self._started else 0.0
         depth0 = [t for t in self._tasks if t.depth == 0]
@@ -1074,6 +1096,8 @@ class Session:
             run_id=self._run_id,
             started_at_iso=self._started_at_iso,
             ended_at_iso=self._ended_at_iso,
+            started_at_local_iso=self._started_at_local_iso,
+            ended_at_local_iso=self._ended_at_local_iso,
             duration_total_s=wall_d,
             hostname=self._hostname,
             session_name=self.name,

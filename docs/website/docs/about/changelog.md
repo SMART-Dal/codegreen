@@ -2,7 +2,23 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.7 (Current)
+## v0.4.8 (Current)
+
+### Local-timezone display companions (additive — UTC contract unchanged)
+
+Adds three meta fields so users can read timestamps in their host's local timezone without losing the cross-machine UTC contract:
+
+- `meta.started_at_local` — same instant as `started_at`, rendered in the host's local timezone with explicit offset (e.g. `2026-05-10T11:16:56.209074-07:00`).
+- `meta.ended_at_local` — same instant as `ended_at`, local TZ.
+- `meta.host_timezone` — local TZ label at measurement time (e.g. `PDT`, `ADT`, `+05:30` for non-DST regions).
+
+Canonical `started_at` / `ended_at` are still UTC `+00:00`; the contract field `meta.iso_timestamp_format = "rfc3339_utc"` is unchanged. Both pairs are captured at the same wall-clock instant; UTC ↔ local round-trip is verified to ≤ 1 ms in the test battery.
+
+Why both: UTC stays the wire format for joins/sorts (avoids DST ambiguity, server-migration breakage, mixed-TZ aggregation bugs); local is purely for display when reviewing a single run on your own host. Pick what fits the use case.
+
+Test coverage: 52 audit-battery checks (45 v0.4.7 + 7 new local-field checks, all green on AMD EPYC). The 45 v0.4.7 checks still pass unchanged — proves the canonical fields are not perturbed by the new ones.
+
+## v0.4.7
 
 ### JSON-schema + correctness overhaul (32 fixes from 5-track audit)
 
