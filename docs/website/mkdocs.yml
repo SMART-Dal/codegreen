@@ -68,7 +68,6 @@ copyright: Copyright &copy; 2024-2026 CodeGreen Team
 
 plugins:
   - glightbox
-  - social
   - search:
       lang: en
   - mkdocstrings:
@@ -115,7 +114,12 @@ markdown_extensions:
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
           case: lower
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - ../../
+        - .
+      check_paths: true
+      dedent_subsections: true
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
@@ -149,6 +153,8 @@ nav:
     - CLI Reference: user-guide/cli-reference.md
     - Configuration Reference: user-guide/configuration-reference.md
     - Energy Measurement: user-guide/energy-measurement.md
+    - Continuous Monitoring: user-guide/continuous-monitoring.md
+    - Project Profiling: user-guide/project-profiling.md
     - Code Analysis: user-guide/code-analysis.md
     - Reports and Visualization: user-guide/reports.md
     - CI/CD Integration: user-guide/cicd-integration.md
@@ -161,17 +167,34 @@ nav:
     - Building from Source: development/building.md
     - Architecture: development/architecture.md
   - Examples:
-    - Python Examples: examples/python.md
-    - C/C++ Examples: examples/cpp.md
-    - Java Examples: examples/java.md
+    - Overview: examples/index.md
+    - 01 Quickstart measure: examples/01_quickstart_measure.md
+    - 02 Run with repeats: examples/02_run_repeat.md
+    - 03 Session API: examples/03_session_api.md
+    - 04 Project hotspots (Java): examples/04_project_hotspots_java.md
+    - 05 GPT-2 staged inference: examples/05_gpt2_staged.md
+    - 06 Monitor host: examples/06_monitor_host.md
+    - 07 Monitor PID: examples/07_monitor_pid.md
+    - 08 Monitor socket (Flask): examples/08_monitor_socket.md
+    - 09 Project hotspots (Python): examples/09_project_hotspots_python.md
+    - 10 CodeGreen vs perf: examples/10_codegreen_vs_perf.md
+    - 11 Monitor socket (standalone): examples/11_monitor_socket_standalone.md
+    - 12 Monitor systemd sidecar: examples/12_monitor_systemd_sidecar.md
+    - 13 Monitor OTLP export: examples/13_monitor_otlp_export.md
+    - 14 Monitor Prometheus scrape: examples/14_monitor_prometheus_scrape.md
+    - Deep dives:
+      - Python (manual + auto): examples/python.md
+      - C/C++: examples/cpp.md
+      - Java: examples/java.md
   - About:
     - Changelog: about/changelog.md
     - License: about/LICENSE
     - Citation: about/citing.md
+    - Project Stats: about/stats.md
 
 extra:
   # Auto-replaced by .github/workflows/docs.yml from pyproject.toml at build time.
-  version_label: v0.4.2
+  version_label: v0.4.9
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/SMART-Dal/codegreen

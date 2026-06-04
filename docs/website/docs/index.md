@@ -1,5 +1,7 @@
 # CodeGreen
 
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](about/stats.md)
+
 <div class="grid cards" markdown>
 
 -   :material-lightning-bolt:{ .lg .middle } **Precise Energy Measurement**
@@ -16,7 +18,15 @@
 
     Python, C, C++, and Java instrumentation via Tree-sitter with config-driven extensibility.
 
-    [:octicons-arrow-right-24: Examples](examples/python.md)
+    [:octicons-arrow-right-24: Examples](examples/index.md)
+
+-   :material-radar:{ .lg .middle } **Continuous Monitoring**
+
+    ---
+
+    `codegreen monitor` samples an already-running service, with cgroup_v2 per-PID attribution and a UDS annotation channel for per-request energy.
+
+    [:octicons-arrow-right-24: Continuous Monitoring](user-guide/continuous-monitoring.md)
 
 -   :material-chart-line:{ .lg .middle } **Interactive Visualization**
 
@@ -52,6 +62,8 @@ CodeGreen is an energy measurement tool that helps developers understand the ene
 
 - **Energy Measurement**: Per-function energy attribution via RAPL (Linux), IOReport + kpc (macOS), EMI (Windows), NVML, ROCm
 - **Quick Measurement**: `codegreen run` measures energy of any shell command with hardware-level precision
+- **Continuous Monitoring**: `codegreen monitor` samples already-running services; per-PID via cgroup_v2; per-request via UDS annotations
+- **Project Profiling**: `codegreen project` plugs into your build (Maven, Gradle, Make, plain python) for per-function attribution across multi-file projects
 - **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
 - **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
 - **Granularity Control**: Coarse mode (main only) or fine mode (all functions)
@@ -99,6 +111,39 @@ Get started with CodeGreen in just a few steps:
     ```bash
     codegreen measure python my_script.py -g fine --export-plot energy.html
     ```
+
+=== "Monitor"
+
+    ```bash
+    codegreen monitor --pid $(pgrep -f gunicorn | head -1) -d 60 -o energy.jsonl
+    ```
+
+=== "Project"
+
+    ```bash
+    codegreen project python ./src -r "python main.py" -g fine
+    ```
+
+## Find what you need in two clicks
+
+| I want to ... | Start here | Then |
+|---|---|---|
+| Measure a one-off Python or shell script | [Quickstart](getting-started/quickstart.md) | [01 Quickstart measure](examples/01_quickstart_measure.md) |
+| Get a stable mean across N runs | [Examples](examples/index.md) | [02 Run with repeats](examples/02_run_repeat.md) |
+| Bracket regions inside a long script | [Python API](api/python.md) | [03 Session API](examples/03_session_api.md) |
+| Find per-method hotspots in a Java/Python/C++ project | [Project Profiling](user-guide/project-profiling.md) | [04 Java](examples/04_project_hotspots_java.md) / [09 Python](examples/09_project_hotspots_python.md) |
+| Watch a running daemon or webapp | [Continuous Monitoring](user-guide/continuous-monitoring.md) | [06 host](examples/06_monitor_host.md) / [07 PID](examples/07_monitor_pid.md) / [08 annotations](examples/08_monitor_socket.md) |
+| Integrate into CI | [CI/CD integration](user-guide/cicd-integration.md) | `codegreen run --budget 10.0 ...` |
+| Cross-validate against `perf` | [Energy Measurement](user-guide/energy-measurement.md) | [10 CodeGreen vs perf](examples/10_codegreen_vs_perf.md) |
+| Add a language or contribute | [Architecture](development/architecture.md) | [Contributing](development/contributing.md) |
+
+## What's new in 0.4.9
+
+- `codegreen monitor` / `codegreen.Monitor` -- continuous sampler with cgroup_v2 per-PID attribution. See [Continuous Monitoring](user-guide/continuous-monitoring.md).
+- `codegreen.annotate_request` over a UDS socket -- per-request energy in Flask/gunicorn webapps. See [08 Monitor socket](examples/08_monitor_socket.md).
+- `codegreen run --stdin <file>` -- pipe a fixed payload into the subprocess across all repeats. See [CLI: run](user-guide/cli-reference.md#run).
+- 10 worked end-to-end examples under [`examples/`](examples/index.md), each verified by `pytest tests/test_examples.py`.
+- Earlier 0.4.7 / 0.4.8 changes (schema overhaul, local-timezone display fields) are in the [Changelog](about/changelog.md).
 
 ## Supported Platforms
 
