@@ -4,6 +4,7 @@
 </p>
 
 [![DOI](https://zenodo.org/badge/942273936.svg)](https://doi.org/10.5281/zenodo.18371771)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/codegreen)
 
 # CodeGreen - Garage for Energy Measurement and Optimization
 
