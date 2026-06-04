@@ -1,6 +1,6 @@
 # CodeGreen
 
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](about/stats.md)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=NONE&left_color=GREY&right_color=GREEN&left_text=downloads)](about/stats.md)
 
 <div class="grid cards" markdown>
 

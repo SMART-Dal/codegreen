@@ -1,6 +1,6 @@
 # Project Stats
 
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/codegreen)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=NONE&left_color=GREY&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/codegreen)
 
 Live PyPI download analytics (downloads over time, by version, by country):
 
