@@ -3,8 +3,12 @@
   <img src="docs/website/docs/assets/codegreen_logo_white.svg#gh-dark-mode-only" width="200" alt="CodeGreen Logo">
 </p>
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18371771.svg)](https://doi.org/10.5281/zenodo.18371771)
+[![PyPI](https://img.shields.io/pypi/v/codegreen)](https://pypi.org/project/codegreen/)
+[![License](https://img.shields.io/badge/license-MPL%202.0-blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey)](https://pypi.org/project/codegreen/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/codegreen?period=total&units=NONE&left_color=GREY&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/codegreen)
+[![GitHub stars](https://img.shields.io/github/stars/SMART-Dal/codegreen)](https://github.com/SMART-Dal/codegreen/stargazers)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18371771.svg)](https://doi.org/10.5281/zenodo.18371771)
 
 # CodeGreen - Garage for Energy Measurement and Optimization
 
