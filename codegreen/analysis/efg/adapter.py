@@ -3,7 +3,7 @@
 build_efg is deliberately CFG-representation-agnostic: it takes `cfg_nodes: list`
 and `cfg_edges: list[(src, dst, label)]`, not a CFG object, so it can sit behind
 any front end. Nothing in this package closed that gap for codegreen's own
-tree-sitter CFG builder until now — the only conversion that existed was 14
+tree-sitter CFG builder until now. The only conversion that existed was 14
 inline lines in a downstream consumer, so every other caller had to reinvent it.
 """
 
