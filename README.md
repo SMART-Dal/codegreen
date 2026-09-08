@@ -146,11 +146,11 @@ bash scripts/generate_comparison_artifacts.sh docs/benchmarks/
 
 ## Energy Flow Graph (EFG)
 
-CodeGreen includes an Energy Flow Graph module (`codegreen/analysis/cfg/`) that builds energy-annotated control flow graphs from source code:
+CodeGreen includes an Energy Flow Graph module (`codegreen/analysis/efg/`) that builds energy-annotated control flow graphs from source code:
 
 ```python
 from codegreen.analysis.cfg.builder import build_per_method_cfgs
-from codegreen.analysis.cfg.energy_flow import build_efg, efg_to_dot, efg_to_text
+from codegreen.analysis.efg import build_efg, efg_to_dot, efg_to_text
 
 cfgs = build_per_method_cfgs(java_source_code)
 efg = build_efg(cfg_nodes, cfg_edges, "ClassName.method", "File.java", codegreen_data)
@@ -158,6 +158,8 @@ print(efg_to_text(efg))  # compact format for LLM prompts
 ```
 
 Features: Ball & Larus branch heuristics, SCC-based hot path computation, three-level accuracy annotations (MEASURED/ESTIMATED/INFERRED), configurable via `EFGConfig`.
+
+Layout: `types.py` (node/edge/graph dataclasses), `heuristics.py` (branch probabilities and `EFGConfig`), `graph.py` (`build_efg` and its annotation passes), `paths.py` (SCC collapse and longest-path hot path), `serialize.py` (text/DOT/Mermaid/JSON). `codegreen.analysis.cfg.energy_flow` still resolves as a back-compat shim.
 
 ## Architecture
 

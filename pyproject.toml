@@ -71,6 +71,20 @@ viz = [
     "pandas>=1.4.0",
     "plotly>=5.10.0"
 ]
+otlp = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0"
+]
+prometheus = [
+    "prometheus-client>=0.20.0"
+]
+all = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "prometheus-client>=0.20.0"
+]
 
 [project.urls]
 Homepage = "https://smart-dal.github.io/codegreen/"
@@ -89,7 +103,7 @@ codegreen = "codegreen.cli.entrypoint:main_cli_wrapper"
 [tool.setuptools.packages]
 find = {where = ["."], include = [
     "codegreen", "codegreen.cli", "codegreen.analyzer", "codegreen.instrumentation", "codegreen.utils",
-    "codegreen.analysis", "codegreen.analysis.cfg",
+    "codegreen.analysis", "codegreen.analysis.cfg", "codegreen.analysis.efg",
     "benchmark", "benchmark.validation", "benchmark.suites",
 ]}
 
