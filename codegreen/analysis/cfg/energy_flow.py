@@ -9,13 +9,14 @@ New code should import from `codegreen.analysis.efg`.
 """
 
 from codegreen.analysis import efg as _efg
+from codegreen.analysis.efg import adapter as _adapter
 from codegreen.analysis.efg import graph as _graph
 from codegreen.analysis.efg import heuristics as _heuristics
 from codegreen.analysis.efg import paths as _paths
 from codegreen.analysis.efg import serialize as _serialize
 from codegreen.analysis.efg import types as _types
 
-_SOURCES = (_efg, _types, _heuristics, _graph, _paths, _serialize)
+_SOURCES = (_efg, _types, _heuristics, _graph, _paths, _serialize, _adapter)
 
 
 def __getattr__(name: str):

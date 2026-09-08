@@ -831,3 +831,60 @@ class TestWithRealData:
         j = efg_to_json(efg)
         assert "self_ratio" in j["nodes"][0]
         assert "energy_pct" in j["nodes"][0]
+
+
+class TestAdapter:
+    """Coverage for adapter.py, which bridges the real tree-sitter CFG into
+    build_efg. Nothing else in this file exercises a real CFG -- everything
+    above uses MockNode -- so this is the only place a regression in the CFG
+    shape (succs/edge_labels/CNode fields) would be caught."""
+
+    SOURCE = '''
+    public class Sample {
+        public static int hot(int n) {
+            int total = 0;
+            for (int i = 0; i < n; i++) {
+                if (i % 2 == 0) { total += compute(i); }
+                else { total -= 1; }
+            }
+            String s = new String("x");
+            return total + s.length();
+        }
+        static int compute(int x) { return x * x; }
+    }
+    '''
+
+    def test_build_efg_for_method_by_short_name(self):
+        from codegreen.analysis.efg import build_efg_for_method
+        efg = build_efg_for_method(self.SOURCE, "hot", "Sample.java",
+                                   {"energy_j": 10.0, "exclusive_energy_j": 6.0,
+                                    "calls": 100, "verdict": "TYPE_1_DIRECT"})
+        assert efg.function == "hot"
+        assert efg.exclusive_energy_j == 6.0
+        assert len(efg.nodes) > 0
+        assert efg.hot_path
+
+    def test_build_efg_for_method_by_qualified_name(self):
+        from codegreen.analysis.efg import build_efg_for_method
+        efg = build_efg_for_method(self.SOURCE, "Sample.hot", "Sample.java")
+        assert efg.function == "Sample.hot"
+
+    def test_build_efg_for_method_unknown_raises_with_candidates(self):
+        from codegreen.analysis.efg import build_efg_for_method
+        with pytest.raises(KeyError, match="hot"):
+            build_efg_for_method(self.SOURCE, "doesNotExist", "Sample.java")
+
+    def test_cfg_to_efg_inputs_shape(self):
+        from codegreen.analysis.cfg.builder import build_per_method_cfgs
+        from codegreen.analysis.efg import cfg_to_efg_inputs
+        per_method = build_per_method_cfgs(self.SOURCE)
+        _, cfg = next(t for t in per_method if t[0] == "hot")
+        nodes, edges = cfg_to_efg_inputs(cfg)
+        assert all(hasattr(n, "id") for n in nodes)
+        assert all(isinstance(e, tuple) and len(e) == 3 for e in edges)
+
+    def test_strip_to_short(self):
+        from codegreen.analysis.efg import strip_to_short
+        assert strip_to_short("Sample.hot") == "hot"
+        assert strip_to_short("hot") == "hot"
+        assert strip_to_short("Sample.hot:()I") == "()I"

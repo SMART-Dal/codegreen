@@ -159,7 +159,7 @@ print(efg_to_text(efg))  # compact format for LLM prompts
 
 Features: Ball & Larus branch heuristics, SCC-based hot path computation, three-level accuracy annotations (MEASURED/ESTIMATED/INFERRED), configurable via `EFGConfig`.
 
-Layout: `types.py` (node/edge/graph dataclasses), `heuristics.py` (branch probabilities and `EFGConfig`), `graph.py` (`build_efg` and its annotation passes), `paths.py` (SCC collapse and longest-path hot path), `serialize.py` (text/DOT/Mermaid/JSON). `codegreen.analysis.cfg.energy_flow` still resolves as a back-compat shim.
+See `codegreen/analysis/efg/README.md` for the module layout, a runnable example (`python -m codegreen.analysis.efg.example.demo`), and the current list of known issues. `codegreen.analysis.cfg.energy_flow` still resolves as a back-compat shim.
 
 ## Architecture
 

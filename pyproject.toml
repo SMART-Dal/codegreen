@@ -103,11 +103,12 @@ codegreen = "codegreen.cli.entrypoint:main_cli_wrapper"
 [tool.setuptools.packages]
 find = {where = ["."], include = [
     "codegreen", "codegreen.cli", "codegreen.analyzer", "codegreen.instrumentation", "codegreen.utils",
-    "codegreen.analysis", "codegreen.analysis.cfg", "codegreen.analysis.efg",
+    "codegreen.analysis", "codegreen.analysis.cfg", "codegreen.analysis.efg", "codegreen.analysis.efg.example",
     "benchmark", "benchmark.validation", "benchmark.suites",
 ]}
 
 [tool.setuptools.package-data]
+"codegreen.analysis.efg.example" = ["*.java"]
 "codegreen.instrumentation" = [
     "configs/*.json",
     "language_runtimes/python/*.py",
