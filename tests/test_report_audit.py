@@ -56,6 +56,13 @@ def _run_session(name: str, fn, **kw) -> Dict:
 _CG_REPO = Path(__file__).resolve().parent.parent
 
 
+def _plain(text: str) -> str:
+    """CLI output without ANSI codes (typer forces Rich colour when GITHUB_ACTIONS or FORCE_COLOR is set) and with
+    wrapped lines joined, so assertions do not depend on the terminal."""
+    import click
+    return " ".join(click.unstyle(text).split())
+
+
 def _cli_run(*args: str, timeout: float = 60.0, cwd: str = str(_CG_REPO)) -> tuple:
     """Invoke `codegreen <args>`. Returns (parsed_json_or_None, stdout, stderr, rc).
     Defaults cwd to the codegreen repo root to keep the editable-install import
@@ -1626,7 +1633,7 @@ class TestDeviceSync:
         import subprocess
         from typer.testing import CliRunner
         from codegreen.cli.cli import app
-        out = CliRunner().invoke(app, ["project", "--help"]).output
+        out = _plain(CliRunner().invoke(app, ["project", "--help"]).output)
         assert "--sync-device" in out and "--min-attribution-pct" in out
         (tmp_path / "w.py").write_text("def work(n):\n    return sum(i * i for i in range(n))\n\n\nwork(1000)\n")
         run = lambda *extra: subprocess.run(
@@ -1717,7 +1724,7 @@ def test_project_command_keeps_its_signature():
     uses; the command must keep LANGUAGE and --source-glob."""
     from typer.testing import CliRunner
     from codegreen.cli.cli import app
-    out = CliRunner().invoke(app, ["project", "--help"]).output
+    out = _plain(CliRunner().invoke(app, ["project", "--help"], terminal_width=400).output)
     assert "language" in out.lower() and "--source-glob" in out and "--run-cmd" in out
 
 
@@ -1725,7 +1732,7 @@ def test_monitor_help_shows_extras_brackets_and_real_flags():
     """Rich markup swallowed `[otlp]`/`[prometheus]`; docstring named the nonexistent --interval-ms."""
     from typer.testing import CliRunner
     from codegreen.cli.cli import app
-    out = " ".join(CliRunner().invoke(app, ["monitor", "--help"], terminal_width=400).output.split())
+    out = _plain(CliRunner().invoke(app, ["monitor", "--help"], terminal_width=400).output)
     assert "codegreen[otlp]" in out and "codegreen[prometheus]" in out
     assert "--interval-ms" not in out
 
@@ -1755,4 +1762,4 @@ def test_project_fails_up_front_without_the_native_backend(tmp_path, monkeypatch
     monkeypatch.setattr(cli._NEMBBackend, "is_available", lambda self: False)
     (tmp_path / "p.py").write_text("print(1)\n")
     r = CliRunner().invoke(cli.app, ["project", "python", str(tmp_path), "--run-cmd", "python p.py"])
-    assert r.exit_code == 1 and "NEMB native measurement library" in r.output
+    assert r.exit_code == 1 and "NEMB native measurement library" in _plain(r.output)

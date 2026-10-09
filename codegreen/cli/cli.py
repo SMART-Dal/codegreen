@@ -3745,11 +3745,6 @@ def project_energy(
     """
     import subprocess, time, re, shutil, glob as globmod, tempfile
 
-    if not _NEMBBackend().is_available():
-        console.print("[red]codegreen project needs the NEMB native measurement library, which this install lacks "
-                      "(a source build without cmake and a C++ compiler installs Python-only). Install a prebuilt "
-                      "wheel or reinstall with cmake and a compiler available.[/red]")
-        raise typer.Exit(1)
     project_dir = project_dir.resolve()
     if not project_dir.exists():
         console.print(f"[red]Project directory not found: {project_dir}[/red]")
@@ -3821,6 +3816,13 @@ def project_energy(
             if not json_output and restored:
                 console.print(f"  [yellow]Cleaned {restored} stale instrumented files from previous run[/yellow]")
         _stale_marker.unlink(missing_ok=True)
+
+    # Checked after the restore above: a missing backend must not leave an interrupted run's sources instrumented.
+    if not _NEMBBackend().is_available():
+        console.print("[red]codegreen project needs the NEMB native measurement library, which this install lacks "
+                      "(a source build without cmake and a C++ compiler installs Python-only). Install a prebuilt "
+                      "wheel or reinstall with cmake and a compiler available.[/red]")
+        raise typer.Exit(1)
 
     # ==========================================
     # PHASE 1: DISCOVER

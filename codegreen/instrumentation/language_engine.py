@@ -512,8 +512,7 @@ class LanguageEngine:
             # Brace-normalisation pre-pass: ensure every control-flow body
             # configured in non_braced_body_parents is wrapped in a `block`,
             # so downstream insertion logic operates on well-bracketed scopes.
-            initial_tree = self._parsers[language].parse(source_code.encode('utf-8'))
-            normalised_source, _ = BraceNormaliser(source_code, initial_tree, language, self._config_manager).normalise()
+            normalised_source = self._normalise(source_code, language)
 
             points = self._analyze_with_treesitter_safe(normalised_source, language)
             analysis_method = 'tree_sitter'
@@ -751,8 +750,90 @@ class LanguageEngine:
             if points_before != points_after:
                 logger.info(f" Final deduplication: {points_before} -> {points_after} points")
 
+            self._skip_uninstrumented_functions(tree.root_node, language)
             logger.info(f" Tree-sitter analysis complete: {len(points)} instrumentation points found")
             return points
+
+    def _normalise(self, source_code: str, language: str) -> str:
+        tree = self._parsers[language].parse(source_code.encode('utf-8'))
+        source, tree = BraceNormaliser(source_code, tree, language, self._config_manager).normalise()
+        return self._split_inline_bodies(source, tree, language)
+
+    def _skip(self, function: str, reason: str) -> None:
+        skip = {'function': function, 'reason': reason}
+        if skip not in self._skipped:
+            self._skipped.append(skip)
+            logger.warning(f"CodeGreen: not instrumenting {function}: {reason}")
+
+    def _skip_uninstrumented_functions(self, root: 'Node', language: str) -> None:
+        """Named functions of a kind no query captures (e.g. JS arrow functions) are refused with a reason."""
+        reasons = self._config_manager.get_node_types(language).get('uninstrumented_function_types', {})
+        if not reasons:
+            return
+        for fn in self._descendants(root, tuple(reasons)):
+            holder = fn if fn.child_by_field_name('name') is not None else fn.parent
+            name = holder.child_by_field_name('name') if holder is not None else None
+            if name is not None:
+                self._skip(name.text.decode('utf-8'), reasons[fn.type])
+
+    def _split_inline_bodies(self, source_code: str, tree: 'Tree', language: str) -> str:
+        """Give a function body's statements, and a brace body's closing brace, their own lines so a frame can wrap it.
+        One-line bodies (`def f(): a; b`, `int f() { return 1; }`), statements after a delegating constructor call and
+        a `}` sharing the last statement's line have no line to hold a probe. Only whitespace, `;` separators and
+        line breaks change, never tokens."""
+        node_types = self._config_manager.get_node_types(language)
+        ctor_types = set(node_types.get('constructor_invocation_types', []))
+        indented = node_types.get('indentation_sensitive')
+        unframed = set(node_types.get('uninstrumented_function_types', {}))
+        indent_size = self._config_manager.get_formatting_config(language).get('indent_size', 4)
+        src = source_code.encode('utf-8')
+
+        def mid_line(node: 'Node') -> bool:
+            return src[src.rfind(b'\n', 0, node.start_byte) + 1:node.start_byte].strip() != b''
+
+        edits: Dict[int, Tuple[int, str]] = {}
+        for fn in self._descendants(tree.root_node, tuple(node_types['function_types'])):
+            body = self._find_function_body(fn, language)
+            if body is None or body.has_error or fn.type in unframed:
+                continue
+            kids = [c for c in body.children if c.type not in ('{', '}', ';')]
+            if not kids:
+                continue
+            first = kids[0]
+            nl = src.rfind(b'\n', 0, first.start_byte)
+            continued = bool(indented) and nl > 0 and src[nl - 1:nl] == b'\\'
+            breaks = {k.start_byte: k for k in kids if mid_line(k)} if mid_line(first) or continued else {}
+            if continued:
+                breaks[first.start_byte] = first
+            if not indented and body.children[-1].type == '}' and mid_line(body.children[-1]):
+                breaks[body.children[-1].start_byte] = body.children[-1]
+            after = first.next_sibling
+            if first.type in ctor_types and after is not None and b'\n' not in src[first.end_byte:after.start_byte]:
+                breaks[after.start_byte] = after
+            if not breaks:
+                continue
+            line_start = src.rfind(b'\n', 0, fn.start_byte) + 1
+            indent = re.compile(rb'[ \t]*').match(src, line_start).group().decode('utf-8')
+            unit = '\t' if indent.startswith('\t') else ' ' * indent_size
+            planned = {}
+            for start, node in breaks.items():
+                if indented:
+                    prev = body.prev_sibling if node == first else kids[kids.index(node) - 1]
+                    begin = prev.end_byte
+                    if src[begin:start].strip(b' \t;\\\r\n') != b'':
+                        planned = {}
+                        break
+                else:
+                    begin = start
+                    while src[begin - 1:begin] in (b' ', b'\t'):
+                        begin -= 1
+                planned[begin] = (start, '\n' + indent + ('' if node.type == '}' else unit))
+            edits.update(planned)
+        if not edits:
+            return source_code
+        for begin, (end, text) in sorted(edits.items(), reverse=True):
+            src = src[:begin] + text.encode('utf-8') + src[end:]
+        return src.decode('utf-8')
 
     def _node_terminates_control_flow(self, node: 'Node', language: str = None) -> bool:
         """
@@ -1094,32 +1175,17 @@ class LanguageEngine:
                             break
                     
                     if body_node:
-                        # Inline body (block shares the definition's line, e.g.
-                        # `def f(): return 1` or `int f(){ return 1; }`): a checkpoint
-                        # cannot be inserted into a mid-line block without rewriting the
-                        # line, and tree-sitter's has_error does NOT flag the resulting
-                        # bad indentation, so broken code would ship silently. Skip this
-                        # function (both enter+exit) to guarantee valid instrumented
-                        # code; whole-program energy still covers it. Language-agnostic:
-                        # applies to any grammar whose body can share the def line.
-                        # Inline = the body's first real STATEMENT shares the
-                        # definition's line (e.g. `def f(): return 1`, `int f(){return 1;}`).
-                        # NOT the block/`{` row -- in K&R brace style the `{` sits on the
-                        # signature line while the body is multi-line, which must still be
-                        # instrumented. Use the first non-brace/comment child's row.
+                        # _split_inline_bodies puts the first statement on its own line before analysis;
+                        # a body still sharing the definition's line could not be split, so refuse it.
                         _first_stmt = next((c for c in body_node.children
                                             if c.type not in ('{', '}', 'comment')), None)
                         if (def_node and _first_stmt is not None
                                 and _first_stmt.start_point[0] == def_node.start_point[0]):
-                            logger.debug(f"     Inline body for {name}; skipping "
-                                         f"(cannot instrument a mid-line block safely)")
+                            self._skip(qualified_name, "its first statement shares a line with the signature")
                             return None
                         reason = self._unsupported_reason(def_node, body_node, language)
                         if reason:
-                            skip = {'function': qualified_name, 'reason': reason}
-                            if skip not in self._skipped:
-                                self._skipped.append(skip)
-                                logger.warning(f"CodeGreen: not instrumenting {qualified_name}: {reason}")
+                            self._skip(qualified_name, reason)
                             return None
                         # Use the body node for insertion
                         insertion_point = body_node.start_point
@@ -1201,12 +1267,16 @@ class LanguageEngine:
                     indented = self._config_manager.get_node_types(language).get('indentation_sensitive')
                     exit_byte = body_node.end_byte if indented else body_node.end_byte - 1
                     if not indented and body_node.children[-1].type != '}':
+                        self._skip(qualified_name, "its body is not closed by a brace")
+                        return None
+                    if exit_byte <= point.byte_offset:
+                        logger.debug(f"   Skipping {name}: its body has no statement to frame")
                         return None
                     line = self._src_bytes[point.byte_offset:].split(b'\n', 1)[0]
                     first = point.byte_offset + len(line) - len(line.lstrip())
                     at_line_start = point.byte_offset == 0 or self._src_bytes[point.byte_offset - 1:point.byte_offset] == b'\n'
-                    if exit_byte <= point.byte_offset or not at_line_start or not any(c.start_byte == first for c in body_node.children):
-                        logger.debug(f"   Skipping {name}: its first statement does not start its own line")
+                    if not at_line_start or not any(c.start_byte == first for c in body_node.children):
+                        self._skip(qualified_name, "its first statement does not start its own line")
                         return None
                     subtype = 'frame'
                 elif self._node_terminates_control_flow(body_node, language):
@@ -2004,8 +2074,8 @@ class LanguageEngine:
             source_code: Original source code
             points: Instrumentation points to add
             language: Language identifier
-            pre_normalised_source: Optional brace-normalised source from analyze_code;
-                                   when provided, parsing happens against it.
+            pre_normalised_source: Optional normalised source from analyze_code (the source the points
+                                   refer to); derived from `source_code` when omitted.
 
         Returns:
             Instrumented source code with measurement calls
@@ -2015,6 +2085,8 @@ class LanguageEngine:
             logger.warning("No points to instrument")
             return source_code
 
+        if pre_normalised_source is None and language in self._parsers:
+            pre_normalised_source = self._normalise(source_code, language)
         working_source = pre_normalised_source if pre_normalised_source is not None else source_code
 
         # Use AST-based instrumentation if tree-sitter is available

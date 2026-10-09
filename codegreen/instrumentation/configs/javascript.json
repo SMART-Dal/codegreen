@@ -239,6 +239,11 @@
         "docstring_delimiters": [],
         "comment_prefix": "//",
         "indentation_sensitive": false,
+        "uninstrumented_function_types": {
+            "arrow_function": "arrow functions and function expressions are not instrumented",
+            "function_expression": "arrow functions and function expressions are not instrumented",
+            "generator_function_declaration": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions"
+        },
         "unsupported_function_tokens": {"async": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions", "*": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions"}
     }
 }

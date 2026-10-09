@@ -363,10 +363,18 @@ def _instrument(lang, code):
     return out, {s["function"] for s in result.metadata["skipped_functions"]}
 
 
+HELPER_FRAMES = ("side", "sided", "Prog.side")
+
+
+def _drop_helpers(lines):
+    """The programs' one-line `side` helpers are framed like any function; their frames are not under test."""
+    return [ln for ln in lines if ln.partition(" ")[2] not in HELPER_FRAMES]
+
+
 def _verify_trace(lines):
     """`enter F`/`exit F` frames nest; `eval F` (work inside F's return expression) runs while F is innermost."""
     stack, seen = [], []
-    for ln in lines:
+    for ln in _drop_helpers(lines):
         kind, _, name = ln.partition(" ")
         if kind == "enter":
             stack.append(name)
@@ -484,6 +492,7 @@ def test_python_frames_cover_every_exit_path(monkeypatch):
     assert w.text() == "a\n  b\nc" and w.outer() == 5 and w.fin() == 1 and ns["tabbed"](4) == 6
     assert list(w.gen()) == [1]
     frames = _verify_trace(log)
+    log = _drop_helpers(log)
     assert log[:5] == ["enter W.__init__", "eval W.__init__", "exit W.__init__", "enter W.run", "eval W.run"]
     i = log.index("enter W.total")
     assert log[i:i + 5] == ["enter W.total", "eval W.total", "eval W.total", "exit W.total", "enter W.early"]
@@ -494,9 +503,66 @@ def test_python_frames_cover_every_exit_path(monkeypatch):
 def test_python_unicode_and_inline_bodies_stay_valid():
     import ast
     code = "def a(): return 1\n\ndef b(x):\n    s = 'caf\u00e9 \u2713'\n    return s + str(x)\n\nclass C:\n    def m(self):\n        pass\n"
-    out, _ = _instrument("python", code)
+    out, skipped = _instrument("python", code)
     ast.parse(out)
-    assert "def a(): return 1" in out and "'C.m', 'enter'" in out and "'C.m', 'exit'" in out
+    assert not skipped and "def a(): return 1" not in out
+    assert all(f"'{n}', 'enter'" in out and f"'{n}', 'exit'" in out for n in ("a", "b", "C.m"))
+
+
+PY_ONE_LINERS = "\n".join([
+    "def rec(n): return rec(n - 1) if n > 0 else 0",
+    "def semi(a): x = a + 1; y = x * 2; return y",
+    "def trailing(a): return a;",
+    'def doc(): """d"""; return 5',
+    "def cont(a): \\",
+    "    return a + 1",
+    "def noop(): pass",
+    "def err(): raise ValueError('x')",
+    "def commented(): return 1  # c",
+    "def multi(a,",
+    "          b): return a + b",
+    "class K:",
+    "    def m(self): return 1",
+    "    def n(self, v): self.v = v; return self.v",
+    "    @staticmethod",
+    "    def s(): return 3",
+    "class T:",
+    "\tdef m(self): return 4",
+    "def outer():",
+    "    def inner(): return 2",
+    "    return inner() + 1",
+    ""])
+
+
+def test_python_one_line_functions_are_framed_and_keep_their_semantics(monkeypatch):
+    """`def f(n): return f(n-1) if n > 0 else 0` got no frame and no skipped_functions entry. Every one-line suite
+    (`;`-separated, continued, decorated, tab-indented, inside a class) must be framed with identical results."""
+    import ast
+    import sys
+    import types
+    out, skipped = _instrument("python", PY_ONE_LINERS)
+    ast.parse(out)
+    assert not skipped
+    log: list = []
+    rt = types.ModuleType("codegreen_runtime")
+    rt.checkpoint = lambda cid, name, kind: log.append(f"{kind} {name}")
+    monkeypatch.setitem(sys.modules, "codegreen_runtime", rt)
+    plain: dict = {}
+    inst: dict = {}
+    exec(PY_ONE_LINERS, plain)
+    exec(out, inst)
+
+    def results(ns):
+        with pytest.raises(ValueError):
+            ns["err"]()
+        k = ns["K"]()
+        return (ns["rec"](3), ns["semi"](1), ns["trailing"](2), ns["doc"](), ns["doc"].__doc__, ns["cont"](1), ns["noop"](),
+                ns["commented"](), ns["multi"](1, 2), k.m(), k.n(5), ns["K"].s(), ns["T"]().m(), ns["outer"]())
+
+    assert results(inst) == results(plain)
+    frames = _verify_trace(log)
+    names = ("rec", "semi", "trailing", "doc", "cont", "noop", "err", "commented", "multi", "K.m", "K.n", "K.s", "T.m", "outer")
+    assert set(names) <= set(frames) and frames.count("rec") == 4
 
 
 JAVA_RUNTIME = """\
@@ -833,7 +899,95 @@ def test_javascript_frames_cover_every_construct(tmp_path):
         {"prog.mjs": JS_PROGRAM, "node_modules/codegreen-runtime/index.mjs": JS_RUNTIME,
          "node_modules/codegreen-runtime/package.json": '{"name": "codegreen-runtime", "type": "module", "main": "index.mjs"}'},
         "prog.mjs", [], ["node", "prog.mjs"],
-        ["plain", "constructor", "m", "s", "thrower", "comma", "nested", "inner", "tern"], expect_skipped={"af", "K.am", "K.g"})
+        ["plain", "constructor", "m", "s", "thrower", "comma", "nested", "inner", "tern"], expect_skipped={"af", "K.am", "K.g", "f", "g", "gen"})
+
+
+JAVA_ONE_LINERS = """\
+public class P {
+    int f;
+    static int sq(int n) { return n * n; }
+    static int two(int n) { int a = n + 1; return a * 2; }
+    static void inc(int[] a) { a[0]++; }
+    static int cm(int n) { // trailing comment
+        return n + 1;
+    }
+    P(int a) { this(a, 1); }
+    P(int a, int b) { f = a + b; }
+    interface I { int d(); }
+    static class Inner implements I { public int d() { return 9; } }
+    public static void main(String[] x) { int[] a = {1}; inc(a); System.out.println(sq(3) + " " + two(1) + " " + a[0] + " " + new P(2).f + " " + cm(1) + " " + new Inner().d()); }
+}
+"""
+
+
+@pytest.mark.skipif(not shutil.which("javac"), reason="javac missing")
+def test_java_one_line_bodies_are_framed(tmp_path):
+    _check_program(
+        tmp_path, "java", {"P.java": JAVA_ONE_LINERS, "codegreen/runtime/CodeGreenRuntime.java": JAVA_RUNTIME}, "P.java",
+        [["javac", "--release", "11", "-Xlint:-options", "-d", ".", "P.java", "codegreen/runtime/CodeGreenRuntime.java"]],
+        ["java", "-cp", ".", "P"], ["P.sq", "P.two", "P.inc", "P.cm", "P.P", "P.Inner.d", "P.main"])
+
+
+C_ONE_LINERS = """\
+#include <stdio.h>
+static int sq(int n) { return n * n; }
+static int two(int n) { int a = n + 1; return a * 2; }
+static void pr(int n) { printf("%d\\n", n); }
+int main(void) { pr(sq(3) + two(1)); return 0; }
+"""
+
+
+@pytest.mark.skipif(not shutil.which("gcc"), reason="gcc missing")
+def test_c_one_line_bodies_are_framed(tmp_path):
+    rt = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "language_runtimes" / "c"
+    _check_program(
+        tmp_path, "c", {"prog.c": C_ONE_LINERS, "stub.c": C_STUB}, "prog.c",
+        [["gcc", "-std=c11", "-Wall", "-Werror=return-type", "-I", str(rt), "-o", "prog", "prog.c", "stub.c"]],
+        ["./prog"], ["sq", "two", "pr", "main"])
+
+
+CPP_ONE_LINERS = """\
+#include <cstdio>
+struct A {
+    int v;
+    int get() const { return v; }
+    void set(int x) { v = x; }
+};
+int sq(int n) { return n * n; }
+int main() { A a{1}; a.set(sq(3)); std::printf("%d\\n", a.get()); return 0; }
+"""
+
+
+@pytest.mark.skipif(not shutil.which("g++"), reason="g++ missing")
+def test_cpp_one_line_bodies_are_framed(tmp_path):
+    rt = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "language_runtimes" / "cpp"
+    _check_program(
+        tmp_path, "cpp", {"prog.cpp": CPP_ONE_LINERS, "stub.cpp": CPP_STUB}, "prog.cpp",
+        [["g++", "-std=c++17", "-Wall", "-I", str(rt), "-o", "prog", "prog.cpp", "stub.cpp"]],
+        ["./prog"], ["sq", "main"])
+
+
+JS_ONE_LINERS = """\
+function sq(n) { return n * n; }
+function two(n) { const a = n + 1; return a * 2; }
+const arrow = (n) => n * 2;
+const block = (n) => { return n + 1; };
+class K {
+    constructor(a) { this.a = a; }
+    m() { return this.a; }
+    static s() { return 3; }
+}
+console.log(sq(3), two(1), arrow(2), block(1), new K(4).m(), K.s());
+"""
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node missing")
+def test_javascript_one_line_bodies_are_framed_and_arrow_functions_refused(tmp_path):
+    _check_program(
+        tmp_path, "javascript",
+        {"prog.mjs": JS_ONE_LINERS, "node_modules/codegreen-runtime/index.mjs": JS_RUNTIME,
+         "node_modules/codegreen-runtime/package.json": '{"name": "codegreen-runtime", "type": "module", "main": "index.mjs"}'},
+        "prog.mjs", [], ["node", "prog.mjs"], ["sq", "two", "constructor", "m", "s"], expect_skipped={"arrow", "block"})
 
 
 class TestConfigDriven:
