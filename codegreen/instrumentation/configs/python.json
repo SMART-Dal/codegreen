@@ -60,13 +60,11 @@
     "query_config": {
         "capture_mapping": {
             "function_def": "function_enter",
-            "function_name": "function_enter",
-            "return": "function_exit"
+            "function_name": "function_enter"
         },
         "priority_order": [
             "function_def",
-            "function_name",
-            "return"
+            "function_name"
         ],
         "deduplication_rules": {
             "function_exit": {
@@ -88,9 +86,11 @@
     },
     "instrumentation_config": {
         "import_statement": "import codegreen_runtime as _codegreen_rt",
+        "exit_strategy": "try_finally",
         "templates": {
-            "function_enter": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'enter')",
-            "function_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'exit')",
+            "function_enter": "_codegreen_rt.checkpoint('{checkpoint_id}', '{qualified_name}', 'enter')",
+            "function_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{qualified_name}', 'exit')",
+            "function_frame": "{indent}{enter}\n{indent}try:\n{body}\n{indent}finally:\n{indent}{unit}{exit}",
             "loop_start": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_start')",
             "loop_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'loop_exit')"
         },
@@ -104,7 +104,8 @@
         "indent_size": 4,
         "indent_char": " ",
         "line_ending": "\n",
-        "extra_indent_for_inside": 4
+        "extra_indent_for_inside": 4,
+        "reindent_prelude": "def _cg_frame():\n"
     },
     "rules": {
         "skip_docstrings": true,
@@ -186,7 +187,7 @@
             "raise_statement"
         ],
         "constructor_invocation_types": [],
-        "import_after_node_types": [],
+        "import_after_node_types": ["future_import_statement"],
         "terminating_types": [
             "return_statement",
             "raise_statement",
@@ -222,12 +223,17 @@
         "for_statement_types": [
             "for_statement"
         ],
+        "non_braced_body_parents": [],
         "docstring_node_types": [
             "expression_statement"
         ],
         "docstring_delimiters": ["\"\"\"", "'''"],
         "comment_prefix": "#",
-        "indentation_sensitive": true
+        "indentation_sensitive": true,
+        "literal_types": ["string"],
+        "unsupported_function_tokens": {"async": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions"},
+        "unsupported_body_nodes": {"yield": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions"},
+        "unsupported_scope_boundaries": ["function_definition", "lambda", "class_definition"]
     },
     "project_config": {
         "source_patterns": [
@@ -255,6 +261,9 @@
                 "build_cmd": "poetry install"
             }
         },
+        "device_sync": [
+            "cuda"
+        ],
         "runtime_injection": {
             "type": "pythonpath",
             "module": "codegreen_runtime"

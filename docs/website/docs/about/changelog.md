@@ -2,7 +2,85 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.8 (Current)
+## v0.4.9 (Current)
+
+### Per-function attribution: frames close on every exit path
+
+- Work inside `return <expr>` and in functions without a trailing return is now attributed to the function. Each language closes the frame after the value exists, through `instrumentation_config.exit_strategy`:
+    - Python, Java, JavaScript: `try`/`finally` wraps the body (one atomic edit), so early returns, exceptions and fall-through all close the frame.
+    - C++: an RAII `CodeGreen::Frame` guard whose destructor emits the exit.
+    - C: each `return v;` is rewritten to `{ T tmp = v; exit; return tmp; }` using the declared return type, which also works on unbraced bodies.
+- Function names are qualified in all languages (`Class.method`, `Outer.Inner.method`, namespaces), for enter and exit probes alike. Python methods without a trailing return and Java void methods and constructors previously exited under an unqualified name.
+- Java and JavaScript lambdas and arrow functions no longer emit the enclosing method's exit.
+- Refused constructs are reported, not instrumented: async functions, generators and coroutines (frames would interleave), C++ `constexpr`/`consteval` functions, and C functions with an unspellable return type (inline struct/enum, function pointer) or that call a same-file macro containing `return`. They appear in `skipped_functions` (`AnalysisResult.metadata` and `codegreen project --json`).
+- New `BraceNormaliser` pre-pass gives every unbraced `if`/`else`/loop body in brace languages a block (configured per language by `non_braced_body_parents`), so every probe site sits inside a braced scope. The normalised source is what gets instrumented.
+- Fixed probes misplaced in non-ASCII sources (byte offsets were used as string indexes), JavaScript enter probes placed before the signature, the runtime import placed above `from __future__` imports (left the whole file uninstrumented), and orphan exits for single-line Java and C methods.
+- Call graph (`codegreen.analysis.cfg.callgraph`) now supports Python in addition to Java, with typed edges and confidence scores. A mixed-language file set is refused.
+
+### `codegreen project`
+
+- `--source-glob` is repeatable (multi-package projects). The `**/` prefix was stripped as a character set, so `**/*.java` became `.java` and only worked through a silent instrument-everything fallback; it now uses `removeprefix`. Absolute patterns inside the project are taken relative to it.
+- `--sync-device cuda` (Python): drains the device before every probe timestamp so a frame owns the GPU work it launched. Kernel launches are asynchronous, so without it GPU energy lands outside every function. Costs one device drain per probe (no CPU/GPU overlap), fails if no synchronisation ran, and is off by default.
+- `--min-attribution-pct` (default 25.0): floor for `attribution_pct`. Below it the output carries `attribution_warning` (`code: LOW_ATTRIBUTION`, `attribution_pct`, `floor_pct`, `sync_device`, `message`).
+- New output fields: `attribution_pct`, `attribution_warning`, `sync_device`, `skipped_functions`; per-run `checkpoints_run<N>.sum` aggregates are saved next to the checkpoint files under `--output`.
+- Instrumented sources are backed up to `.codegreen_backup/` and restored at the start of the next run if an earlier run was interrupted. SIGTERM and SIGHUP restore the originals before exiting.
+- Java runtime: one daemon poller thread publishes the RAPL counter (`codegreen.rapl.poll_us`, default 1000) instead of a sysfs read on every enter/exit (about 80 ns per instrumented call pair). Per-JVM aggregates go to a per-run file instead of `System.err`, which JMH forks can close before the shutdown hook runs.
+- Python and C/C++ projects now measure energy through the NEMB backend (previously 0 J and no checkpoints on every NEMB-backed language; only Java worked).
+
+### `codegreen run`
+
+- `--validate/--no-validate` and `--validate-timeout` (default 300 s) control the unmeasured validation run. `--timeout` sets a per-run limit.
+- `--stdin <file>` binds a file as the subprocess stdin on every repeat (cat, hash, ETL workloads) while keeping N-run statistics and `--budget` gating.
+
+### `codegreen measure`
+
+- New `instrumentation_audit` block in `--json` output (`prospects_detected`, `fine_runtime_checkpoints`, `fallback_to_coarse`, optional `warning`).
+- A fine-granularity run that captures fewer than two checkpoints (work at module level or in child processes) is re-measured at coarse granularity so the report carries whole-program energy instead of 0 J. A crashed run is not re-run and reports its error.
+- Failed or checkpoint-less runs set `error` in the JSON, naming the traceback or error line.
+
+### Continuous monitor and telemetry export
+
+- New `codegreen.Monitor` Python class and `codegreen monitor` CLI sample host energy without launching a workload. JSONL output, file rotation (`--rotate-mb`), in-memory cap (`--max-in-memory`), distinct-label cap (`--max-labels`, overflow collapses into `__other__`), SIGHUP hot-reload of `monitor.*` config. Sampling intervals below 50 ms raise `ValueError` (RAPL noise floor). In run-forever mode (no `--duration`), intervals below 100 ms emit a `RuntimeWarning` about sampling overhead.
+- Per-PID attribution via `--pid` with `cgroup_v2` (preferred), `cgroup_v1` and `cpu_percent` (last resort) backends. `--attribution-mode` selects one, `auto` picks the most accurate available. `attribution_backend` appears on every sample header and the summary record.
+- Per-request attribution: `codegreen.annotate_request` context manager and `codegreen monitor --listen-on-socket /path/to.sock`. Each label becomes a `per_label` bucket in the summary (count, total_joules, p50_ms, p95_ms). Events are dropped when the socket is unreachable so middleware never blocks a request.
+- OTLP and Prometheus exporters: `--exporter otlp|prometheus` (repeatable), `--otlp-endpoint`, `--prometheus-port`, `--prometheus-listen-addr`. Install with `pip install codegreen[otlp]` or `codegreen[prometheus]`; a missing dependency fails at start. Prometheus binds to loopback by default (non-loopback emits a warning) and supports an optional bearer token. Label cardinality for both is bounded by `monitor.annotation.max_labels`. See [Continuous Monitoring](../user-guide/continuous-monitoring.md).
+
+### `codegreen timeline`
+
+- New command that places power (NEMB time series), CPU stacks, GC and allocation (JFR), and GPU kernels (`torch.profiler` Chrome trace) on one monotonic-clock axis. It writes a Perfetto/Chrome trace (`--out`, open at ui.perfetto.dev) and prints a phase and bottleneck summary (`--rel-change`, `--confirm`, `--gap-min-us`, `--launch-bound-frac`). At least one of `--nemb`, `--jfr`, `--torch` is required.
+- New `codegreen.analysis.sampling` library module (no CLI flag yet): async-profiler stack sampling for Java (JMH jars load the agent through `-jvmArgsAppend`) and per-method energy from sampled stacks, as a low-overhead second hotspot signal. Python stack sampling is not included.
+
+### Examples directory and test harness
+
+- `examples/` ships 14 numbered end-to-end scripts, `01_quickstart_measure` through `14_monitor_prometheus_scrape`. Each prints `OK: <feature>; <metric>=<value>` on success or `SKIP: <reason>` on missing dependencies. Harness: `pytest tests/test_examples.py -q`.
+- The docs site mirrors the layout under `/examples/`, with a use-case landing page, per-example pages, a Continuous Monitoring guide and a Project Profiling guide.
+
+### Changed behaviour and compatibility
+
+- **`attribution_pct` is now exclusive.** It was inclusive energy over total run energy, which double-counts nested calls and could exceed 100%. `attributed_energy_j` equals `exclusive_energy_j`. Compare old and new runs only on `exclusive_energy_j`.
+- **Qualified function names appear in all output** (`Class.method` instead of `method`), in `project --json` hotspots, `measure --json` checkpoints and the runtime reports. Scripts that match on bare names must be updated.
+- **`codegreen project` exits 1** when no checkpoint records are captured (it used to report success with 0 J) and when an explicit `--source-glob` matches no files (it used to widen to every source file).
+- **`codegreen run` no longer limits a run to about 300 s.** The per-run default is unlimited; pass `--timeout` for a limit. The project run lost its hardcoded 3600 s limit as well. The unmeasured validation run still happens by default (`--no-validate` skips it).
+- **Failures that used to be skipped now raise**: a failing tree-sitter query, instrumentation-point creation errors and AST-based instrumentation errors raise `RuntimeError` instead of logging a fallback and continuing, and a missing tree-sitter raises instead of falling back to legacy line-based instrumentation.
+- **`measure --json` has new fields** (`instrumentation_audit`, `error`), and a fine-granularity run with too few checkpoints may be re-run at coarse granularity, so `granularity` in the output can differ from the one requested.
+- **`measure -o` output** now includes `normalised_source` and `brace_normaliser_applied` in the saved metadata.
+- **`install_info.json`** is written to `$XDG_CONFIG_HOME/codegreen/` (default `~/.config/codegreen/`) on first run, to cache the detected clock source.
+- `measure-workload` reports an error when the backend returns no energy instead of printing stderr.
+- **Annotation socket.** `annotate_request` no longer defaults to `/tmp/codegreen.sock`. Pass a path, or start the monitor with `--listen-on-socket default`, which uses `$XDG_RUNTIME_DIR/codegreen.sock` (else `/tmp/codegreen-<uid>/codegreen.sock`, created 0700). The listener now refuses to remove a path that is not a socket owned by the current user.
+- **Java runtime fails loudly without RAPL.** The standalone Java runtime raises at startup when no package RAPL domain is readable (it used to report 0 J per function), sums every package domain, and handles counter wraparound.
+- **Timeseries clock label** is `clock_monotonic`, matching the clock NEMB stamps with (0.4.8 reported `clock_monotonic_raw`); cached `install_info.json` files are regenerated.
+- **Packaging.** The sdist now contains the native NEMB sources and language runtimes, so source installs build the measurement backend; wheels built from the sdist are correctly platform-tagged. `tree-sitter-java` is now a declared dependency, and `cmake` is a build requirement so isolated source builds compile NEMB. `codegreen project` now fails up front with a clear message when the native library is missing, instead of reporting no checkpoint records after the run.
+
+### Known limitations
+
+- `--sync-device` supports torch/CUDA on a single device. Other accelerators and multi-device runs are not synchronised.
+- C `longjmp` and `exit` skip the frame exit, so the frame stays open. Macros from headers that contain `return` are invisible to the C return rewrite.
+- C and C++ functions returning pointers or references are not matched by the definitions query and are not instrumented.
+- Project-mode hotspot percentages that feed the verdict thresholds (`Excl%`/`Incl%` and `_classify_hotspot_verdict`) still use the inclusive sum as denominator, which double-counts nested calls. Changing it needs threshold recalibration against the benchmark harness (todo A10). `attribution_pct` itself is exclusive.
+- Without `CODEGREEN_INSTALL_DIR`, NEMB falls back to a 1 ms, 2000-sample ring buffer (a 2 s window). Checkpoints older than the window clamp to the first reading, so long runs lose per-function energy until the buffer is sized from the run length (todo A14).
+- NEMB total system energy includes idle GPU draw; CPU-code attribution spreads it by time (todo A11).
+
+## v0.4.8
 
 ### Local-timezone display companions (additive — UTC contract unchanged)
 

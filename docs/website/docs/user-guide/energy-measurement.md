@@ -2,6 +2,16 @@
 
 CodeGreen uses the Native Energy Measurement Backend (NEMB) for hardware-level energy monitoring.
 
+## Which command should I use?
+
+| You want to ... | Use | Why |
+|---|---|---|
+| Bracket a shell command (no source change) | [`codegreen run`](cli-reference.md#run) | Whole-subprocess energy with N-run statistics + `--budget` |
+| Inject per-function checkpoints into a single file | [`codegreen measure`](cli-reference.md#measure) | Tree-sitter AST instrumentation, coarse/fine granularity |
+| Profile a multi-file project against its own build | [`codegreen project`](cli-reference.md#project) | DISCOVER -> INSTRUMENT+BUILD -> MEASURE with your `--build-cmd` / `--run-cmd` |
+| Bracket regions inside a long-running Python script | [`codegreen.Session`](../api/python.md#manual-api-codegreensession) | In-process API, no subprocess, per-task energy + per-domain breakdown |
+| Sample an already-running daemon or webapp | [`codegreen monitor`](continuous-monitoring.md) | Non-invasive, cgroup_v2 per-PID, optional UDS annotation channel |
+
 ## Supported Hardware Sensors
 
 | Sensor | Driver | Implementation | Platform |

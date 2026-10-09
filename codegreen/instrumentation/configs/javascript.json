@@ -68,7 +68,6 @@
         "capture_mapping": {
             "function_def": "function_enter",
             "function_name": "function_enter",
-            "return": "function_exit",
             "loop.for": "loop_start",
             "loop.while": "loop_start",
             "loop.do": "loop_start",
@@ -77,7 +76,6 @@
         "priority_order": [
             "function_def",
             "function_name",
-            "return",
             "loop.for",
             "loop.while",
             "loop.do",
@@ -96,9 +94,11 @@
     },
     "instrumentation_config": {
         "import_statement": "import { CodeGreen } from 'codegreen-runtime';",
+        "exit_strategy": "try_finally",
         "templates": {
             "function_enter": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'enter');",
             "function_exit": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'exit');",
+            "function_frame": "{indent}{enter}\n{indent}try {\n{body}} finally { {exit} } ",
             "class_enter": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'class_enter');",
             "loop_start": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'loop_start');",
             "loop_exit": "CodeGreen.checkpoint('{checkpoint_id}', '{name}', 'loop_exit');"
@@ -234,9 +234,11 @@
         "for_statement_types": [
             "for_statement"
         ],
+        "non_braced_body_parents": [],
         "docstring_node_types": [],
         "docstring_delimiters": [],
         "comment_prefix": "//",
-        "indentation_sensitive": false
+        "indentation_sensitive": false,
+        "unsupported_function_tokens": {"async": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions", "*": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions"}
     }
 }

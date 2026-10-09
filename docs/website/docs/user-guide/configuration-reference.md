@@ -452,7 +452,7 @@ codegreen config --edit
 
 ```bash
 # Check which config file is being used
-codegreen info --verbose
+codegreen info --detailed
 
 # Output will show:
 # Configuration loaded from: /path/to/codegreen.json

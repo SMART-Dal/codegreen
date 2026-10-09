@@ -16,7 +16,7 @@ import time
 import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union, NamedTuple
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from tree_sitter import Language, Parser, Tree, Node, Query, QueryCursor
 from tree_sitter_language_pack import get_language, get_parser
 
@@ -26,6 +26,15 @@ except ImportError:
     from language_configs import get_language_config_manager, LanguageConfig
 
 logger = logging.getLogger(__name__)
+
+
+class InsertionError(RuntimeError):
+    """Raised when no braced enclosing body can be found for an instrumentation point.
+
+    Indicates BraceNormaliser pre-pass missed a control-flow shape: fix is to add the
+    parent node type to non_braced_body_parents in the language JSON config.
+    """
+
 
 @dataclass
 class IndentationInfo:
@@ -40,16 +49,20 @@ class ASTEdit:
     """Represents an AST-based edit operation"""
     byte_offset: int
     insertion_text: str
-    edit_type: str  # 'insert_before', 'insert_after', 'insert_inside_start', 'insert_inside_end'
+    edit_type: str  # 'insert_before', 'insert_after', 'insert_inside_start', 'insert_inside_end', 'wrap_range'
     node_info: Optional[str] = None  # Debug info about the node
-    node_end_byte: Optional[int] = None  # End of the node for wrapping/replacing
+    node_end_byte: Optional[int] = None  # End of the replaced region for 'wrap_range'
+    keep: Optional[Tuple[int, int]] = None  # 'wrap_range': sub-range of the region copied into the result
+    suffix: str = ''  # 'wrap_range': text after the kept range (insertion_text is the text before it)
+    reindent: str = ''  # 'wrap_range': unit prepended to every kept line that does not start inside a literal
 
 class ASTProcessor:
     """Language-agnostic AST processor using configuration-driven approach."""
     
     def __init__(self, language: str, source_code: str = "", tree: Optional[Tree] = None):
         self.language = language
-        self.source_code = source_code
+        # Tree-sitter offsets are bytes but this class indexes the text as a str: one char per byte keeps them equal.
+        self.source_code = source_code if source_code.isascii() else source_code.encode('utf-8').decode('latin-1')
         self.tree = tree  # Tree-sitter AST tree for advanced indentation
         self.config_manager = get_language_config_manager()
         self.config = self.config_manager.get_config(language)
@@ -223,11 +236,37 @@ class ASTProcessor:
             # Let's just fall through to the manual logic blocks by temporarily modifying local variables
             # or better, just copy the logic blocks here or refactor.
             # Refactoring to avoid huge method:
-            return self._find_insertion_point_manual(node, fallback_mode, fallback_rule)
+            return self._find_insertion_point_via_ast(node, fallback_mode, fallback_rule)
 
-        return self._find_insertion_point_manual(node, rule.get("mode"), rule)
+        return self._find_insertion_point_via_ast(node, rule.get("mode"), rule)
 
-    def _find_insertion_point_manual(self, node: Node, mode: str, rule: Dict[str, Any]) -> Optional[int]:
+    def _enclosing_block(self, node: Node) -> Node:
+        """Walk parents until a node whose type is in body_types is found.
+
+        Raises InsertionError if none — that means BraceNormaliser did not wrap
+        this control-flow shape; fix by extending non_braced_body_parents in the
+        language JSON config.
+        """
+        body_types = set(self.config.node_types.get('body_types', []))
+        cur = node.parent
+        while cur and cur.type not in body_types:
+            cur = cur.parent
+        if cur is None:
+            raise InsertionError(
+                f"No enclosing block for {node.type}; BraceNormaliser pre-pass "
+                "missed this case. Add the parent control-flow node type to "
+                "non_braced_body_parents in the language config."
+            )
+        return cur
+
+    def _statement_containing(self, block: Node, target: Node) -> Node:
+        """Return the direct child of `block` that lexically contains `target`."""
+        for child in block.named_children:
+            if child.start_byte <= target.start_byte and child.end_byte >= target.end_byte:
+                return child
+        return target
+
+    def _find_insertion_point_via_ast(self, node: Node, mode: str, rule: Dict[str, Any]) -> Optional[int]:
         """Manual AST walking logic (fallback)."""
         if mode == "inside_start":
             logger.debug(f"   Processing inside_start mode for {node.type}")
@@ -321,10 +360,16 @@ class ASTProcessor:
             return body_node.end_byte
                 
         elif mode == "immediately_before":
-            line_start = self.source_code.rfind('\n', 0, node.start_byte) + 1
             logger.debug(f"   Processing immediately_before mode for {node.type}")
-            logger.debug(f"   Immediately before insertion position: {line_start} (line start of node at {node.start_byte})")
-            return line_start
+            # AST-driven: BraceNormaliser pre-pass guarantees every probe site
+            # is inside a `block` (or whichever body_type the language uses).
+            # The insertion offset is the start_byte of the direct block child
+            # that lexically contains `node` — i.e. the statement we're about
+            # to instrument. No byte-walk over source text; no rfind('\n').
+            block = self._enclosing_block(node)
+            statement = self._statement_containing(block, node)
+            logger.debug(f"   immediately_before -> statement {statement.type}@{statement.start_byte}")
+            return statement.start_byte
 
         elif mode == "before":
             logger.debug(f"   Processing before mode - inserting before node")
@@ -399,7 +444,7 @@ class ASTProcessor:
         skip_docstrings = rule.get("skip_docstrings", False)
         skip_comments = rule.get("skip_comments", False)
         
-        for i, child in enumerate(body_node.children):
+        for i, child in enumerate(body_node.named_children):
             child_text = self._get_node_text(child)
             
             # Skip docstrings if configured
@@ -815,17 +860,54 @@ class TreeSitterIndentationEngine:
         body_types = config.node_types.get("body_types", [])
         container_types = set(function_types + class_types)
 
+        def _indent_from_block(block: Node) -> Optional['IndentationInfo']:
+            # Ground-truth body indent = column of the block's first real statement.
+            for child in block.children:
+                if child.type not in ('comment', '{', '}') and child.start_point[1] > 0:
+                    col = child.start_point[1]
+                    s = (indent_char * col) if indent_char == ' ' else ('\t' * col)
+                    return IndentationInfo(col // indent_size, indent_char, indent_size, s)
+            return None
+
         node = tree.root_node.descendant_for_byte_range(byte_offset, byte_offset)
         while node:
-            if node.type in body_types:
-                if node.parent and node.parent.type in container_types:
-                    # Find first non-comment, non-brace child to get body indent
-                    for child in node.children:
-                        if child.type not in ('comment', '{', '}') and child.start_point[1] > 0:
-                            col = child.start_point[1]
-                            indent_string = indent_char * col if indent_char == ' ' else '\t' * col
-                            return IndentationInfo(col // indent_size, indent_char, indent_size, indent_string)
+            block = None
+            # Case 1: offset is inside a function/class body block.
+            if node.type in body_types and node.parent and node.parent.type in container_types:
+                block = node
+            # Case 2: offset resolved to the container node itself (tree-sitter maps
+            # the line boundary before the body's first statement to the definition,
+            # not the block). Descend into the container's body. Without this the
+            # search misses the body and falls through to the (indent-style-guessed)
+            # top-level default, which mis-indents nested-heavy functions -> broken
+            # instrumentation. Use the AST body directly instead.
+            elif node.type in container_types:
+                block = next((c for c in node.children if c.type in body_types), None)
+            if block is not None:
+                info = _indent_from_block(block)
+                if info is not None:
+                    return info
             node = node.parent
+
+        # Boundary fallback (e.g. an inside_end checkpoint whose offset is the blank
+        # line after a function): tree-sitter maps the offset to `module`, so the
+        # walk-up above found no body. Attribute the indent to the container that
+        # just closed at/just-before this offset, using its body's real indent.
+        closed = []
+        stack = [tree.root_node]
+        while stack:
+            nd = stack.pop()
+            if nd.type in container_types and nd.start_byte < byte_offset and nd.end_byte <= byte_offset + 1:
+                closed.append(nd)
+            stack.extend(nd.children)
+        if closed:
+            nearest = max(closed, key=lambda c: c.end_byte)
+            body = next((c for c in nearest.children if c.type in body_types), None)
+            if body is not None:
+                info = _indent_from_block(body)
+                if info is not None:
+                    return info
+
         # Top-level: one indent level
         indent_string = indent_char * indent_size if indent_char == ' ' else '\t'
         return IndentationInfo(1, indent_char, indent_size, indent_string)
@@ -968,6 +1050,7 @@ class ASTRewriter:
     
     def __init__(self, source_code: str, language: str, parser: Optional[Parser] = None, tree: Optional[Tree] = None):
         self.source_code = source_code
+        self.ascii = source_code.isascii()
         self.language = language
         self.parser = parser
         self.tree = tree
@@ -1021,7 +1104,7 @@ class ASTRewriter:
             logger.debug(f"   Edit type: {edit_type}")
             
             edit = ASTEdit(
-                byte_offset=byte_offset,
+                byte_offset=self._char_index(byte_offset),
                 insertion_text=instrumentation_code,
                 edit_type=edit_type,
                 node_info=f"{point.type}:{point.name}",
@@ -1038,6 +1121,43 @@ class ASTRewriter:
             logger.debug(f"   Error traceback: {traceback.format_exc()}")
             return False
     
+    def _char_index(self, byte_offset: int) -> int:
+        """Edits index the str source; tree-sitter and the AST processor speak bytes."""
+        return byte_offset if self.ascii else len(self.source_code.encode('utf-8')[:byte_offset].decode('utf-8', errors='ignore'))
+
+    def wrap_range(self, start_byte: int, end_byte: int, keep_start_byte: int, keep_end_byte: int,
+                   prefix: str, suffix: str, label: str, reindent: str = '') -> None:
+        """Replace [start, end) with prefix + source[keep_start:keep_end] + suffix as ONE atomic edit, so every
+        intermediate tree stays valid. Edits nested in the kept range are applied first; their growth is folded
+        into the offsets when this edit runs (see _shift_nested)."""
+        start, end, ks, ke = map(self._char_index, (start_byte, end_byte, keep_start_byte, keep_end_byte))
+        self.edits.append(ASTEdit(start, prefix, 'wrap_range', label, end, (ks, ke), suffix, reindent))
+
+    @staticmethod
+    def _shift_nested(edit: ASTEdit, applied: List[Tuple[int, int]]) -> ASTEdit:
+        """Edits applied so far start later in the file; those inside the kept range moved its end."""
+        if edit.edit_type != 'wrap_range':
+            return edit
+        ks, ke = edit.keep
+        grown = sum(delta for start, delta in applied if ks <= start < ke)
+        return replace(edit, keep=(ks, ke + grown), node_end_byte=edit.node_end_byte + grown)
+
+    def _reindent(self, segment: str, unit: str) -> str:
+        """Indent every line by `unit` except lines starting inside a multi-line literal (their text is data)."""
+        literal_types = set(self.config_manager.get_node_types(self.language).get('literal_types', []))
+        prelude = self.config_manager.get_formatting_config(self.language)['reindent_prelude']
+        tree = self.parser.parse((prelude + segment).encode('utf-8'))
+        inner: set = set()
+        stack = [tree.root_node]
+        while stack:
+            node = stack.pop()
+            if node.type in literal_types:
+                inner.update(range(node.start_point[0] + 1, node.end_point[0] + 1))
+            else:
+                stack.extend(node.children)
+        return '\n'.join(line if not line.strip() or row + 1 in inner else unit + line
+                         for row, line in enumerate(segment.split('\n')))
+
     def _calculate_insertion_offset(self, point) -> Optional[int]:
         """Configuration-driven offset calculation using AST processor."""
         node: Node = point.node  # Assume added to dataclass
@@ -1119,8 +1239,10 @@ class ASTRewriter:
         
         successful_edits = 0
         failed_edits = 0
+        applied: List[Tuple[int, int]] = []
         
         for i, edit in enumerate(sorted_edits):
+            edit = self._shift_nested(edit, applied)
             logger.debug(f" Processing edit {i+1}/{len(sorted_edits)}: {edit.edit_type} at offset {edit.byte_offset}")
             
             # Log context around the edit location
@@ -1161,6 +1283,7 @@ class ASTRewriter:
                     logger.warning(f"     Reverted edit {i+1} due to syntax error")
                 else:
                     successful_edits += 1
+                    applied.append((edit.byte_offset, len(result_code) - len(old_code)))
                     logger.debug(f"    Edit {i+1} applied successfully")
                     
             except Exception as e:
@@ -1192,8 +1315,12 @@ class ASTRewriter:
         
         # Apply edits from end to beginning
         result = self.source_code
+        applied: List[Tuple[int, int]] = []
         for edit in sorted_edits:
+            edit = self._shift_nested(edit, applied)
+            before = len(result)
             result = self._apply_single_edit(result, edit)
+            applied.append((edit.byte_offset, len(result) - before))
         
         return result
     
@@ -1221,17 +1348,20 @@ class ASTRewriter:
             # For insertions: start_byte = old_end_byte = insertion point
             # new_end_byte = insertion point + actual inserted length
             start_byte = offset
-            old_end_byte = offset  # For insertions, old and start are the same
-            new_end_byte = offset + inserted_length  # Use actual inserted length
+            old_end_byte = edit.node_end_byte if edit.edit_type == 'wrap_range' else offset
+            new_end_byte = old_end_byte + inserted_length  # Use actual inserted length
             
             # Convert byte offsets to points (row/column)
             start_point = self._byte_to_point(code, start_byte)
-            old_end_point = start_point  # For insertions
+            old_end_point = self._byte_to_point(code, old_end_byte)
             new_end_point = self._byte_to_point(new_code, new_end_byte)  # For insertions, new_end is after insertion
             
             logger.debug(f"   Edit parameters: start_byte={start_byte}, old_end_byte={old_end_byte}, new_end_byte={new_end_byte}")
             logger.debug(f"   Edit points: start={start_point}, old_end={old_end_point}, new_end={new_end_point}")
             
+            if not self.ascii:
+                return new_code, self.parser.parse(new_code.encode('utf-8'))
+
             # Inform tree-sitter about the edit
             tree.edit(
                 start_byte=start_byte,
@@ -1294,6 +1424,11 @@ class ASTRewriter:
     def _apply_single_edit(self, code: str, edit: ASTEdit) -> str:
         """Improved: Respect modes fully with verbose diagnostics."""
         offset = max(0, min(edit.byte_offset, len(code)))
+        if edit.edit_type == 'wrap_range':
+            kept = code[edit.keep[0]:edit.keep[1]]
+            if edit.reindent:
+                kept = self._reindent(kept, edit.reindent)
+            return code[:offset] + edit.insertion_text + kept + edit.suffix + code[edit.node_end_byte:]
         
         logger.debug(f" Applying single edit: {edit.edit_type} at offset {offset}")
         logger.debug(f"   Original insertion text: '{edit.insertion_text}'")

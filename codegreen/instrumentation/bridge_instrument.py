@@ -43,11 +43,13 @@ def main():
             print(source_code)
             sys.exit(0)
             
-        # Then instrument
+        # Then instrument (use brace-normalised source if produced by analyze_code)
+        normalised_source = result.metadata.get('normalised_source', source_code)
         instrumented_code = engine.instrument_code(
-            source_code, 
-            result.instrumentation_points, 
-            result.language
+            normalised_source,
+            result.instrumentation_points,
+            result.language,
+            pre_normalised_source=normalised_source,
         )
         
         # Output instrumented code to stdout

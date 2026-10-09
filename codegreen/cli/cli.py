@@ -20,6 +20,7 @@ import subprocess
 import platform
 import time
 import shutil
+import itertools
 import json
 import tempfile
 from pathlib import Path
@@ -1001,7 +1002,8 @@ def measure_energy(
         if not is_instrumented:
             if not json_output:
                 console.print(f"\n[green]Instrumenting {language.value} code...[/green]")
-            instrumented_code = engine.instrument_code(source_code, points, language.value)
+            _ns = result.metadata.get('normalised_source', source_code)
+            instrumented_code = engine.instrument_code(_ns, points, language.value, pre_normalised_source=_ns)
 
             # Determine correct output extension
             ext_map = {'python': '.py', 'c': '.c', 'cpp': '.cpp', 'java': '.java', 'javascript': '.js'}
@@ -1025,7 +1027,65 @@ def measure_energy(
                 measurement_result = _run_energy_measurement(
                     run_path, language, sensors, verbose and not json_output, timeout, args, json_output
                 )
-                
+
+                # Graceful degradation: fine granularity produced a clean run but
+                # no usable per-function checkpoints (work ran at module level or in
+                # child processes we cannot attribute). Re-measure at coarse
+                # (main/module enter-exit) so we still report whole-program total
+                # energy instead of a silent 0 J. A crashed run (no 'success') is
+                # left alone so its real error is surfaced. Best-effort: any failure
+                # here keeps the original fine result.
+                fine_checkpoint_count = len((measurement_result or {}).get('checkpoints') or [])
+                n_prospects = len(result.instrumentation_points)
+                run_crashed = _output_has_error((measurement_result or {}).get('output', '') or '')
+                # Flag (never silence): prospects were detected but runtime capture
+                # fell short. Either legitimate (module-level/child-process work) or
+                # an instrumentation bug -- surface it so bugs are caught even when
+                # the coarse fallback below provides a usable total.
+                instrumentation_warning = None
+                if (measurement_result and not is_instrumented
+                        and n_prospects >= 2 and fine_checkpoint_count < 2):
+                    cause = ("the instrumented program crashed (see error)" if run_crashed
+                             else "work runs at module level or in child processes; "
+                                  "reporting whole-program energy via coarse fallback")
+                    instrumentation_warning = (
+                        f"{n_prospects} instrumentation prospects detected but only "
+                        f"{fine_checkpoint_count} runtime checkpoint(s) captured; per-function "
+                        f"attribution unavailable -- {cause}. If functions were expected to run, "
+                        f"treat as a possible instrumentation bug.")
+                    # JSON consumers get this in instrumentation_audit.warning; only
+                    # humans get the console line (never pollute stdout in JSON mode).
+                    if not json_output:
+                        console.print(f"[yellow]INSTRUMENTATION WARNING: {instrumentation_warning}[/yellow]")
+
+                # Fall back to coarse only for a CLEAN run (a crash keeps its error).
+                fallback_used = False
+                if (granularity != Granularity.coarse and not is_instrumented
+                        and measurement_result and not run_crashed
+                        and fine_checkpoint_count < 2):
+                    coarse_points = _filter_main_entry_points(
+                        result.instrumentation_points, language.value)
+                    if coarse_points:
+                        _ns = result.metadata.get('normalised_source', source_code)
+                        c_ext = {'python': '.py', 'c': '.c', 'cpp': '.cpp',
+                                 'java': '.java', 'javascript': '.js'}.get(
+                                     language.value, script.suffix)
+                        c_path = script.with_name(f'{script.stem}_coarse{c_ext}')
+                        c_path.write_text(
+                            engine.instrument_code(_ns, coarse_points, language.value,
+                                                   pre_normalised_source=_ns),
+                            encoding='utf-8')
+                        try:
+                            c_res = _run_energy_measurement(
+                                c_path, language, sensors, False, timeout, args, json_output)
+                            if c_res and len(c_res.get('checkpoints') or []) >= 2:
+                                measurement_result = c_res
+                                granularity = Granularity.coarse
+                                fallback_used = True
+                        finally:
+                            if not no_cleanup and c_path.exists() and c_path != script:
+                                os.remove(c_path)
+
                 if output:
                     _save_measurement_results(output, result, measurement_result)
                     if not json_output:
@@ -1038,6 +1098,12 @@ def measure_energy(
                 combined_results = _build_comprehensive_json(
                     result, measurement_result, source_code, script, language.value, granularity.value
                 )
+                combined_results["instrumentation_audit"] = {
+                    "prospects_detected": n_prospects,
+                    "fine_runtime_checkpoints": fine_checkpoint_count,
+                    "fallback_to_coarse": fallback_used,
+                    **({"warning": instrumentation_warning} if instrumentation_warning else {}),
+                }
                 print(json.dumps(combined_results, indent=2))
             else:
                 if measurement_result and measurement_result.get('success'):
@@ -1096,6 +1162,50 @@ def _filter_main_entry_points(points: List, language: str) -> List:
     if exits:
         fallback.append(exits[-1])
     return fallback
+
+
+def _output_has_error(output: str) -> bool:
+    """True if captured output shows a crash/error (traceback or error marker),
+    ignoring CodeGreen's own report lines. Distinguishes a crashed run (surface the
+    error) from a clean run that simply produced no checkpoints (fall back to coarse)."""
+    if not output:
+        return False
+    for ln in output.splitlines():
+        if ln.startswith("Traceback (most recent call last)"):
+            return True
+        if "CODEGREEN" in ln.upper():
+            continue
+        low = ln.lower()
+        if "error:" in low or ln.strip().endswith("Error") or "exception" in low:
+            return True
+    return False
+
+
+def _extract_failure_reason(output: str) -> str:
+    """Salient failure line from a failed run's captured output, so a zero-checkpoint
+    measurement reports WHY it failed instead of a silent 0 J. Language-agnostic:
+    Python tracebacks, then compiler/runtime error markers, else the last output line."""
+    if not output or not output.strip():
+        return "program produced no checkpoints and no output"
+    # Drop CodeGreen's own report/sentinel lines (an atexit handler prints them
+    # even after the program crashes), so they don't mask the real error.
+    lines = [ln for ln in output.splitlines()
+             if ln.strip() and "CODEGREEN" not in ln.upper()]
+    if not lines:
+        return "program produced no diagnostic output"
+    # Python traceback: the exception summary is the first non-indented line after
+    # the last 'Traceback' header (call frames are indented).
+    tb = max((i for i, ln in enumerate(lines)
+              if ln.startswith("Traceback (most recent call last)")), default=None)
+    if tb is not None:
+        for ln in lines[tb + 1:]:
+            if ln and not ln[0].isspace():
+                return ln.strip()
+    for ln in reversed(lines):
+        low = ln.lower()
+        if "error:" in low or ln.strip().endswith("Error") or "exception" in low:
+            return ln.strip()
+    return lines[-1].strip()
 
 
 def _build_comprehensive_json(
@@ -1169,8 +1279,9 @@ def _build_comprehensive_json(
         total_energy = max(checkpoints[-1].get('joules', 0) - checkpoints[0].get('joules', 0), 0.0)
         ts_delta = checkpoints[-1].get('timestamp', 0) - checkpoints[0].get('timestamp', 0)
         wall_time = ts_delta / 1e6 if ts_delta > 1e6 else ts_delta
-    return {
-        "success": bool(measurement_result and measurement_result.get('success')),
+    success = bool(measurement_result and measurement_result.get('success'))
+    result = {
+        "success": success,
         "file": str(script), "language": language, "granularity": granularity,
         "source_fingerprint": source_hash,
         "system": system,
@@ -1182,6 +1293,15 @@ def _build_comprehensive_json(
         "checkpoints": checkpoints,
         "optimization_suggestions": analysis_result.optimization_suggestions,
     }
+    # Never report a silent 0 J: when the run recorded no usable checkpoints,
+    # surface WHY -- a real crash (traceback) vs a clean run that produced no
+    # measurement markers -- so callers can distinguish "measured 0" from "failed".
+    if not success or len(checkpoints) < 2:
+        out = (measurement_result or {}).get('output', '') or ''
+        result["error"] = (_extract_failure_reason(out) if _output_has_error(out)
+                            else "no runtime checkpoints captured (per-function "
+                                 "attribution unavailable; see instrumentation_audit)")
+    return result
 
 
 def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
@@ -1510,8 +1630,9 @@ def analyze_code_structure(
         if save_instrumented:
             if not json_output:
                 console.print(f"\n[green]Instrumenting code...[/green]")
-            instrumented_code = engine.instrument_code(source_code, result.instrumentation_points, language.value)
-            
+            _ns = result.metadata.get('normalised_source', source_code)
+            instrumented_code = engine.instrument_code(_ns, result.instrumentation_points, language.value, pre_normalised_source=_ns)
+
             # Create output directory if it doesn't exist
             if output_dir:
                 output_path = Path(output_dir)
@@ -2414,8 +2535,7 @@ def run_measure_workload(
             console.print(f"Power:  {energy_j/elapsed:.2f} W")
             console.print(f"Duration: {elapsed:.2f} s")
         else:
-            console.print("[red]Workload measurement failed[/red]")
-            console.print(result.stderr)
+            console.print("[red]Workload measurement failed: backend returned no energy[/red]")
             raise typer.Exit(1)
             
     except subprocess.TimeoutExpired:
@@ -2537,6 +2657,10 @@ def run_command(
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     budget: Annotated[Optional[float], typer.Option("--budget", help="Energy budget in Joules (fail if exceeded)")] = None,
     include_warmup: Annotated[bool, typer.Option("--include-warmup", help="Measure energy during warmup and include in results")] = False,
+    stdin_file: Annotated[Optional[str], typer.Option("--stdin", help="Bind file as stdin (avoids unsafe bash -c '... < file' wrapping)")] = None,
+    validate: Annotated[bool, typer.Option("--validate/--no-validate", help="Execute the command once, unmeasured, before measuring (a failing command is also caught by the first measured run)")] = True,
+    validate_timeout: Annotated[int, typer.Option("--validate-timeout", help="Seconds allowed for the validation run")] = 300,
+    timeout: Annotated[Optional[int], typer.Option("--timeout", help="Per-run limit in seconds (default: none; the caller bounds the call)")] = None,
 ):
     """[bold]Measure energy[/bold] of any shell command with hardware-level precision.
 
@@ -2649,18 +2773,46 @@ def run_command(
     # Always capture output during measurement for consistent timing (B1 fix).
     # Display captured output afterward in human mode.
     backend._quiet = True
+    # stdin file (if any) is attached after the dry-run validator opens it.
 
-    # Dry run: validate command executes successfully before measuring energy
+    # --stdin: open once, rewind on every invocation. Surface a structured
+    # failure_reason when the file is missing rather than letting subprocess
+    # raise an opaque FileNotFoundError downstream.
+    stdin_fh = None
+    if stdin_file is not None:
+        if not Path(stdin_file).is_file():
+            msg = f"stdin_file_missing: {stdin_file}"
+            if json_output:
+                print(json.dumps({"success": False, "error": msg}))
+            else:
+                console.print(f"[red]{msg}[/red]")
+            raise typer.Exit(1)
+        stdin_fh = open(stdin_file, "rb")
+        backend._stdin_fh = stdin_fh
+
+    def _stdin():
+        if stdin_fh is None:
+            return None
+        stdin_fh.seek(0)
+        return stdin_fh
+
+    # Dry run: validate command executes successfully before measuring energy.
+    # Optional: it doubles wall time for long workloads, and a failing command
+    # also fails the first measured run.
+    check = None
     try:
-        check = subprocess.run(command, capture_output=True, timeout=300)
+        if validate:
+            check = subprocess.run(command, capture_output=True, timeout=validate_timeout,
+                                   stdin=_stdin())
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        msg = f"Command not found: {exe}" if isinstance(e, FileNotFoundError) else "Command timed out during validation"
+        msg = (f"Command not found: {exe}" if isinstance(e, FileNotFoundError)
+               else f"Command timed out during validation (>{validate_timeout}s)")
         if json_output:
             print(json.dumps({"success": False, "error": msg}))
         else:
             console.print(f"[red]{msg}[/red]")
         raise typer.Exit(1)
-    if check.returncode != 0:
+    if check is not None and check.returncode != 0:
         stderr = (check.stderr or b"").decode(errors="replace").strip()
         msg = f"Command failed (exit {check.returncode})"
         if json_output:
@@ -2737,7 +2889,7 @@ def run_command(
     def _collect_run(label: str, idx: int, total: int, into: List[tuple]):
         if not json_output:
             console.print(f"[dim]{label} {idx+1}/{total}[/dim]")
-        energy_j, elapsed = backend.measure(command)
+        energy_j, elapsed = backend.measure(command, timeout=timeout)
         if energy_j is not None and energy_j > 0:
             into.append((energy_j, elapsed))
             if isinstance(backend, _NEMBBackend):
@@ -2759,7 +2911,8 @@ def run_command(
             if not json_output:
                 console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
             try:
-                subprocess.run(command, capture_output=True, timeout=300)
+                subprocess.run(command, capture_output=True, timeout=300,
+                               stdin=_stdin())
             except subprocess.TimeoutExpired:
                 if json_output: print(_emit_failure_meta("Warmup timed out"))
                 else: console.print(f"[red]Warmup timed out[/red]")
@@ -2946,8 +3099,14 @@ class _EnergyBackend:
     name: str = "unknown"
     priority: int = 0  # higher = preferred
     _quiet: bool = False
+    _stdin_fh = None  # file handle bound by --stdin; rewound per measurement
+    def _stdin(self):
+        if self._stdin_fh is None:
+            return None
+        self._stdin_fh.seek(0)
+        return self._stdin_fh
     def is_available(self) -> bool: return False
-    def measure(self, command: list, timeout: int = 300) -> tuple:
+    def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
         """Returns (energy_joules or None, elapsed_seconds)."""
         raise NotImplementedError
     def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
@@ -2956,6 +3115,18 @@ class _EnergyBackend:
     def parse_energy(self, energy_file: str) -> float:
         """Parse energy from output file (project mode only). Returns joules or 0."""
         return 0.0
+    def run_project(self, cmd_str: str, cwd: str, checkpoint_file: str, env: dict) -> tuple:
+        """Run a project-mode command with stderr sent to checkpoint_file.
+        Returns (CompletedProcess with bytes output, energy_joules, wall_seconds)."""
+        energy_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+        try:
+            start = time.perf_counter()
+            result = subprocess.run(self.wrap_command(cmd_str, energy_file, checkpoint_file),
+                                    shell=True, cwd=cwd, env=env, capture_output=True)
+            wall = time.perf_counter() - start
+            return result, self.parse_energy(energy_file), wall
+        finally:
+            os.unlink(energy_file)
 
 
 class _NEMBBackend(_EnergyBackend):
@@ -2996,7 +3167,7 @@ class _NEMBBackend(_EnergyBackend):
         except Exception:
             return False
 
-    def measure(self, command: list, timeout: int = 300) -> tuple:
+    def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
         import ctypes, subprocess, time
         lib = self._load()
         lib.nemb_start_session.restype = ctypes.c_uint64
@@ -3007,7 +3178,8 @@ class _NEMBBackend(_EnergyBackend):
         sid = lib.nemb_start_session(b"run")
         start = time.perf_counter()
         try:
-            result = subprocess.run(command, capture_output=self._quiet, timeout=timeout)
+            result = subprocess.run(command, capture_output=self._quiet,
+                                    timeout=timeout, stdin=self._stdin())
             elapsed = time.perf_counter() - start
         except subprocess.TimeoutExpired:
             elapsed = time.perf_counter() - start
@@ -3037,17 +3209,27 @@ class _NEMBBackend(_EnergyBackend):
     def get_last_domain_breakdown(self) -> dict:
         return getattr(self, '_last_domains', {})
 
-    def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
-        # NEMB measures in-process; for project mode, just run the command and
-        # let the coordinator's background thread capture energy during execution
-        return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
-
-    def parse_energy(self, energy_file: str) -> float:
+    def run_project(self, cmd_str: str, cwd: str, checkpoint_file: str, env: dict) -> tuple:
+        # Whole-run energy from an in-process NEMB session spanning the child,
+        # the same path `codegreen run` uses; there is no energy file to parse.
+        import ctypes
+        lib = self._load()
+        lib.nemb_start_session.restype = ctypes.c_uint64
+        lib.nemb_start_session.argtypes = [ctypes.c_char_p]
+        lib.nemb_stop_session.restype = ctypes.c_int
+        lib.nemb_stop_session.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+        energy, power = ctypes.c_double(0), ctypes.c_double(0)
+        sid = lib.nemb_start_session(b"project")
+        start = time.perf_counter()
         try:
-            d = json.loads(open(energy_file).read())
-            return d.get("summary", {}).get("total_energy_j", 0.0)
-        except Exception:
-            return 0.0
+            result = subprocess.run(self.wrap_command(cmd_str, "", checkpoint_file),
+                                    shell=True, cwd=cwd, env=env, capture_output=True)
+        finally:
+            wall = time.perf_counter() - start
+            ok = lib.nemb_stop_session(sid, ctypes.byref(energy), ctypes.byref(power))
+        if not ok or energy.value <= 0:
+            raise RuntimeError(f"NEMB session returned no energy for project run ({wall:.2f}s)")
+        return result, energy.value, wall
 
 
 class _PerfBackend(_EnergyBackend):
@@ -3066,7 +3248,7 @@ class _PerfBackend(_EnergyBackend):
         except Exception:
             pass
         return events
-    def measure(self, command: list, timeout: int = 300) -> tuple:
+    def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
         import subprocess, time, tempfile, os
         with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
             pf = f.name
@@ -3074,7 +3256,8 @@ class _PerfBackend(_EnergyBackend):
             full = ["perf", "stat", "-e", self._events(), "-o", pf, "--"] + command
             start = time.perf_counter()
             try:
-                result = subprocess.run(full, capture_output=self._quiet, timeout=timeout)
+                result = subprocess.run(full, capture_output=self._quiet,
+                                        timeout=timeout, stdin=self._stdin())
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"Command timed out after {timeout}s")
             if result.returncode != 0:
@@ -3105,7 +3288,7 @@ class _PowermetricsBackend(_EnergyBackend):
     def is_available(self) -> bool:
         import shutil
         return sys.platform == "darwin" and shutil.which("powermetrics") is not None
-    def measure(self, command: list, timeout: int = 300) -> tuple:
+    def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
         import subprocess, time, tempfile, os, re
         with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
             pm_file = f.name
@@ -3123,7 +3306,8 @@ class _PowermetricsBackend(_EnergyBackend):
                     raise RuntimeError("powermetrics requires sudo. Run: sudo codegreen run ...")
             start = time.perf_counter()
             try:
-                result = subprocess.run(command, capture_output=self._quiet, timeout=timeout)
+                result = subprocess.run(command, capture_output=self._quiet,
+                                        timeout=timeout, stdin=self._stdin())
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"Command timed out after {timeout}s")
             elapsed = time.perf_counter() - start
@@ -3158,10 +3342,11 @@ class _PowermetricsBackend(_EnergyBackend):
 class _TimeOnlyBackend(_EnergyBackend):
     name = "time-only (no energy)"
     def is_available(self) -> bool: return True
-    def measure(self, command: list, timeout: int = 300) -> tuple:
+    def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
         import subprocess, time
         start = time.perf_counter()
-        result = subprocess.run(command, capture_output=self._quiet, timeout=timeout)
+        result = subprocess.run(command, capture_output=self._quiet,
+                                timeout=timeout, stdin=self._stdin())
         elapsed = time.perf_counter() - start
         if result.returncode != 0:
             raise RuntimeError(f"Command failed (exit {result.returncode})")
@@ -3241,21 +3426,122 @@ def _inject_project_runtime(
     return created
 
 
+_NEMB_RESULT_START = "--- CODEGREEN_RESULT_START ---"
+_NEMB_RESULT_END = "--- CODEGREEN_RESULT_END ---"
+
+
+def _stderr_checkpoint_events(path: str, func_data: dict):
+    """Yield `CG_CP|type|name|id|ts|energy_uj|tid` events from a checkpoint file.
+    Pre-aggregated `CG_CP_SUM|tid|name|calls|incl_uj|excl_uj|time_ns` records
+    (Java standalone runtime) are folded straight into func_data."""
+    with open(path) as cf:
+        for line in cf:
+            parts = line.rstrip("\n").split("|")
+            if parts[0] == "CG_CP_SUM" and len(parts) >= 7:
+                d = func_data.setdefault(parts[2], {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
+                d["calls"] += int(parts[3])
+                d["inclusive_uj"] += int(parts[4])
+                d["exclusive_uj"] += int(parts[5])
+                d["time_ns"] += int(parts[6])
+            elif parts[0] == "CG_CP" and len(parts) >= 6:
+                yield parts[1], parts[2], parts[3], int(parts[4]), int(parts[5]), parts[6] if len(parts) > 6 else "0"
+
+
+def _nemb_checkpoint_events(stdout: str, known_ids) -> list:
+    """Per-event checkpoints from the NEMB result block on stdout (C/C++/Python runtimes).
+    Markers are `type:name:id#inv_N_t<thread>` with cumulative joules. The language
+    runtime and NEMB's own atexit may both print the same data, so the largest block
+    is used, never a sum. Names may contain ':' (C++ scopes), so the id is the
+    suffix that matches an instrumented checkpoint id."""
+    blocks = [json.loads(chunk.split(_NEMB_RESULT_END, 1)[0]) for chunk in stdout.split(_NEMB_RESULT_START)[1:]]
+    measurements = max((b.get("measurements", []) for b in blocks), key=len, default=[])
+    splits, events = {}, []
+    for m in measurements:
+        marker, sep, inv = m["checkpoint_id"].rpartition("#inv_")
+        if not sep:
+            raise ValueError(f"NEMB checkpoint without invocation suffix: {m['checkpoint_id']!r}")
+        cp_type, _, rest = marker.partition(":")
+        if rest not in splits:
+            splits[rest] = next(((rest[:i], rest[i + 1:]) for i, c in enumerate(rest)
+                                 if c == ":" and rest[i + 1:] in known_ids), rest.rpartition(":")[::2])
+        name, cp_id = splits[rest]
+        events.append((cp_type, name, cp_id, int(m["timestamp"]), round(m["joules"] * 1e6), inv.rpartition("_t")[2]))
+    events.sort(key=lambda e: e[3])
+    return events
+
+
+def _device_sync_count(stdout: str) -> int:
+    """Device synchronisations the Python runtime performed, from its result block."""
+    return sum(json.loads(chunk.split(_NEMB_RESULT_END, 1)[0]).get("device_sync", {}).get("syncs", 0)
+               for chunk in stdout.split(_NEMB_RESULT_START)[1:])
+
+
+def _replay_checkpoint_events(events, func_data: dict) -> set:
+    """Replay enter/exit events on per-thread call stacks into func_data
+    (name -> inclusive_uj, exclusive_uj, time_ns, calls). Exits without a
+    matching frame are ignored; abandoned inner frames are unwound. Returns the
+    (name, checkpoint_id) pairs seen."""
+    stacks, seen = {}, set()
+    for cp_type, name, cp_id, ts, energy, tid in events:
+        seen.add((name, cp_id))
+        d = func_data.setdefault(name, {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
+        stack = stacks.setdefault(tid, [])
+        if cp_type == "enter":
+            stack.append([name, ts, energy, 0])
+            continue
+        if cp_type != "exit":
+            continue
+        idx = next((i for i in range(len(stack) - 1, -1, -1) if stack[i][0] == name), None)
+        if idx is None:
+            continue
+        frame = stack[idx]
+        del stack[idx:]
+        dt, inclusive = ts - frame[1], energy - frame[2]
+        if dt > 0 and inclusive >= 0:
+            d["inclusive_uj"] += inclusive
+            d["exclusive_uj"] += max(inclusive - frame[3], 0)
+            d["time_ns"] += dt
+            d["calls"] += 1
+            if stack:
+                stack[-1][3] += inclusive
+    return seen
+
+
 def _find_source_roots(file_paths, proj_cfg: dict) -> set:
     """Find source root directories from file paths using config-driven markers.
-    Reads source_root_markers from project_config (e.g., ["src/main/java"] for Java)."""
+    Reads source_root_markers from project_config (e.g., ["src/main/java"] for Java).
+
+    Fallback for flat single-file projects (e.g. CLBG, HeCBench kernels,
+    one-off Python scripts) where no Maven/Gradle/SBT marker matches:
+    use the directory containing the instrumented file as the root.
+    Without this fallback, the runtime source-copy step is a no-op and
+    the user's build_cmd fails with `cannot find symbol:
+    variable CodeGreenStandaloneRuntime`."""
     markers = proj_cfg.get("source_root_markers", ["src"])
     roots = set()
+    unmatched = []
     for f in file_paths:
-        path_str = str(Path(f))
+        matched = False
         for marker in markers:
             marker_parts = marker.split("/")
             parts = Path(f).parts
-            # Find the marker sequence in path parts
             for i in range(len(parts) - len(marker_parts) + 1):
                 if list(parts[i:i+len(marker_parts)]) == marker_parts:
                     roots.add(Path(*parts[:i+len(marker_parts)]))
+                    matched = True
                     break
+            if matched:
+                break
+        if not matched:
+            unmatched.append(f)
+    # Flat-layout fallback: every instrumented file whose path didn't
+    # match any marker contributes its parent dir as a root. We do this
+    # only when NO file matched any marker (so well-formed Maven/Gradle
+    # repos that have one stray script don't accidentally get an
+    # extra root).
+    if not roots and unmatched:
+        for f in unmatched:
+            roots.add(Path(f).parent)
     return roots
 
 
@@ -3270,19 +3556,178 @@ def _rewrite_instrumented_for_standalone(code: str, rt_cfg: dict) -> str:
     return code
 
 
+@app.command("monitor", rich_help_panel="Measurement")
+def monitor_energy(
+    duration: Annotated[Optional[float], typer.Option("--duration", "-d", help="Stop after N seconds (default: run until Ctrl-C)")] = None,
+    interval: Annotated[Optional[int], typer.Option("--interval", "-i", help="Sample period in ms (config floor enforced)")] = None,
+    pid: Annotated[Optional[int], typer.Option("--pid", "-p", help="Attribute energy to this process via CPU% share")] = None,
+    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Stream samples as JSON-lines to this file")] = None,
+    rotate_mb: Annotated[Optional[int], typer.Option("--rotate-mb", help="Rotate JSONL when it exceeds N MB (0 = disabled)")] = None,
+    max_in_memory: Annotated[Optional[int], typer.Option("--max-in-memory", help="Bound in-memory sample deque (0 = drop when -o set)")] = None,
+    max_labels: Annotated[Optional[int], typer.Option("--max-labels", help="Cap distinct annotation labels; overflow collapses into __other__ bucket (0 = unlimited)")] = None,
+    listen_socket: Annotated[Optional[str], typer.Option("--listen-on-socket", help="Bind a UDS for request-annotation events ('default' = per-user path, see annotate_request)")] = None,
+    attribution_mode: Annotated[Optional[str], typer.Option("--attribution-mode", help="PID share backend: auto|cgroup_v2|cgroup_v1|cpu_percent (default: auto)")] = None,
+    exporter: Annotated[Optional[List[str]], typer.Option("--exporter", help="Enable a telemetry exporter sink (repeatable). Known: otlp, prometheus. Requires `pip install codegreen\\[otlp]` for OTLP or `codegreen\\[prometheus]` for Prometheus.")] = None,
+    otlp_endpoint: Annotated[Optional[str], typer.Option("--otlp-endpoint", help="OTLP/gRPC collector endpoint (overrides monitor.exporters.otlp.endpoint)")] = None,
+    prometheus_port: Annotated[Optional[int], typer.Option("--prometheus-port", help="Prometheus /metrics port (overrides monitor.exporters.prometheus.port). 0 = ephemeral.")] = None,
+    prometheus_listen_addr: Annotated[Optional[str], typer.Option("--prometheus-listen-addr", help="Prometheus bind address (overrides monitor.exporters.prometheus.listen_addr). Default 127.0.0.1; non-loopback emits a runtime warning.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print final summary as JSON")] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Suppress live sample output")] = False,
+):
+    """[bold]Continuously sample[/bold] system energy without launching a workload.
+
+    Use this for already-running services (web servers, daemons) where the
+    Session API cannot be embedded. Samples cumulative energy from the NEMB
+    backend at fixed intervals; optionally attributes a share to a target PID
+    or per-request via the UDS annotation channel.
+
+    [bold]Examples:[/bold]
+    - [cyan]codegreen monitor -d 30[/cyan] - sample for 30 seconds
+    - [cyan]codegreen monitor --pid 1234 -o energy.jsonl[/cyan] - attribute to PID
+    - [cyan]codegreen monitor -i 1000 -d 3600[/cyan] - 1Hz sampling for 1 hour
+    - [cyan]codegreen monitor --listen-on-socket default -o energy.jsonl[/cyan]
+      - accept request annotations from a Flask/Django/FastAPI middleware
+    - [cyan]codegreen monitor --max-labels 1000[/cyan]
+      - cap distinct labels at 1000; overflow collapses to `__other__`
+
+    [bold]Signals:[/bold] SIGINT/SIGTERM stop cleanly (summary flushed).
+    SIGHUP re-reads `monitor.*` from config.json and hot-applies
+    `--interval`, `--rotate-mb`, `--max-in-memory`, `--max-labels`
+    without dropping in-flight annotations or the open JSONL position.
+    """
+    from codegreen import Monitor
+    import signal
+
+    def _fail(msg: str) -> None:
+        rec = {"success": False, "error": msg}
+        if json_output:
+            print(json.dumps(rec), file=sys.stderr)
+        else:
+            print(f"error: {msg}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    exporters_req = list(exporter) if exporter else None
+    exporter_overrides: Dict[str, Dict[str, Any]] = {}
+    if otlp_endpoint:
+        exporter_overrides["otlp"] = {"endpoint": otlp_endpoint}
+        if not exporters_req or "otlp" not in exporters_req:
+            _fail("--otlp-endpoint requires --exporter otlp")
+    if prometheus_port is not None or prometheus_listen_addr is not None:
+        if not exporters_req or "prometheus" not in exporters_req:
+            _fail("--prometheus-port/--prometheus-listen-addr require --exporter prometheus")
+        prom_over: Dict[str, Any] = {}
+        if prometheus_port is not None:
+            prom_over["port"] = int(prometheus_port)
+        if prometheus_listen_addr is not None:
+            prom_over["listen_addr"] = str(prometheus_listen_addr)
+        exporter_overrides["prometheus"] = prom_over
+    try:
+        mon = Monitor(interval_ms=interval, duration_s=duration, pid=pid,
+                      output_file=str(output) if output else None,
+                      rotate_mb=rotate_mb, max_samples_in_memory=max_in_memory,
+                      listen_socket_path=listen_socket,
+                      attribution_mode=attribution_mode,
+                      max_labels=max_labels,
+                      exporters=exporters_req,
+                      exporter_overrides=exporter_overrides or None)
+    except (ValueError, RuntimeError) as e:
+        _fail(str(e))
+
+    def _on_sigint(signum, frame):
+        mon._stop_evt.set()
+    def _on_sighup(signum, frame):
+        mon.request_reload()
+    signal.signal(signal.SIGINT, _on_sigint)
+    signal.signal(signal.SIGTERM, _on_sigint)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _on_sighup)
+
+    try:
+        mon.start()
+    except (ValueError, RuntimeError) as e:
+        _fail(str(e))
+    eff_interval = int(mon._interval_s * 1000)
+    if not quiet and not json_output:
+        console.print(f"[green]Monitoring[/green] (interval={eff_interval}ms"
+                      + (f", duration={duration}s" if duration else ", press Ctrl-C to stop")
+                      + (f", pid={pid}" if pid else "")
+                      + (f", listen={listen_socket}" if listen_socket else "") + ")")
+
+    if not quiet and not json_output:
+        last_n = 0
+        try:
+            while not mon._stop_evt.is_set() and (mon._thread and mon._thread.is_alive()):
+                time.sleep(min(1.0, mon._interval_s * 2))
+                cur = mon._samples_count
+                if cur > last_n and mon._samples:
+                    s = mon._samples[-1]
+                    extra = f" cpu={s.get('proc_cpu_percent','-')}%" if pid else ""
+                    console.print(f"  t={s['t']:>6.1f}s  dJ={s['joules_delta']:>7.2f}  W={s['watts']:>6.1f}{extra}")
+                    last_n = cur
+        except KeyboardInterrupt:
+            mon._stop_evt.set()
+    else:
+        if mon._thread:
+            mon._thread.join()
+
+    summary = mon.stop()
+    if json_output:
+        print(json.dumps({"success": True, **summary}))
+    else:
+        console.print("\n[bold]Summary[/bold]")
+        console.print(f"  duration: {summary['duration_s']:.2f} s")
+        console.print(f"  total energy: {summary['total_joules']:.3f} J ({summary['total_joules']/3600.0:.4f} Wh)")
+        console.print(f"  avg power: {summary['avg_watts']:.2f} W")
+        console.print(f"  samples: {summary['samples']}")
+        if pid:
+            backend = summary.get("attribution_backend") or "cpu_percent"
+            console.print(f"  pid {pid} attributed: {summary['proc_attributed_joules']:.3f} J [backend={backend}]")
+        if summary.get('terminated_reason'):
+            console.print(f"  [yellow]terminated: {summary['terminated_reason']}[/yellow]")
+        if summary.get("per_label"):
+            console.print(f"  [bold]Per-label[/bold] ({len(summary['per_label'])} groups):")
+            for name, b in summary["per_label"].items():
+                console.print(f"    {name:30s} n={b['count']:>5d} J={b['joules_total']:>8.3f} "
+                              f"p50={b['latency_ms_p50']:>6.1f}ms p95={b['latency_ms_p95']:>6.1f}ms")
+        if output:
+            console.print(f"  samples written: [cyan]{output}[/cyan]")
+
+
+def _remove_injected(path: Path) -> None:
+    """Remove an injected runtime file or empty dir, and a Python module's
+    bytecode caches (__pycache__/<stem>.*.pyc): importing the injected
+    runtime writes one, which outlived the .py it came from."""
+    if path.is_file():
+        path.unlink()
+        if path.suffix == ".py":
+            for pyc in (path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"):
+                pyc.unlink()
+    elif path.is_dir() and not any(path.iterdir()):
+        path.rmdir()
+
+
 @app.command("project", rich_help_panel="Measurement")
 def project_energy(
     language: Annotated[Language, typer.Argument(help="Project language")],
     project_dir: Annotated[Path, typer.Argument(help="Project root directory")],
     build_cmd: Annotated[str, typer.Option("--build-cmd", "-b", help="Build command (e.g., 'mvn package -DskipTests')")] = "",
     run_cmd: Annotated[str, typer.Option("--run-cmd", "-r", help="Run command (e.g., 'java -jar target/benchmarks.jar')")] = "",
-    source_glob: Annotated[str, typer.Option("--source-glob", "-s", help="Source file glob pattern")] = "",
+    source_glob: Annotated[Optional[List[str]], typer.Option("--source-glob", "-s", help="Source file glob pattern (repeatable)")] = None,
     granularity: Annotated[Granularity, typer.Option("--granularity", "-g", help="Instrumentation level")] = Granularity.fine,
     cores: Annotated[str, typer.Option("--cores", help="CPU cores for taskset (e.g., '0-7')")] = "",
     repeat: Annotated[int, typer.Option("--repeat", "-n", help="Measurement repetitions")] = 1,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup", help="Keep instrumented files")] = False,
     output_dir: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output directory for results")] = None,
+    sync_device: Annotated[str, typer.Option("--sync-device", help=(
+        "Accelerator to synchronise at every probe (python: cuda). Kernel launches are asynchronous, so without this "
+        "a frame's interval covers launch time only and GPU energy lands outside every function. With it, "
+        "torch.cuda.synchronize() runs before each enter/exit timestamp, so a frame owns the device work it launched. "
+        "Costs one device drain per probe (no CPU/GPU overlap): wall time and total energy of the profiled run differ "
+        "from an unsynchronised run. Fails if no synchronisation ran. Off by default."))] = "",
+    min_attribution_pct: Annotated[float, typer.Option("--min-attribution-pct", help=(
+        "Floor for attribution_pct (exclusive function energy / total run energy). Below it the result carries an "
+        "attribution_warning: per-function shares are relative to the attributed energy only and are not meaningful."))] = 25.0,
 ):
     """Profile a project's energy consumption with per-function attribution.
 
@@ -3300,6 +3745,11 @@ def project_energy(
     """
     import subprocess, time, re, shutil, glob as globmod, tempfile
 
+    if not _NEMBBackend().is_available():
+        console.print("[red]codegreen project needs the NEMB native measurement library, which this install lacks "
+                      "(a source build without cmake and a C++ compiler installs Python-only). Install a prebuilt "
+                      "wheel or reinstall with cmake and a compiler available.[/red]")
+        raise typer.Exit(1)
     project_dir = project_dir.resolve()
     if not project_dir.exists():
         console.print(f"[red]Project directory not found: {project_dir}[/red]")
@@ -3310,7 +3760,7 @@ def project_energy(
     proj_cfg = _lang_config.get("project_config", {})
 
     # Source discovery: use config patterns or CLI override
-    source_patterns = [source_glob] if source_glob else proj_cfg.get("source_patterns", [f"**/*{_lang_config['extensions'][0]}"])
+    source_patterns = list(source_glob) if source_glob else proj_cfg.get("source_patterns", [f"**/*{_lang_config['extensions'][0]}"])
     exclude_patterns = proj_cfg.get("exclude_patterns", [])
 
     # Build system auto-detection from config
@@ -3330,6 +3780,10 @@ def project_energy(
     if not run_cmd:
         console.print("[red]--run-cmd is required (the command to execute the benchmark)[/red]")
         raise typer.Exit(1)
+    if sync_device and sync_device not in proj_cfg.get("device_sync", []):
+        console.print(f"[red]--sync-device {sync_device!r} unsupported for {language.value}; "
+                      f"supported: {proj_cfg.get('device_sync', [])}[/red]")
+        raise typer.Exit(1)
 
     if output_dir:
         output_dir = output_dir.resolve()
@@ -3338,6 +3792,18 @@ def project_energy(
     # ==========================================
     # PRE-CLEANUP: Detect and remove stale instrumented files from previous runs
     # ==========================================
+    _backup_dir = project_dir / ".codegreen_backup"
+    if (_backup_dir / "manifest.json").exists():
+        manifest = json.loads((_backup_dir / "manifest.json").read_text())
+        for fpath, copy in manifest.items():
+            Path(fpath).write_text((_backup_dir / copy).read_text(encoding="utf-8"), encoding="utf-8")
+        injected = (json.loads((_backup_dir / "runtime.json").read_text())
+                    if (_backup_dir / "runtime.json").exists() else [])
+        for rf in map(Path, reversed(injected)):
+            _remove_injected(rf)
+        shutil.rmtree(_backup_dir)
+        if not json_output and manifest:
+            console.print(f"  [yellow]Restored {len(manifest)} files left instrumented by an interrupted run[/yellow]")
     _stale_marker = project_dir / ".codegreen_instrumented"
     if _stale_marker.exists():
         stale_files = _stale_marker.read_text().strip().splitlines()
@@ -3366,12 +3832,22 @@ def project_energy(
     extensions = set(_lang_config.get("extensions", []))
     source_files_set = set()
     for pattern in source_patterns:
-        # Path.rglob handles ** patterns natively
-        clean = pattern.lstrip("**/") if pattern.startswith("**/") else pattern
+        # Globs are project-relative (Path.rglob rejects absolute patterns); an
+        # absolute pattern inside the project is taken relative to it.
+        if Path(pattern).is_absolute():
+            if not Path(pattern).is_relative_to(project_dir.resolve()):
+                console.print(f"[red]--source-glob {pattern} is outside {project_dir}[/red]")
+                raise typer.Exit(1)
+            pattern = str(Path(pattern).relative_to(project_dir.resolve()))
+        clean = pattern.removeprefix("**/")
         for f in project_dir.rglob(clean):
             if f.is_file() and f.suffix in extensions:
                 source_files_set.add(f)
-    # If no pattern matched, fall back to finding all files by extension
+    # An explicit --source-glob that matches nothing is a caller error; widening
+    # to every source file would silently instrument (and slow) the whole project.
+    if not source_files_set and source_glob:
+        console.print(f"[red]--source-glob {list(source_glob)} matched no {language.value} files in {project_dir}[/red]")
+        raise typer.Exit(1)
     if not source_files_set:
         for ext in extensions:
             source_files_set.update(project_dir.rglob(f"*{ext}"))
@@ -3444,9 +3920,14 @@ def project_energy(
         except Exception:
             pass
 
+    skipped_functions = [{"file": str(f), **s} for f, d in analysis_results.items()
+                         for s in d["result"].metadata.get("skipped_functions", [])]
     if not json_output:
         console.print(f"  Instrumentable files: {len(analysis_results)}/{len(source_files)}")
         console.print(f"  Total instrumentation points: {total_points}")
+        if skipped_functions:
+            console.print(f"  [yellow]Not instrumented: {len(skipped_functions)} functions cannot hold a frame "
+                          f"(first: {skipped_functions[0]['function']}: {skipped_functions[0]['reason']})[/yellow]")
 
     if not analysis_results:
         console.print("[red]No instrumentable code found[/red]")
@@ -3475,9 +3956,22 @@ def project_energy(
     if not json_output:
         console.print(f"\n[bold cyan]Phase 2: Instrumenting and building...[/bold cyan]")
 
-    # Create backup of original files
+    # Originals are kept in memory for the normal restore and copied under
+    # .codegreen_backup/ before any file is rewritten, so a run killed before
+    # its `finally` (SIGKILL, power loss) is restored at the next run with or
+    # without git. SIGTERM/SIGHUP are turned into SystemExit so `finally` runs:
+    # a campaign stopped mid-profiling left 52 instrumented RoaringBitmap files.
+    import signal as _signal
     backups = {}
     runtime_files_created = []
+    backup_dir = project_dir / ".codegreen_backup"
+    backup_dir.mkdir(exist_ok=True)
+    backup_manifest: Dict[str, str] = {}
+
+    def _exit_on_signal(signum, frame):
+        raise SystemExit(128 + signum)
+    _prev_handlers = {s: _signal.signal(s, _exit_on_signal)
+                      for s in (_signal.SIGTERM, getattr(_signal, "SIGHUP", _signal.SIGTERM))}
 
     try:
         # Instrument each file in-place
@@ -3487,12 +3981,17 @@ def project_energy(
             if _is_runtime_file(src_file):
                 continue
             try:
-                instrumented = engine.instrument_code(data["code"], data["points"], language.value)
-                if instrumented and instrumented != data["code"]:
+                _ns = data["result"].metadata.get("normalised_source", data["code"]) if hasattr(data.get("result"), "metadata") else data["code"]
+                instrumented = engine.instrument_code(_ns, data["points"], language.value, pre_normalised_source=_ns)
+                if instrumented and instrumented != _ns:
                     # Rewrite for standalone runtime if config specifies rewrites
                     rt_cfg = proj_cfg.get("runtime_injection", {})
                     instrumented = _rewrite_instrumented_for_standalone(instrumented, rt_cfg)
                     backups[src_file] = data["code"]
+                    copy = backup_dir / f"{len(backup_manifest)}.orig"
+                    copy.write_text(data["code"], encoding="utf-8")
+                    backup_manifest[str(src_file)] = copy.name
+                    (backup_dir / "manifest.json").write_text(json.dumps(backup_manifest))
                     src_file.write_text(instrumented, encoding='utf-8')
                     instrumented_count += 1
             except Exception as e:
@@ -3508,6 +4007,7 @@ def project_energy(
 
         # Inject runtime module ONLY into source roots that have instrumented files
         runtime_files_created = _inject_project_runtime(proj_cfg, backups, project_dir)
+        (backup_dir / "runtime.json").write_text(json.dumps([str(f) for f in runtime_files_created]))
         if not json_output and runtime_files_created:
             console.print(f"  Runtime files injected: {len([f for f in runtime_files_created if isinstance(f, Path) and f.is_file()])}")
 
@@ -3532,6 +4032,17 @@ def project_energy(
         if not json_output:
             console.print(f"\n[bold cyan]Phase 3: Measuring energy...[/bold cyan]")
 
+        # Runtimes copied into the project cannot locate the NEMB library or the
+        # package config relative to themselves; point them at the install.
+        _, nemb_lib_dir = _get_c_runtime_paths()
+        run_env = dict(os.environ)
+        run_env.setdefault("CODEGREEN_INSTALL_DIR", str(Path(__file__).resolve().parents[2]))
+        run_env.setdefault("CODEGREEN_LIB_PATH", str(nemb_lib_dir))
+        run_env.pop("CODEGREEN_SYNC_DEVICE", None)
+        if sync_device:
+            run_env["CODEGREEN_SYNC_DEVICE"] = sync_device
+        run_env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            filter(None, [str(nemb_lib_dir), os.environ.get("LD_LIBRARY_PATH")]))
         all_runs = []
         for run_idx in range(repeat):
             if not json_output and repeat > 1:
@@ -3543,89 +4054,46 @@ def project_energy(
                 full_cmd = f"taskset -c {cores} {full_cmd}"
 
             energy_backend = _get_energy_backend()
-            energy_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
             checkpoint_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+            # Java runtimes append their per-JVM aggregates here (every forked
+            # JVM of the run, e.g. JMH forks); stderr carries per-event lines.
+            sum_file = tempfile.NamedTemporaryFile(suffix='.sum', delete=False).name
+            # Capture bytes: workloads like Mandelbrot write binary stdout.
+            run_result, total_energy_j, wall_time = energy_backend.run_project(
+                full_cmd, str(project_dir), checkpoint_file,
+                {**run_env, "CG_CP_CHECKPOINT_FILE": sum_file})
+            run_result.stdout = (run_result.stdout or b"").decode("utf-8", errors="replace")
+            run_result.stderr = (run_result.stderr or b"").decode("utf-8", errors="replace")
 
-            wrapped = energy_backend.wrap_command(full_cmd, energy_file, checkpoint_file)
-            start_time = time.perf_counter()
-            run_result = subprocess.run(
-                wrapped, shell=True, cwd=str(project_dir),
-                capture_output=True, text=True, timeout=3600)
-            wall_time = time.perf_counter() - start_time
-
-            total_energy_j = energy_backend.parse_energy(energy_file)
-            try:
-                os.unlink(energy_file)
-            except OSError:
-                pass
-
-            # Parse checkpoints with per-thread call stacks for inclusive/exclusive
+            # Checkpoints arrive on stderr as CG_CP / CG_CP_SUM (Java standalone
+            # runtime) or on stdout as the NEMB result block (C/C++/Python).
             func_data = {}  # name -> {inclusive_uj, exclusive_uj, time_ns, calls}
-            thread_stacks = {}  # tid -> [(name, enter_ts, enter_energy, callee_energy_sum)]
             try:
-                with open(checkpoint_file) as cf:
-                    for line in cf:
-                        if not line.startswith("CG_CP|"):
-                            continue
-                        parts = line.strip().split("|")
-                        if len(parts) < 6:
-                            continue
-                        cp_type, cp_name = parts[1], parts[2]
-                        cp_id_str = parts[3] if len(parts) > 3 else ""
-                        cp_ts, cp_energy = int(parts[4]), int(parts[5])
-                        cp_tid = int(parts[6]) if len(parts) > 6 else 0
-
-                        # Resolve file from checkpoint_id (authoritative mapping)
-                        cp_file = checkpoint_id_to_file.get(cp_id_str, "")
-                        if cp_file:
-                            func_file_map[cp_name] = cp_file
-
-                        if cp_name not in func_data:
-                            func_data[cp_name] = {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0}
-
-                        if cp_tid not in thread_stacks:
-                            thread_stacks[cp_tid] = []
-                        stack = thread_stacks[cp_tid]
-
-                        if cp_type == "enter":
-                            stack.append([cp_name, cp_ts, cp_energy, 0])
-                        elif cp_type == "exit" and stack:
-                            # Pop matching frame (handle missing exits via stack search)
-                            frame = stack[-1]
-                            if frame[0] == cp_name:
-                                stack.pop()
-                            else:
-                                # Search for matching frame, unwinding abandoned frames
-                                found = False
-                                for si in range(len(stack) - 1, -1, -1):
-                                    if stack[si][0] == cp_name:
-                                        frame = stack[si]
-                                        del stack[si:]
-                                        found = True
-                                        break
-                                if not found:
-                                    continue
-
-                            dt = cp_ts - frame[1]
-                            inclusive = cp_energy - frame[2]
-                            callee_sum = frame[3]
-                            if dt > 0 and inclusive >= 0:
-                                exclusive = max(inclusive - callee_sum, 0)
-                                func_data[cp_name]["inclusive_uj"] += inclusive
-                                func_data[cp_name]["exclusive_uj"] += exclusive
-                                func_data[cp_name]["time_ns"] += dt
-                                func_data[cp_name]["calls"] += 1
-                                # Propagate inclusive to parent's callee_sum
-                                if stack:
-                                    stack[-1][3] += inclusive
-            except Exception:
-                pass
+                seen = _replay_checkpoint_events(itertools.chain(
+                    _stderr_checkpoint_events(checkpoint_file, func_data),
+                    _stderr_checkpoint_events(sum_file, func_data)), func_data)
+                if not func_data:
+                    seen = _replay_checkpoint_events(
+                        _nemb_checkpoint_events(run_result.stdout, checkpoint_id_to_file), func_data)
+                stderr_tail = Path(checkpoint_file).read_text(errors="replace")[-500:]
             finally:
-                if not no_cleanup:
-                    os.unlink(checkpoint_file)
-                elif output_dir:
+                if no_cleanup and output_dir:
                     shutil.copy2(checkpoint_file, str(output_dir / f"checkpoints_run{run_idx}.txt"))
-                    os.unlink(checkpoint_file)
+                    shutil.copy2(sum_file, str(output_dir / f"checkpoints_run{run_idx}.sum"))
+                os.unlink(checkpoint_file)
+                os.unlink(sum_file)
+            for cp_name, cp_id in seen:
+                if cp_id in checkpoint_id_to_file:
+                    func_file_map[cp_name] = checkpoint_id_to_file[cp_id]
+            if not func_data:
+                console.print(f"[red]No checkpoint records captured from {total_points} instrumented points "
+                              f"(exit {run_result.returncode}).[/red]")
+                console.print(stderr_tail)
+                raise typer.Exit(1)
+            if sync_device and not _device_sync_count(run_result.stdout):
+                console.print(f"[red]--sync-device {sync_device}: no device synchronisation ran in the profiled run "
+                              f"(the workload never initialised {sync_device}); attribution would be unsynchronised.[/red]")
+                raise typer.Exit(1)
 
             # Compute per-function metrics (inclusive + exclusive)
             func_energy = {}
@@ -3666,21 +4134,29 @@ def project_energy(
                     "energy_per_call_uj": round(data["inclusive_uj"] / calls, 2) if calls > 0 else 0,
                 }
 
+            attribution_pct = round(total_exclusive / 1e6 / total_energy_j * 100, 1) if total_energy_j > 0 else 0
             all_runs.append({
                 "run_idx": run_idx,
                 "total_energy_j": round(total_energy_j, 4),
                 "wall_time_s": round(wall_time, 3),
                 "avg_power_w": round(total_energy_j / wall_time, 2) if wall_time > 0 else 0,
-                "attributed_energy_j": round(total_inclusive / 1e6, 4),
+                "attributed_energy_j": round(total_exclusive / 1e6, 4),
                 "exclusive_energy_j": round(total_exclusive / 1e6, 4),
-                "attribution_pct": round(total_inclusive / 1e6 / total_energy_j * 100, 1) if total_energy_j > 0 else 0,
+                # Exclusive energy partitions the run; inclusive double-counts nested calls.
+                "attribution_pct": attribution_pct,
+                "attribution_warning": None if attribution_pct >= min_attribution_pct else {
+                    "code": "LOW_ATTRIBUTION", "attribution_pct": attribution_pct, "floor_pct": min_attribution_pct,
+                    "sync_device": sync_device,
+                    "message": f"instrumented functions cover {attribution_pct}% of run energy (floor {min_attribution_pct}%); "
+                               "per-function shares are relative to the attributed energy only"},
                 "functions": func_energy,
                 "total_checkpoints": sum(d["calls"] * 2 for d in func_data.values()),
             })
 
             if not json_output:
+                pct_str = f"{total_exclusive/1e6/total_energy_j*100:.0f}%" if total_energy_j > 0 else "n/a"
                 console.print(f"    Energy: {total_energy_j:.2f} J, "
-                              f"Attributed: {total_inclusive/1e6:.2f} J ({total_inclusive/1e6/total_energy_j*100:.0f}%), "
+                              f"Attributed: {total_exclusive/1e6:.2f} J ({pct_str}), "
                               f"Functions: {len(func_energy)}")
 
             # Cooldown between runs
@@ -3709,6 +4185,10 @@ def project_energy(
                     "source_files": len(source_files),
                     "instrumented_files": instrumented_count,
                     "total_points": total_points,
+                    "skipped_functions": skipped_functions,
+                    "sync_device": sync_device,
+                    "attribution_pct": all_runs[-1]["attribution_pct"],
+                    "attribution_warning": all_runs[-1]["attribution_warning"],
                     "runs": all_runs,
                     "hotspots": [{"rank": i+1, "function": name, **data}
                                  for i, (name, data) in enumerate(hotspots[:20])],
@@ -3718,6 +4198,8 @@ def project_energy(
                 console.print(f"\n[bold green]Results[/bold green]")
                 console.print(f"  Total energy: {avg_energy:.2f} J (avg over {len(all_runs)} runs)")
                 console.print(f"  Functions profiled: {len(last_funcs)}")
+                if all_runs[-1]["attribution_warning"]:
+                    console.print(f"  [yellow]WARNING {all_runs[-1]['attribution_warning']['message']}[/yellow]")
                 console.print(f"\n[bold]Top hotspots by exclusive energy:[/bold]")
                 console.print(f"  {'Rank':<5} {'Function':<35} {'Excl%':>7} {'Incl%':>7} {'Self':>6} "
                               f"{'Verdict':>8} {'Calls':>8} {'uJ/call':>10}")
@@ -3737,23 +4219,28 @@ def project_energy(
                     console.print(f"\n  Results saved to: {output_dir / 'project_results.json'}")
 
     finally:
+        for _s, _h in _prev_handlers.items():
+            _signal.signal(_s, _h)
         # ==========================================
         # CLEANUP: Restore original files
         # ==========================================
         if not no_cleanup:
+            unrestored = []
             for src_file, original_code in backups.items():
                 try:
                     src_file.write_text(original_code, encoding='utf-8')
-                except Exception:
-                    pass
+                except OSError as e:
+                    unrestored.append(f"{src_file}: {e}")
+            if unrestored:
+                print(f"codegreen: could not restore {len(unrestored)} files; originals kept in "
+                      f"{backup_dir}: {unrestored[:3]}", file=sys.stderr)
+            else:
+                shutil.rmtree(backup_dir, ignore_errors=True)
             for rf in reversed(runtime_files_created):
                 try:
-                    if rf.is_file():
-                        rf.unlink()
-                    elif rf.is_dir() and not any(rf.iterdir()):
-                        rf.rmdir()
-                except Exception:
-                    pass
+                    _remove_injected(rf)
+                except OSError as e:
+                    print(f"codegreen: could not remove injected {rf}: {e}", file=sys.stderr)
             # Remove stale artifact marker
             _marker = project_dir / ".codegreen_instrumented"
             if _marker.exists():
@@ -3767,6 +4254,36 @@ def project_energy(
                 console.print(f"  [dim]  1. {proj_cfg.get('build_systems', {}).get(list(proj_cfg.get('build_systems', {}).keys() or [''])[0], {}).get('build_cmd', 'Build the project')}[/dim]")
                 console.print(f"  [dim]  2. Run your benchmark, capturing stderr: <cmd> 2>checkpoints.txt[/dim]")
                 console.print(f"  [dim]  3. Restore with: git checkout -- {project_dir}[/dim]")
+
+
+@app.command("timeline", rich_help_panel="Measurement")
+def timeline_cmd(
+    out: Annotated[Path, typer.Option("--out", help="Perfetto/Chrome trace JSON to write (ui.perfetto.dev)")],
+    nemb: Annotated[Optional[Path], typer.Option("--nemb", help="NEMB time series JSON (power + cumulative energy)")] = None,
+    jfr: Annotated[Optional[Path], typer.Option("--jfr", help="`jfr print --json` output (stacks, GC, allocation)")] = None,
+    jfr_offset_ns: Annotated[int, typer.Option(help="monotonic minus realtime ns taken during the run")] = 0,
+    torch_trace: Annotated[Optional[Path], typer.Option("--torch", help="torch.profiler Chrome trace JSON")] = None,
+    torch_offset_ns: Annotated[int, typer.Option(help="ns added to Kineto ts to reach the monotonic clock")] = 0,
+    rel_change: Annotated[float, typer.Option(help="power change (fraction) that starts a phase")] = 0.2,
+    confirm: Annotated[int, typer.Option(help="consecutive samples confirming a phase change")] = 3,
+    gap_min_us: Annotated[float, typer.Option(help="GPU idle gap counted above this length")] = 10.0,
+    launch_bound_frac: Annotated[float, typer.Option(help="gap share covered by CUDA launches to call it launch-bound")] = 0.8,
+):
+    """One time axis for a run: power, CPU stacks, GC, allocation and GPU kernels,
+    exported for ui.perfetto.dev plus a phase and bottleneck summary."""
+    from codegreen.analysis import timeline as tl
+    if not (nemb or jfr or torch_trace):
+        raise typer.BadParameter("give at least one of --nemb, --jfr, --torch")
+    tr = tl.Trace()
+    if nemb:
+        tr = tr.merge(tl.from_nemb(json.loads(nemb.read_text())))
+    if jfr:
+        tr = tr.merge(tl.from_jfr(json.loads(jfr.read_text()), jfr_offset_ns))
+    if torch_trace:
+        tr = tr.merge(tl.from_torch(json.loads(torch_trace.read_text()), torch_offset_ns))
+    out.write_text(json.dumps(tl.to_perfetto(tr)))
+    print(json.dumps(tl.analyze(tr, rel_change=rel_change, confirm=confirm, gap_min_ns=int(gap_min_us * 1000),
+                                launch_bound_frac=launch_bound_frac), indent=2, default=str))
 
 
 @app.command("validate-accuracy", hidden=True, rich_help_panel="Validation")

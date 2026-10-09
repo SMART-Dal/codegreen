@@ -1,17 +1,17 @@
-include README.md
-include LICENSE
-include requirements.txt
-include pyproject.toml
-include CMakeLists.txt
-include setup.py
+include README.md LICENSE requirements.txt pyproject.toml CMakeLists.txt setup.py
+include config/codegreen.json
 
-recursive-include src *.py *.cpp *.c *.h *.hpp *.json
-recursive-include src/measurement *.cpp *.h *.hpp CMakeLists.txt
-recursive-include src/instrumentation *.py *.json *.h
-recursive-include third_party *.c *.h CMakeLists.txt
+recursive-include codegreen/measurement CMakeLists.txt *.cpp *.c *.h *.hpp
+recursive-include codegreen/instrumentation/language_runtimes *.py *.h *.hpp *.java
+recursive-include codegreen/instrumentation/configs *.json
+include codegreen/config.json
 
 global-exclude *.pyc
 global-exclude __pycache__
 global-exclude *.so
+global-exclude *.dylib
+global-exclude *.dll
+global-exclude *.jar
+global-exclude *.class
 global-exclude .DS_Store
 global-exclude *.o

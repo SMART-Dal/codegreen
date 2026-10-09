@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=64", "wheel", "cmake>=3.16"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "codegreen"
-version = "0.4.8"
+version = "0.4.9"
 description = "Know the true energy cost of your code"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -48,7 +48,8 @@ dependencies = [
     "packaging>=21.0",
     "markdown-it-py>=3.0.0,<4.0.0",
     "tree-sitter>=0.21,<0.26",
-    "tree-sitter-language-pack>=0.7,<1.0"
+    "tree-sitter-language-pack>=0.7,<1.0",
+    "tree-sitter-java>=0.23,<0.24"
 ]
 
 [project.optional-dependencies]

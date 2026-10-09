@@ -7,8 +7,8 @@ authors:
 - family-names: Sharma
   given-names: Tushar
 title: "CodeGreen: Towards Improving Precision and Portability in Software Energy Measurement"
-version: v0.3.16
-date-released: 2026-04-04
+version: v0.4.9
+date-released: 2026-10-09
 url: "https://smart-dal.github.io/codegreen/"
 doi: 10.5281/zenodo.18371772
 keywords:

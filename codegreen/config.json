@@ -72,6 +72,7 @@
       "iso_timestamp_format": "rfc3339_utc",
       "run_id_bytes": 6,
       "outlier_method": "iqr_1.5",
+      "timeseries_clock_override": "",
       "noise_warning": {
         "within_task_power_cv_pct_threshold": 10.0,
         "sampling_drop_ratio_threshold": 0.20,
@@ -164,6 +165,66 @@
       "extensions": [
         ".java"
       ]
+    }
+  },
+  "monitor": {
+    "_comment": "Long-running Monitor knobs. Config-driven, no magic numbers in code. Defaults match the v0.4.9 behavior except for the bounded in-memory buffer and rotation, which are noise-reduction features for always-on use.",
+    "interval_ms_default": 500,
+    "interval_ms_min": 50,
+    "interval_ms_warn_below": 100,
+    "max_samples_in_memory": 10000,
+    "rotate_mb_default": 0,
+    "rotate_max_backups": 5,
+    "attribution": {
+      "_comment": "Per-process energy share. cgroup_v2 reads cpu.stat (usage_usec); cgroup_v1 reads cpuacct.usage (ns); cpu_percent uses psutil. auto picks the most accurate available backend at start(). Order: cgroup_v2 > cgroup_v1 > cpu_percent.",
+      "mode_default": "auto",
+      "cgroup_root": "/sys/fs/cgroup",
+      "cgroup_unified_root": "/sys/fs/cgroup/unified",
+      "allow_cgroup_v1": true
+    },
+    "annotation": {
+      "socket_path_default": "",
+      "max_label_count": 64,
+      "max_label_chars": 256,
+      "summary_top_labels": 50,
+      "listener_backlog": 16,
+      "recv_buf_bytes": 65536,
+      "max_labels": 1000,
+      "overflow_bucket": "__other__"
+    },
+    "exporters": {
+      "_comment": "External sink configuration. Each sink reads its own subtree. CLI flag `--exporter NAME` enables a sink (repeatable). OTLP requires `pip install codegreen[otlp]`; missing deps fail loud at start() — no silent no-op. Cardinality bound for OTLP labels = monitor.annotation.max_labels (single source of truth).",
+      "otlp": {
+        "enabled": false,
+        "endpoint": "http://localhost:4317",
+        "protocol": "grpc",
+        "headers": {},
+        "timeout_s": 10,
+        "queue_size": 10000,
+        "batch_size": 128,
+        "export_interval_ms": 1000,
+        "tls": {
+          "ca_file": "",
+          "cert_file": "",
+          "key_file": ""
+        }
+      },
+      "prometheus": {
+        "_comment": "Prometheus pull endpoint (Sink ABC, D5). Default bind is loopback for privacy; set listen_addr to expose externally + use auth_token for compliance. Optional dependency: `pip install codegreen[prometheus]`. Label cardinality is capped UPSTREAM by monitor.annotation.max_labels.",
+        "enabled": false,
+        "listen_addr": "127.0.0.1",
+        "port": 9464,
+        "endpoint_metrics": "/metrics",
+        "endpoint_health": "/healthz",
+        "auth_token": "",
+        "histogram_buckets_request_duration_seconds": [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+        "redact_resource_attrs": []
+      },
+      "remote_push": {
+        "_comment": "PLACEHOLDER for todo.txt Q1 (remote agent-to-server push). Distinct from OTLP: direct fleet-telemetry batch protocol.",
+        "enabled": false,
+        "endpoint": ""
+      }
     }
   },
   "hotspot_taxonomy": {

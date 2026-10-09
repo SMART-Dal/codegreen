@@ -10,12 +10,17 @@ import json
 import os
 import sys
 import socket
+import stat
 import uuid
+import functools
 import platform as _platform
 import ctypes
+from abc import ABC, abstractmethod
+from collections import deque
 from datetime import datetime, timezone
 from ctypes import c_double, c_char_p, c_uint64, c_int, byref
-from typing import Dict, List, Optional, NamedTuple, Tuple
+from queue import Queue, Empty, Full
+from typing import Any, Dict, List, Optional, NamedTuple, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -43,6 +48,132 @@ def _host_timezone_label() -> str:
     return tz.tzname(datetime.now()) if tz else "unknown"
 
 
+def _install_info_path() -> Path:
+    """XDG-aware per-machine info file. Written once at first run; read
+    instantly by every subsequent process."""
+    base = _os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "codegreen" / "install_info.json"
+
+
+_INSTALL_INFO_SCHEMA = 2
+
+
+def _detect_install_info() -> Dict[str, Any]:
+    """One-shot per-machine detection of the clock NEMB stamps samples with
+    (PrecisionTimer::monotonic_timestamp_ns: CLOCK_MONOTONIC on POSIX,
+    mach_continuous_time on macOS, QueryPerformanceCounter on Windows)."""
+    info: Dict[str, Any] = {
+        "schema": _INSTALL_INFO_SCHEMA,
+        "detected_at": _iso_utc_now(),
+        "platform": sys.platform,
+        "kernel": _platform.platform(),
+        "cpu_model": _cpu_model_label(),
+        "codegreen_version_at_detect": _runtime_version(),
+    }
+    if sys.platform == "darwin":
+        info["timeseries_clock"] = "mach_continuous_time"
+    elif sys.platform.startswith("win"):
+        info["timeseries_clock"] = "query_performance_counter"
+    elif sys.platform.startswith("linux"):
+        info["timeseries_clock"] = "clock_monotonic"
+    else:
+        info["timeseries_clock"] = "unknown"
+    return info
+
+
+@functools.lru_cache(maxsize=1)
+def _machine_install_info() -> Dict[str, Any]:
+    """Load (or create on first call) the per-machine install_info.json.
+    Cached via lru_cache so detection runs ONCE per process and the file is
+    read ONCE per machine after that. If the cached info's `platform` differs
+    from the current `sys.platform` (e.g. site-packages was copied across
+    machines) the file is regenerated."""
+    path = _install_info_path()
+    try:
+        if path.exists():
+            cached = json.loads(path.read_text())
+            if (cached.get("schema") == _INSTALL_INFO_SCHEMA and cached.get("platform") == sys.platform
+                    and "timeseries_clock" in cached):
+                cached["source"] = "machine_install_cache"
+                return cached
+    except Exception:
+        pass
+    info = _detect_install_info()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(f"{path}.{_os.getpid()}.tmp")
+        tmp.write_text(json.dumps(info, indent=2))
+        _os.replace(tmp, path)
+        info["source"] = "machine_install_detected"
+    except OSError:
+        info["source"] = "in_memory_only"
+    return info
+
+
+def _resolve_timeseries_clock(client: Optional[Any] = None) -> Dict[str, Any]:
+    """Resolve the clock identity for timeseries[].t_ns. Four-tier with
+    explicit provenance so consumers know how much to trust the value:
+
+    1. **backend_reported** — NEMB ABI exposes a clock-name query (future
+       v0.5.0+ ABI bump). Authoritative. Tried every call (cheap C call) so
+       we pick it up as soon as the user upgrades the .so.
+    2. **config_override** — non-empty
+       `measurement.report.timeseries_clock_override` in config.json. Lets
+       users pin the label for unusual builds.
+    3. **machine_install_cache / machine_install_detected** — read from (or
+       written to) `~/.config/codegreen/install_info.json` on first run.
+       Detection happens ONCE per machine; every subsequent process reads
+       the file in microseconds.
+    4. **platform_unrecognised** — last-resort `unknown`."""
+    if client is not None and getattr(client, "lib", None) is not None:
+        fn = getattr(client.lib, "nemb_get_timeseries_clock_name", None)
+        if fn is not None:
+            try:
+                buf = ctypes.create_string_buffer(128)
+                ret = fn(buf, len(buf))
+                if ret > 0:
+                    return {"label": buf.value.decode("utf-8"),
+                            "source": "backend_reported"}
+            except Exception:
+                pass
+    override = _report_config().get("timeseries_clock_override")
+    if override:
+        return {"label": str(override), "source": "config_override"}
+    info = _machine_install_info()
+    return {"label": info.get("timeseries_clock", "unknown"),
+            "source": info.get("source", "machine_install_cache")}
+
+
+def _python_monotonic_vs_t_ns_offset_ns(client=None) -> Optional[int]:
+    """Sanity probe: estimate the offset between Python's `time.monotonic_ns()`
+    and a freshly-captured C++ sample's `t_ns`. Lets consumers verify the two
+    domains agree within a usable bound. Returns None when no backend or no
+    sampling support."""
+    if client is None or getattr(client, "lib", None) is None:
+        return None
+    if not getattr(client, "_has_timeseries", False):
+        return None
+    fn = getattr(client.lib, "nemb_get_time_series_json", None)
+    if fn is None:
+        return None
+    try:
+        buf = ctypes.create_string_buffer(8192)
+        py_a = time.monotonic_ns()
+        ret = fn(buf, len(buf), ctypes.c_uint64(0))
+        py_b = time.monotonic_ns()
+        if ret <= 0:
+            return None
+        samples = json.loads(buf.value.decode("utf-8"))
+        if not samples:
+            return None
+        t_ns = samples[-1].get("t_ns")
+        if t_ns is None:
+            return None
+        return int((py_a + py_b) // 2) - int(t_ns)
+    except Exception:
+        return None
+
+
 def _runtime_version() -> str:
     try:
         from importlib.metadata import version as _v
@@ -51,11 +182,22 @@ def _runtime_version() -> str:
         return "unknown"
 
 
+def _package_file(name: str) -> Optional[Path]:
+    """Path of a file in the codegreen package. `codegreen project` copies this
+    runtime into user projects, so prefer the install dir exported by the CLI
+    over a location relative to this file; None when neither resolves."""
+    install = os.environ.get("CODEGREEN_INSTALL_DIR")
+    if install:
+        return Path(install) / "codegreen" / name
+    here = Path(__file__).resolve()
+    return here.parents[3] / name if len(here.parents) > 3 else None
+
+
 def _report_config() -> Dict:
     """Single source of truth for report/quality thresholds. All thresholds
     that were previously magic numbers (CV%, drop ratio, run-id length) live
     here. Loaded from bundled config.json with defensive defaults."""
-    cfg_path = Path(__file__).resolve().parents[3] / "config.json"
+    cfg_path = _package_file("config.json")
     defaults = {
         "schema_version": "1",
         "iso_timestamp_format": "rfc3339_utc",
@@ -160,12 +302,15 @@ def build_meta_block(
     record_time_series: bool = False,
     started_at_local_iso: str = "",
     ended_at_local_iso: str = "",
+    client: Optional[Any] = None,
+    timeseries_clock_offset_ns: Optional[int] = None,
     extras: Optional[Dict] = None,
 ) -> Dict:
     """Single canonical meta-block builder. Shared by Session._build_report()
     and CLI run_command (and any future language runtime). Adding a meta field
     means editing this function once, not every call site."""
     rcfg = _report_config()
+    ts_clock = _resolve_timeseries_clock(client) if record_time_series else None
     meta: Dict = {
         "schema_version": rcfg["schema_version"],
         "codegreen_version": _runtime_version(),
@@ -195,7 +340,9 @@ def build_meta_block(
             "enabled": True,
             "schema_version": "1",
             "sample_keys": ["t_ns", "energy_j", "power_w", "domains"],
-            "t_ns_clock": "clock_monotonic",
+            "t_ns_clock": ts_clock["label"],
+            "t_ns_clock_source": ts_clock["source"],
+            "t_ns_python_monotonic_offset_ns": timeseries_clock_offset_ns,
             "inclusive_of_children": True,
         } if record_time_series else {"enabled": False}),
     }
@@ -212,18 +359,9 @@ def _find_nemb_library() -> Optional[str]:
     """Find the path to the shared NEMB library."""
     possible_names = ["libcodegreen-nemb.so", "libcodegreen-nemb.dylib", "codegreen-nemb.dll"]
 
-    # Project root: /home/user/codegreen
-    # This file: src/instrumentation/language_runtimes/python/codegreen_runtime.py
-    # python -> language_runtimes -> instrumentation -> src -> codegreen (5 levels)
-    project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-
-    search_paths = [
-        project_root / "lib",
-        project_root / "build" / "lib",
-        project_root / "codegreen" / "lib",
-        Path("/usr/local/lib"),
-        Path("/usr/lib"),
-    ]
+    pkg = _package_file("")
+    search_paths = [pkg / "lib", pkg.parent / "lib", pkg.parent / "build" / "lib"] if pkg else []
+    search_paths += [Path("/usr/local/lib"), Path("/usr/lib")]
     if os.environ.get("CODEGREEN_LIB_PATH"):
         search_paths.insert(0, Path(os.environ["CODEGREEN_LIB_PATH"]))
 
@@ -236,6 +374,20 @@ def _find_nemb_library() -> Optional[str]:
                 return str(lib_path)
 
     return None
+
+def _read_nemb_json(call, size: int) -> Optional[str]:
+    """Drain a NEMB JSON exporter `call(buf, size) -> int`. The C side returns
+    -required_size when buf is too small; sampling continues between calls, so
+    the payload can grow before the retry. Retry with headroom, never return a
+    silently truncated or empty result. None when the exporter has no data."""
+    for _ in range(8):
+        buf = ctypes.create_string_buffer(size)
+        ret = call(buf, size)
+        if ret >= 0:
+            return buf.value.decode("utf-8") if ret > 0 else None
+        size = 2 * -ret
+    raise RuntimeError(f"NEMB JSON export kept outgrowing its buffer ({size} bytes)")
+
 
 class NEMBClient:
     """Interface to the Native Energy Measurement Backend (C++)"""
@@ -304,21 +456,8 @@ class NEMBClient:
         """Retrieve correlated time-series measurements from C++ backend"""
         if not self.lib:
             return []
-        buf_size = 1024 * 1024
-        buf = ctypes.create_string_buffer(buf_size)
-        ret = self.lib.nemb_get_checkpoints_json(buf, buf_size)
-        if ret < 0:
-            # Buffer too small; C++ returns -(required_size)
-            buf_size = (-ret) + 1
-            buf = ctypes.create_string_buffer(buf_size)
-            ret = self.lib.nemb_get_checkpoints_json(buf, buf_size)
-        if ret > 0:
-            try:
-                data = json.loads(buf.value.decode('utf-8'))
-                return data.get("checkpoints", [])
-            except Exception:
-                return []
-        return []
+        payload = _read_nemb_json(self.lib.nemb_get_checkpoints_json, 1 << 20)
+        return json.loads(payload)["checkpoints"] if payload else []
 
     def read_energy(self) -> tuple:
         """Returns (joules, watts) - kept for compatibility"""
@@ -419,6 +558,8 @@ def _report_at_exit():
             "measurements": measurements,
         }
 
+    if _SYNC_DEVICE:
+        payload["device_sync"] = {"mode": _SYNC_DEVICE, "syncs": _device_syncs}
     print("\n--- CODEGREEN_RESULT_START ---", flush=True)
     print(json.dumps(payload), flush=True)
     print("--- CODEGREEN_RESULT_END ---", flush=True)
@@ -459,6 +600,29 @@ def _ensure_atexit():
         _atexit_registered = True
 
 
+_SYNC_DEVICE = os.environ.get("CODEGREEN_SYNC_DEVICE", "")
+_device_syncs = 0
+
+
+def _sync_cuda() -> bool:
+    """Drain the current CUDA device so the probe timestamp follows every kernel launched so far.
+    No-op while torch is not imported or CUDA has no context (nothing can be pending)."""
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return False
+    if not torch.cuda.is_available():
+        raise RuntimeError("CODEGREEN_SYNC_DEVICE=cuda but torch.cuda.is_available() is False")
+    if not torch.cuda.is_initialized():
+        return False
+    torch.cuda.synchronize()
+    return True
+
+
+_DEVICE_SYNCS = {"cuda": _sync_cuda}
+if _SYNC_DEVICE and _SYNC_DEVICE not in _DEVICE_SYNCS:
+    raise ValueError(f"CODEGREEN_SYNC_DEVICE={_SYNC_DEVICE!r}; supported: {sorted(_DEVICE_SYNCS)}")
+
+
 def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
                       name: str, line_number: int, context: str):
     """Record a checkpoint marker with ultra-low overhead."""
@@ -478,6 +642,9 @@ def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str):
         if now - last < _throttle_interval_ns:
             return
         _last_checkpoint_time[checkpoint_id] = now
+    if _SYNC_DEVICE:
+        global _device_syncs
+        _device_syncs += _DEVICE_SYNCS[_SYNC_DEVICE]()
     measure_checkpoint(checkpoint_id, checkpoint_type, name, 0, "")
 
 
@@ -585,13 +752,64 @@ def _bundled_sample_interval_ms() -> int:
     """Read the NEMB default sample interval from bundled config.json. The
     correct path is `measurement.nemb.coordinator.measurement_interval_ms`;
     earlier versions looked it up at the top level and silently fell back."""
-    cfg = Path(__file__).resolve().parents[3] / "config.json"
+    cfg = _package_file("config.json")
     try:
         with open(cfg) as f:
             d = json.load(f)
         return int(d["measurement"]["nemb"]["coordinator"]["measurement_interval_ms"])
     except Exception:
         return _DEFAULT_SAMPLE_INTERVAL_MS
+
+
+_MONITOR_DEFAULTS = {
+    "interval_ms_default": 500,
+    "interval_ms_min": 50,
+    "interval_ms_warn_below": 100,
+    "max_samples_in_memory": 10000,
+    "rotate_mb_default": 0,
+    "rotate_max_backups": 5,
+    "attribution": {
+        "mode_default": "auto",
+        "cgroup_root": "/sys/fs/cgroup",
+        "cgroup_unified_root": "/sys/fs/cgroup/unified",
+        "allow_cgroup_v1": True,
+    },
+    "annotation": {
+        "socket_path_default": "",
+        "max_label_count": 64,
+        "max_label_chars": 256,
+        "summary_top_labels": 50,
+        "listener_backlog": 16,
+        "recv_buf_bytes": 65536,
+        "max_labels": 1000,
+        "overflow_bucket": "__other__",
+    },
+}
+
+
+def _monitor_config(strict: bool = False) -> Dict:
+    """Single source of truth for Monitor knobs. Magic numbers live in config.json
+    under `monitor.*`; defaults here mirror that block for offline use.
+
+    Args:
+        strict: when True, raise instead of falling back to defaults on
+            unreadable/malformed config. Used by SIGHUP-reload to fail loud."""
+    cfg = _package_file("config.json")
+    out = json.loads(json.dumps(_MONITOR_DEFAULTS))
+    try:
+        with open(cfg) as f:
+            d = json.load(f)
+    except (OSError, TypeError, json.JSONDecodeError):
+        if strict:
+            raise
+        return out
+    m = d.get("monitor", {}) or {}
+    for k, v in m.items():
+        if k in ("annotation", "attribution") and isinstance(v, dict):
+            out[k].update(v)
+        else:
+            out[k] = v
+    return out
 
 
 def _quality_label(cv_percent: float) -> str:
@@ -696,6 +914,8 @@ class Session:
         self._started_at_local_iso: str = ""
         self._ended_at_local_iso: str = ""
         self._run_id: str = uuid.uuid4().hex[:12]
+        self._ts_clock_resolved: Optional[Dict[str, Any]] = None
+        self._ts_clock_offset_ns: Optional[int] = None
         try:
             self._hostname: str = socket.gethostname()
         except Exception:
@@ -799,19 +1019,13 @@ class Session:
         if not self._record_ts:
             return 0
         buf_size = max(64 * 1024, self._buffer_samples * 200)
-        buf = ctypes.create_string_buffer(buf_size)
-        ret = self._client.lib.nemb_get_time_series_json(
-            buf, buf_size, ctypes.c_uint64(self._ts_last_ts + 1)
-        )
-        if ret < 0:
-            buf = ctypes.create_string_buffer((-ret) + 1)
-            ret = self._client.lib.nemb_get_time_series_json(
-                buf, len(buf), ctypes.c_uint64(self._ts_last_ts + 1)
-            )
-        if ret <= 0:
+        since = ctypes.c_uint64(self._ts_last_ts + 1)
+        payload = _read_nemb_json(
+            lambda b, n: self._client.lib.nemb_get_time_series_json(b, n, since), buf_size)
+        if payload is None:
             return 0
         try:
-            samples = json.loads(buf.value.decode("utf-8"))
+            samples = json.loads(payload)
         except Exception:
             return 0
         if not samples:
@@ -1218,11 +1432,1135 @@ def task(name: Optional[str] = None):
     return deco
 
 
+_ATTRIBUTION_MODES = ("auto", "cgroup_v2", "cgroup_v1", "cpu_percent")
+
+
+class _CgroupAttributor:
+    """Per-PID energy attribution via Linux cgroups CPU accounting.
+
+    cgroups v2 (cpu.stat: usage_usec)  -> microseconds of CPU time
+    cgroups v1 (cpuacct.usage: ns)     -> nanoseconds of CPU time
+    System busy time comes from /proc/stat (USER_HZ ticks).
+
+    Share = (cgroup_cpu_delta / system_busy_delta), capped to [0, 1].
+    Attributed energy = share * system_rapl_joules_delta.
+
+    Fail-loud at start() if requested mode is unavailable. `auto` selects the
+    best backend at start() and never silently downgrades mid-run.
+    """
+
+    def __init__(self, pid: int, mode: str, cfg: Dict):
+        if mode not in _ATTRIBUTION_MODES:
+            raise ValueError(f"attribution_mode must be one of {_ATTRIBUTION_MODES}, got {mode!r}")
+        self.pid = int(pid)
+        self.requested_mode = mode
+        self.cfg = cfg
+        self.backend: Optional[str] = None
+        self.cgroup_cpu_path: Optional[Path] = None
+        self._user_hz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        self._last_cgroup_usec: Optional[int] = None
+        self._last_sys_usec: Optional[int] = None
+
+    @staticmethod
+    def _read_proc_cgroup(pid: int) -> List[str]:
+        with open(f"/proc/{pid}/cgroup") as f:
+            return [ln.rstrip("\n") for ln in f.readlines()]
+
+    @staticmethod
+    def _v2_path_for(pid: int, unified_root: Path) -> Optional[Path]:
+        for line in _CgroupAttributor._read_proc_cgroup(pid):
+            if line.startswith("0::"):
+                rel = line.split("::", 1)[1].lstrip("/")
+                p = unified_root / rel
+                if (p / "cpu.stat").exists():
+                    return p
+        return None
+
+    @staticmethod
+    def _v1_path_for(pid: int, root: Path) -> Optional[Path]:
+        for line in _CgroupAttributor._read_proc_cgroup(pid):
+            parts = line.split(":", 2)
+            if len(parts) != 3:
+                continue
+            controllers = parts[1]
+            if any(c in controllers.split(",") for c in ("cpuacct", "cpu")):
+                rel = parts[2].lstrip("/")
+                p = root / controllers / rel
+                if (p / "cpuacct.usage").exists():
+                    return p
+                for c in controllers.split(","):
+                    pp = root / c / rel
+                    if (pp / "cpuacct.usage").exists():
+                        return pp
+        return None
+
+    def resolve(self) -> str:
+        root = Path(self.cfg["cgroup_root"])
+        unified = Path(self.cfg["cgroup_unified_root"])
+        if not unified.exists() and (root / "cgroup.controllers").exists():
+            unified = root
+        if self.requested_mode in ("auto", "cgroup_v2"):
+            p = self._v2_path_for(self.pid, unified) if unified.exists() else None
+            if p is not None:
+                self.cgroup_cpu_path = p
+                self.backend = "cgroup_v2"
+                return self.backend
+            if self.requested_mode == "cgroup_v2":
+                raise RuntimeError(f"cgroup_v2 attribution unavailable for pid {self.pid} (no cpu.stat in unified hierarchy)")
+        if self.requested_mode in ("auto", "cgroup_v1") and self.cfg.get("allow_cgroup_v1", True):
+            p = self._v1_path_for(self.pid, root)
+            if p is not None:
+                self.cgroup_cpu_path = p
+                self.backend = "cgroup_v1"
+                return self.backend
+            if self.requested_mode == "cgroup_v1":
+                raise RuntimeError(f"cgroup_v1 attribution unavailable for pid {self.pid} (no cpuacct.usage)")
+        self.backend = "cpu_percent"
+        return self.backend
+
+    def _read_cgroup_usec(self) -> Optional[int]:
+        if self.cgroup_cpu_path is None:
+            return None
+        if self.backend == "cgroup_v2":
+            with open(self.cgroup_cpu_path / "cpu.stat") as f:
+                for ln in f:
+                    if ln.startswith("usage_usec"):
+                        return int(ln.split()[1])
+            raise RuntimeError(f"usage_usec missing in {self.cgroup_cpu_path}/cpu.stat")
+        if self.backend == "cgroup_v1":
+            with open(self.cgroup_cpu_path / "cpuacct.usage") as f:
+                return int(f.read().strip()) // 1000
+        return None
+
+    def _read_system_usec(self) -> int:
+        with open("/proc/stat") as f:
+            parts = f.readline().split()
+        if parts[0] != "cpu":
+            raise RuntimeError("/proc/stat first line is not aggregate cpu")
+        ticks = [int(x) for x in parts[1:]]
+        idle = ticks[3] + (ticks[4] if len(ticks) > 4 else 0)
+        total = sum(ticks)
+        busy_ticks = total - idle
+        return int(busy_ticks * 1_000_000 / self._user_hz)
+
+    def prime(self) -> None:
+        self._last_cgroup_usec = self._read_cgroup_usec()
+        self._last_sys_usec = self._read_system_usec()
+
+    def attribute(self, joules_delta: float) -> Dict:
+        """Returns dict with cpu_share, attributed_joules, cgroup_cpu_usec_delta,
+        system_cpu_usec_delta, backend. Caller appends to sample record."""
+        cur_cg = self._read_cgroup_usec()
+        cur_sys = self._read_system_usec()
+        if self._last_cgroup_usec is None or self._last_sys_usec is None or cur_cg is None:
+            self._last_cgroup_usec = cur_cg
+            self._last_sys_usec = cur_sys
+            return {"backend": self.backend, "cpu_share": 0.0, "attributed_joules": 0.0,
+                    "cgroup_cpu_usec_delta": 0, "system_cpu_usec_delta": 0}
+        d_cg = max(0, cur_cg - self._last_cgroup_usec)
+        d_sys = max(0, cur_sys - self._last_sys_usec)
+        self._last_cgroup_usec = cur_cg
+        self._last_sys_usec = cur_sys
+        share = (d_cg / d_sys) if d_sys > 0 else 0.0
+        share = max(0.0, min(1.0, share))
+        return {
+            "backend": self.backend,
+            "cpu_share": round(share, 6),
+            "attributed_joules": round(float(joules_delta) * share, 6),
+            "cgroup_cpu_usec_delta": int(d_cg),
+            "system_cpu_usec_delta": int(d_sys),
+        }
+
+
+class Sink(ABC):
+    """Abstract sample sink.
+
+    A Monitor fan-outs each event to every registered sink IN ADDITION to its
+    built-in JSONL writer (which is the in-process sink; semantics preserved
+    byte-for-byte from pre-Sink-ABC behavior). The Sink ABC adds external
+    sinks (OTLP today; Prometheus pull and remote-push in todo.txt D5+Q1).
+
+    Wire:
+      - feed_header(rec)             : header / header_rotated / reload records
+      - feed_sample(rec)             : per-tick sample (cumulative joules, watts, t)
+      - feed_annotation_start(rec)   : opened span (capped name + labels)
+      - feed_annotation_end(rec)     : closed span (joules, duration_s, n_samples)
+      - feed_aggregate(per_label)    : periodic snapshot of per-label totals
+      - close() -> Dict              : drain + return per-sink summary
+
+    Contract:
+      * Every feed_* call MUST be non-blocking and constant-time wrt the
+        sample interval. Backpressure is the sink's problem: bounded
+        in-memory queue + drop-newest policy + dropped_* counters that
+        surface through close().
+      * close() is called by Monitor.stop() and must always return a dict
+        (never raise). The dict is merged into summary["exporters"][name].
+      * feed_aggregate is OPTIONAL (subclasses may ignore it).
+
+    Concrete subclasses:
+      - OTLPMetricSink (codegreen_otlp_sink.py): OpenTelemetry OTLP/gRPC.
+      - PrometheusSink (codegreen_prometheus_sink.py): pull /metrics endpoint.
+      - (future) RemotePushSink (Q1) — same wire.
+    """
+
+    name: str = "sink"
+
+    def feed_header(self, rec: Dict) -> None: ...
+    @abstractmethod
+    def feed_sample(self, rec: Dict) -> None: ...
+    @abstractmethod
+    def feed_annotation_start(self, rec: Dict) -> None: ...
+    @abstractmethod
+    def feed_annotation_end(self, rec: Dict) -> None: ...
+    def feed_aggregate(self, per_label: Dict[str, Dict[str, float]]) -> None: ...
+
+    @abstractmethod
+    def close(self) -> Dict: ...
+
+
+def _build_sinks(monitor_cfg: Dict, requested: List[str],
+                 cli_overrides: Optional[Dict[str, Dict]] = None,
+                 resource: Optional[Dict[str, Any]] = None) -> List[Sink]:
+    """Construct the requested exporter sinks from config + CLI overrides.
+
+    Fail-loud: an exporter listed in `requested` whose dependencies are missing
+    raises RuntimeError immediately with the exact `pip install` command to fix
+    it. Never silently no-op — see the Energy-Readback Robustness Rule.
+
+    Config schema lives under `monitor.exporters.<name>.*` in
+    `codegreen/config.json`. CLI flags (e.g. `--otlp-endpoint`) override the
+    config-file values via the `cli_overrides[name]` dict.
+    """
+    sinks: List[Sink] = []
+    cli_overrides = cli_overrides or {}
+    exporters_cfg = (monitor_cfg.get("exporters", {}) or {})
+    for name in requested:
+        if name == "otlp":
+            from codegreen.instrumentation.language_runtimes.python.codegreen_otlp_sink import (
+                OTLPMetricSink, _OTLP_AVAILABLE, OTLP_INSTALL_HINT,
+            )
+            if not _OTLP_AVAILABLE:
+                raise RuntimeError(
+                    f"--exporter otlp requires the OpenTelemetry SDK. Install with:\n"
+                    f"  {OTLP_INSTALL_HINT}"
+                )
+            cfg = dict(exporters_cfg.get("otlp", {}) or {})
+            cfg.update(cli_overrides.get("otlp", {}) or {})
+            sinks.append(OTLPMetricSink(cfg, resource or {}))
+        elif name == "prometheus":
+            from codegreen.instrumentation.language_runtimes.python.codegreen_prometheus_sink import (
+                PrometheusSink, _PROM_AVAILABLE, PROMETHEUS_INSTALL_HINT,
+            )
+            if not _PROM_AVAILABLE:
+                raise RuntimeError(
+                    f"--exporter prometheus requires the prometheus_client package. "
+                    f"Install with:\n  {PROMETHEUS_INSTALL_HINT}"
+                )
+            cfg = dict(exporters_cfg.get("prometheus", {}) or {})
+            cfg.update(cli_overrides.get("prometheus", {}) or {})
+            sinks.append(PrometheusSink(cfg, resource or {}))
+        else:
+            raise ValueError(
+                f"--exporter {name!r} is not registered. Known: ['otlp', 'prometheus']. "
+                f"(Remote-push 'remote_push' is a placeholder tracked in todo.txt Q1.)"
+            )
+    return sinks
+
+
+class Monitor:
+    """Continuous energy sampler for long-running processes.
+
+    Unlike Session (span-based), Monitor samples cumulative energy at fixed
+    intervals from the NEMB backend without requiring instrumentation. Intended
+    for already-running services (web servers, daemons) where embedding the
+    Session API is impractical.
+
+    Long-running deployments (days, weeks) require four noise/leak guards:
+      * bounded in-memory deque (`max_samples_in_memory`, config: monitor)
+      * size-based JSONL rotation (`rotate_mb`, config: monitor)
+      * cardinality cap on annotation labels (`max_labels`, config:
+        monitor.annotation.max_labels) — labels beyond the cap collapse into
+        an overflow bucket (default key `__other__`) so high-cardinality
+        sources (raw URLs, request UUIDs) cannot OOM the aggregator.
+      * SIGHUP-triggered hot-reload of `interval_ms`, `rotate_mb`,
+        `max_samples_in_memory`, and `max_labels` — in-flight annotations
+        and the open JSONL file are NOT disturbed. `pid`, `duration_s`,
+        `listen_socket_path`, and `output_file` require a full restart.
+
+    Args:
+        interval_ms: sample period; floor + warn threshold from config.
+        duration_s: stop automatically after N seconds (None = run until stop()).
+        pid: if set, also record per-process CPU% for attribution.
+        output_file: stream JSON-lines samples to this path (None = in-memory only).
+        include_children: when pid is set, sum CPU% of descendants.
+        max_samples_in_memory: cap in-memory deque size; 0 = drop after write.
+        rotate_mb: rotate JSONL when file exceeds N MB (0 = no rotation).
+        listen_socket_path: bind UDS for annotation events (None = disabled,
+            "default" = default_socket_path()).
+        max_labels: cap distinct annotation labels (0 = unlimited).
+    """
+
+    def __init__(self, interval_ms: Optional[int] = None,
+                 duration_s: Optional[float] = None,
+                 pid: Optional[int] = None, output_file: Optional[str] = None,
+                 include_children: bool = True,
+                 max_samples_in_memory: Optional[int] = None,
+                 rotate_mb: Optional[int] = None,
+                 listen_socket_path: Optional[str] = None,
+                 attribution_mode: Optional[str] = None,
+                 max_labels: Optional[int] = None,
+                 exporters: Optional[List[str]] = None,
+                 exporter_overrides: Optional[Dict[str, Dict[str, Any]]] = None):
+        cfg = _monitor_config()
+        if interval_ms is None:
+            interval_ms = int(cfg["interval_ms_default"])
+        floor = int(cfg["interval_ms_min"])
+        if interval_ms < floor:
+            raise ValueError(f"interval_ms must be >= {floor} (sub-{floor}ms sampling causes RAPL noise)")
+        warn_below = int(cfg["interval_ms_warn_below"])
+        if interval_ms < warn_below and duration_s is None:
+            _warnings.warn(
+                f"codegreen.Monitor: interval_ms={interval_ms} < {warn_below} in run-forever mode "
+                f"adds non-trivial sampling overhead; consider >= {warn_below}ms",
+                RuntimeWarning, stacklevel=2,
+            )
+        if duration_s is not None and duration_s <= 0:
+            raise ValueError("duration_s must be > 0 when provided")
+        max_in_mem = int(cfg["max_samples_in_memory"]) if max_samples_in_memory is None else int(max_samples_in_memory)
+        if max_in_mem < 0:
+            raise ValueError("max_samples_in_memory must be >= 0")
+        rot_mb = int(cfg["rotate_mb_default"]) if rotate_mb is None else int(rotate_mb)
+        if rot_mb < 0:
+            raise ValueError("rotate_mb must be >= 0")
+        ann_cfg0 = cfg.get("annotation", {})
+        max_lbl = int(ann_cfg0.get("max_labels", 1000)) if max_labels is None else int(max_labels)
+        if max_lbl < 0:
+            raise ValueError("max_labels must be >= 0 (0 = unlimited)")
+        self._cfg = cfg
+        self._interval_s = interval_ms / 1000.0
+        self._duration_s = duration_s
+        self._pid = int(pid) if pid is not None else None
+        self._include_children = bool(include_children)
+        self._output_file = output_file
+        self._max_in_mem = max_in_mem
+        self._rotate_bytes = rot_mb * 1024 * 1024
+        self._rotate_max_backups = int(cfg["rotate_max_backups"])
+        self._listen_path = default_socket_path() if listen_socket_path == "default" else listen_socket_path
+        self._max_labels = max_lbl
+        self._overflow_key = str(ann_cfg0.get("overflow_bucket", "__other__"))
+        self._reload_requested = threading.Event()
+        self._reload_lock = threading.Lock()
+        self._reload_count = 0
+        self._client: Optional[NEMBClient] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_evt = threading.Event()
+        self._proc = None
+        self._samples: "deque[Dict]" = deque(maxlen=max_in_mem if max_in_mem > 0 else 1)
+        self._samples_count = 0
+        self._t0: Optional[float] = None
+        self._j0: Optional[float] = None
+        self._j_last: Optional[float] = None
+        self._fp = None
+        self._fp_bytes = 0
+        self._fp_lock = threading.Lock()
+        self._started = False
+        self._stopped = False
+        self._terminated_reason: Optional[str] = None
+        self._ncores = max(1, os.cpu_count() or 1)
+        self._child_cache: Dict[int, Any] = {}
+        self._annotations_open: Dict[str, Dict] = {}
+        self._per_label: Dict[str, Dict[str, float]] = {}
+        self._listener: Optional["_AnnotationListener"] = None
+        attr_cfg = cfg.get("attribution", {})
+        mode = attribution_mode if attribution_mode is not None else attr_cfg.get("mode_default", "auto")
+        if mode not in _ATTRIBUTION_MODES:
+            raise ValueError(f"attribution_mode must be one of {_ATTRIBUTION_MODES}, got {mode!r}")
+        self._attribution_mode_req = mode
+        self._attr_cfg = attr_cfg
+        self._attributor: Optional[_CgroupAttributor] = None
+        self._attribution_backend: Optional[str] = None
+        self._cgroup_attributed_total = 0.0
+        self._extra_sinks: List[Sink] = []
+        self._exporters_requested: List[str] = list(exporters or [])
+        self._exporter_overrides: Dict[str, Dict[str, Any]] = dict(exporter_overrides or {})
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, *exc):
+        self.stop()
+
+    def start(self) -> "Monitor":
+        if self._started:
+            raise RuntimeError("Monitor already started")
+        self._client = _get_nemb_client()
+        if self._client is None or self._client.lib is None:
+            raise RuntimeError("NEMB backend unavailable; install/rebuild codegreen with native library")
+        if self._pid is not None:
+            try:
+                import psutil
+            except ImportError:
+                raise RuntimeError("--pid requires psutil: pip install psutil")
+            if not psutil.pid_exists(self._pid):
+                raise RuntimeError(f"cannot attach to pid {self._pid}: no such process")
+            self._proc = psutil.Process(self._pid)
+            self._proc.cpu_percent(None)
+            if self._include_children:
+                for c in self._proc.children(recursive=True):
+                    try:
+                        c.cpu_percent(None)
+                    except psutil.NoSuchProcess:
+                        pass
+            self._attributor = _CgroupAttributor(self._pid, self._attribution_mode_req, self._attr_cfg)
+            self._attribution_backend = self._attributor.resolve()
+            if self._attribution_backend == "cpu_percent":
+                if self._attribution_mode_req == "auto":
+                    _warnings.warn(
+                        f"codegreen.Monitor: cgroup attribution unavailable for pid {self._pid}; "
+                        f"falling back to cpu_percent (less accurate under heavy contention)",
+                        RuntimeWarning, stacklevel=2,
+                    )
+            else:
+                self._attributor.prime()
+        j, _ = self._client.read_energy()
+        self._t0 = time.monotonic()
+        self._j0 = float(j)
+        self._j_last = float(j)
+        if self._output_file:
+            try:
+                self._fp = open(self._output_file, "w", buffering=1)
+                header = {
+                    "type": "header", "interval_ms": int(self._interval_s * 1000),
+                    "pid": self._pid, "start_ts": _iso_utc_now(),
+                    "rotate_mb": self._rotate_bytes // (1024 * 1024),
+                    "max_samples_in_memory": self._max_in_mem,
+                    "max_labels": self._max_labels,
+                    "overflow_bucket": self._overflow_key,
+                    "listen_socket": self._listen_path,
+                    "attribution_mode_requested": self._attribution_mode_req,
+                    "attribution_backend": self._attribution_backend,
+                }
+                self._write_record(header)
+            except OSError as e:
+                raise RuntimeError(f"cannot open output_file {self._output_file!r}: {e}") from e
+        # Build external sinks (potentially slow: gRPC channel construction)
+        # BEFORE binding the UDS listener and marking _started=True. A client
+        # racing through the UDS would otherwise see "Monitor must be started"
+        # for the first few requests while OTel SDK initializes its threads.
+        if self._exporters_requested:
+            try:
+                resource = {
+                    "service.name": "codegreen-monitor",
+                    "host.name": _platform.node() or "",
+                    "process.pid": int(self._pid or os.getpid()),
+                    "attribution_backend": self._attribution_backend or "host",
+                    "codegreen.version": _runtime_version(),
+                }
+                self._extra_sinks = _build_sinks(
+                    self._cfg, self._exporters_requested,
+                    cli_overrides=self._exporter_overrides, resource=resource,
+                )
+            except (RuntimeError, ValueError):
+                self._safe_close_fp()
+                raise
+            hdr_rec = {
+                "type": "header", "interval_ms": int(self._interval_s * 1000),
+                "pid": self._pid, "start_ts": _iso_utc_now(),
+                "max_labels": self._max_labels,
+                "overflow_bucket": self._overflow_key,
+                "attribution_backend": self._attribution_backend,
+            }
+            for s in self._extra_sinks:
+                try:
+                    s.feed_header(hdr_rec)
+                except Exception as e:
+                    _warnings.warn(
+                        f"codegreen.Monitor: sink {s.name!r} feed_header raised "
+                        f"({type(e).__name__}: {e}); continuing",
+                        RuntimeWarning, stacklevel=2,
+                    )
+        if self._listen_path:
+            try:
+                self._listener = _AnnotationListener(self, self._listen_path, self._cfg["annotation"])
+                self._listener.start()
+            except OSError as e:
+                self._safe_close_fp()
+                for s in self._extra_sinks:
+                    try:
+                        s.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._extra_sinks = []
+                raise RuntimeError(f"cannot bind annotation socket {self._listen_path!r}: {e}") from e
+        self._stop_evt.clear()
+        self._thread = threading.Thread(target=self._loop, name="codegreen-monitor", daemon=True)
+        self._started = True
+        try:
+            self._thread.start()
+        except BaseException:
+            self._safe_close_fp()
+            if self._listener is not None:
+                self._listener.stop()
+                self._listener = None
+            raise
+        return self
+
+    def _write_record(self, rec: Dict) -> None:
+        """Single durable writer: line-buffered JSON-lines + size-rotation gate.
+        Holds fp_lock so annotation events (other thread) and sample loop never
+        interleave. Rotation is size-based and fail-loud on OSError."""
+        if self._fp is None:
+            return
+        line = json.dumps(rec, separators=(",", ":")) + "\n"
+        data = line.encode("utf-8")
+        with self._fp_lock:
+            self._fp.write(line)
+            self._fp.flush()
+            self._fp_bytes += len(data)
+            if self._rotate_bytes > 0 and self._fp_bytes >= self._rotate_bytes:
+                self._rotate_locked()
+
+    def _fanout(self, rec: Dict) -> None:
+        """Non-blocking fan-out to every registered external Sink. The sample
+        loop and the annotation paths invoke this AFTER the durable JSONL
+        write so a slow / unreachable sink can never wedge the cadence (each
+        Sink owns its bounded queue + drop-newest policy). All sink errors
+        are swallowed-with-warning here: the OTLP sink's own dropped_*
+        counter surfaces the real failure mode through close().
+        """
+        if not self._extra_sinks:
+            return
+        rtype = rec.get("type", "")
+        for s in self._extra_sinks:
+            try:
+                if rtype == "sample":
+                    s.feed_sample(rec)
+                elif rtype == "annotation_start":
+                    s.feed_annotation_start(rec)
+                elif rtype == "annotation_end":
+                    s.feed_annotation_end(rec)
+                elif rtype in ("header", "header_rotated", "reload"):
+                    s.feed_header(rec)
+            except Exception as e:  # noqa: BLE001
+                _warnings.warn(
+                    f"codegreen.Monitor: sink {s.name!r} feed raised "
+                    f"({type(e).__name__}: {e}); continuing",
+                    RuntimeWarning, stacklevel=2,
+                )
+
+    def _rotate_locked(self) -> None:
+        """Roll energy.jsonl -> energy.jsonl.1 -> .2 ... up to rotate_max_backups.
+        Caller holds _fp_lock. Fails loud on OSError per design philosophy."""
+        path = self._output_file
+        if not path:
+            return
+        self._fp.close()
+        for i in range(self._rotate_max_backups, 0, -1):
+            src = f"{path}.{i - 1}" if i > 1 else path
+            dst = f"{path}.{i}"
+            if os.path.exists(src):
+                if os.path.exists(dst):
+                    os.remove(dst)
+                os.rename(src, dst)
+        self._fp = open(path, "w", buffering=1)
+        self._fp_bytes = 0
+        self._write_rotated_header_locked()
+
+    def _write_rotated_header_locked(self) -> None:
+        rec = {
+            "type": "header_rotated", "ts": _iso_utc_now(),
+            "interval_ms": int(self._interval_s * 1000),
+        }
+        line = json.dumps(rec, separators=(",", ":")) + "\n"
+        self._fp.write(line)
+        self._fp.flush()
+        self._fp_bytes += len(line.encode("utf-8"))
+
+    def _safe_close_fp(self) -> None:
+        if self._fp is not None:
+            try:
+                self._fp.close()
+            finally:
+                self._fp = None
+
+    def request_reload(self) -> None:
+        """Request a hot-reload of reloadable config fields on the next sample tick.
+        Thread-safe: called from a signal handler in the main thread; the sample
+        loop services it. In-flight annotations and the open JSONL file are NOT
+        disturbed."""
+        self._reload_requested.set()
+
+    def _reload_config(self) -> None:
+        """Re-read config.json and reapply hot-reloadable fields. Per-field
+        validation: bad values stay at the previous value and emit a
+        RuntimeWarning. NEVER mutates _output_file / _listen_path / _pid /
+        _duration_s — those require a full restart."""
+        with self._reload_lock:
+            try:
+                new_cfg = _monitor_config(strict=True)
+            except Exception as e:
+                _warnings.warn(
+                    f"codegreen.Monitor: SIGHUP reload failed to read config "
+                    f"({type(e).__name__}: {e}); keeping previous values",
+                    RuntimeWarning, stacklevel=2,
+                )
+                return
+            new_ival_ms = new_cfg.get("interval_ms_default", int(self._interval_s * 1000))
+            floor = int(new_cfg.get("interval_ms_min", 50))
+            if isinstance(new_ival_ms, int) and new_ival_ms >= floor:
+                self._interval_s = new_ival_ms / 1000.0
+            else:
+                _warnings.warn(
+                    f"codegreen.Monitor: SIGHUP reload rejected interval_ms_default={new_ival_ms!r} "
+                    f"(< {floor} or wrong type); keeping {int(self._interval_s*1000)}",
+                    RuntimeWarning, stacklevel=2,
+                )
+            new_max_mem = new_cfg.get("max_samples_in_memory", self._max_in_mem)
+            if isinstance(new_max_mem, int) and new_max_mem >= 0:
+                self._max_in_mem = new_max_mem
+            else:
+                _warnings.warn(
+                    f"codegreen.Monitor: SIGHUP reload rejected max_samples_in_memory="
+                    f"{new_max_mem!r}; keeping {self._max_in_mem}",
+                    RuntimeWarning, stacklevel=2,
+                )
+            new_rot_mb = new_cfg.get("rotate_mb_default", self._rotate_bytes // (1024 * 1024))
+            if isinstance(new_rot_mb, int) and new_rot_mb >= 0:
+                self._rotate_bytes = new_rot_mb * 1024 * 1024
+            else:
+                _warnings.warn(
+                    f"codegreen.Monitor: SIGHUP reload rejected rotate_mb_default={new_rot_mb!r}; "
+                    f"keeping {self._rotate_bytes // (1024*1024)}",
+                    RuntimeWarning, stacklevel=2,
+                )
+            ann_cfg = new_cfg.get("annotation", {}) or {}
+            new_max_lbl = ann_cfg.get("max_labels", self._max_labels)
+            if isinstance(new_max_lbl, int) and new_max_lbl >= 0:
+                self._max_labels = new_max_lbl
+            else:
+                _warnings.warn(
+                    f"codegreen.Monitor: SIGHUP reload rejected annotation.max_labels="
+                    f"{new_max_lbl!r}; keeping {self._max_labels}",
+                    RuntimeWarning, stacklevel=2,
+                )
+            self._cfg = new_cfg
+            self._reload_count += 1
+            rec = {
+                "type": "reload", "ts": _iso_utc_now(),
+                "interval_ms": int(self._interval_s * 1000),
+                "max_samples_in_memory": self._max_in_mem,
+                "rotate_mb": self._rotate_bytes // (1024 * 1024),
+                "max_labels": self._max_labels,
+                "reload_count": self._reload_count,
+            }
+            if self._fp:
+                self._write_record(rec)
+
+    def _loop(self):
+        next_t = self._t0
+        while not self._stop_evt.is_set():
+            if self._reload_requested.is_set():
+                self._reload_requested.clear()
+                self._reload_config()
+            next_t += self._interval_s
+            wait = next_t - time.monotonic()
+            if wait > 0:
+                if self._stop_evt.wait(wait):
+                    break
+            if self._duration_s is not None and (time.monotonic() - self._t0) >= self._duration_s:
+                self._stop_evt.set()
+                break
+            j, w = self._client.read_energy()
+            t_rel = time.monotonic() - self._t0
+            sample = {
+                "type": "sample",
+                "t": round(t_rel, 4),
+                "joules_total": round(float(j) - self._j0, 6),
+                "joules_delta": round(float(j) - self._j_last, 6),
+                "watts": round(float(w), 4),
+            }
+            if self._proc is not None:
+                import psutil as _psutil
+                try:
+                    cpu = self._proc.cpu_percent(None)
+                except _psutil.NoSuchProcess:
+                    self._terminated_reason = f"pid {self._pid} exited"
+                    self._stop_evt.set()
+                    break
+                n_children = 0
+                if self._include_children:
+                    try:
+                        current = self._proc.children(recursive=True)
+                    except _psutil.NoSuchProcess:
+                        self._terminated_reason = f"pid {self._pid} exited"
+                        self._stop_evt.set()
+                        break
+                    seen = set()
+                    for c in current:
+                        seen.add(c.pid)
+                        cached = self._child_cache.get(c.pid)
+                        if cached is None:
+                            try:
+                                c.cpu_percent(None)
+                            except _psutil.NoSuchProcess:
+                                continue
+                            self._child_cache[c.pid] = c
+                            n_children += 1
+                            continue
+                        try:
+                            cpu += cached.cpu_percent(None)
+                            n_children += 1
+                        except _psutil.NoSuchProcess:
+                            self._child_cache.pop(c.pid, None)
+                    for dead in set(self._child_cache) - seen:
+                        self._child_cache.pop(dead, None)
+                sample["proc_cpu_percent"] = round(cpu, 2)
+                sample["proc_n_children"] = n_children
+                if self._attributor is not None and self._attribution_backend != "cpu_percent":
+                    attr = self._attributor.attribute(sample["joules_delta"])
+                    sample["proc_attribution_backend"] = attr["backend"]
+                    sample["proc_cpu_share"] = attr["cpu_share"]
+                    sample["proc_attributed_joules"] = attr["attributed_joules"]
+                    sample["cgroup_cpu_usec_delta"] = attr["cgroup_cpu_usec_delta"]
+                    sample["system_cpu_usec_delta"] = attr["system_cpu_usec_delta"]
+                    self._cgroup_attributed_total += attr["attributed_joules"]
+                else:
+                    sample["proc_attribution_backend"] = "cpu_percent"
+                    sample["proc_attributed_joules"] = round(
+                        sample["joules_delta"] * (cpu / (100.0 * self._ncores)), 6
+                    )
+            self._j_last = float(j)
+            self._samples_count += 1
+            if self._max_in_mem > 0:
+                self._samples.append(sample)
+            self._attribute_to_open_annotations(sample)
+            if self._fp:
+                self._write_record(sample)
+            self._fanout(sample)
+
+    def _attribute_to_open_annotations(self, sample: Dict) -> None:
+        """For every currently-open annotation span, accumulate sample energy.
+        Snapshot under fp_lock so listener-thread mutations of self._annotations_open
+        cannot raise RuntimeError('dict changed size during iteration')."""
+        with self._fp_lock:
+            open_anns = list(self._annotations_open.values())
+        if not open_anns:
+            return
+        dj = sample.get("joules_delta", 0.0)
+        for ann in open_anns:
+            ann["joules"] += dj
+            ann["n_samples"] += 1
+
+    def annotate_start(self, name: str, labels: Optional[Dict[str, str]] = None,
+                       token: Optional[str] = None) -> str:
+        """Open a labelled span; returns token to pass to annotate_end.
+
+        Cardinality cap: if max_labels > 0 and the number of distinct names
+        already aggregated has reached the cap, a NEW label collapses into the
+        overflow bucket (default key ``__other__``). Already-seen labels and
+        the overflow bucket itself always pass. The original requested name is
+        preserved as ``labels["__requested_name__"]`` for debugging.
+        """
+        if not self._started or self._stopped:
+            raise RuntimeError("Monitor must be started before annotate_start")
+        if not isinstance(name, str) or not name:
+            raise ValueError("annotation name must be non-empty str")
+        ann_cfg = self._cfg["annotation"]
+        if labels and (len(labels) > ann_cfg["max_label_count"]):
+            raise ValueError(f"too many labels (max {ann_cfg['max_label_count']})")
+        eff_labels = dict(labels) if labels else {}
+        eff_name = name
+        cap = self._max_labels
+        if cap > 0:
+            with self._fp_lock:
+                seen = name in self._per_label
+                at_cap = len(self._per_label) >= cap
+            if not seen and at_cap and name != self._overflow_key:
+                eff_labels["__requested_name__"] = name
+                eff_name = self._overflow_key
+        tok = token or uuid.uuid4().hex
+        t_open = round(time.monotonic() - self._t0, 6) if self._t0 is not None else 0.0
+        rec = {
+            "type": "annotation_start", "token": tok, "name": eff_name,
+            "labels": eff_labels, "t": t_open, "ts": _iso_utc_now(),
+        }
+        with self._fp_lock:
+            self._annotations_open[tok] = {
+                "name": eff_name, "labels": eff_labels, "t_open": t_open,
+                "joules": 0.0, "n_samples": 0,
+            }
+        if self._fp:
+            self._write_record(rec)
+        self._fanout(rec)
+        return tok
+
+    def annotate_end(self, token: str, status: str = "ok") -> Dict:
+        """Close span and update per-label totals. Returns the closed record."""
+        if not self._started or self._stopped:
+            raise RuntimeError("Monitor must be started before annotate_end")
+        with self._fp_lock:
+            open_ann = self._annotations_open.pop(token, None)
+        if open_ann is None:
+            raise KeyError(f"annotation token {token!r} not open")
+        t_close = round(time.monotonic() - self._t0, 6) if self._t0 is not None else 0.0
+        dur = max(0.0, t_close - open_ann["t_open"])
+        joules = round(open_ann["joules"], 6)
+        rec = {
+            "type": "annotation_end", "token": token, "name": open_ann["name"],
+            "labels": open_ann["labels"], "status": status,
+            "t_open": open_ann["t_open"], "t_close": t_close,
+            "duration_s": round(dur, 6), "joules": joules,
+            "n_samples": open_ann["n_samples"], "ts": _iso_utc_now(),
+        }
+        bucket = self._per_label.setdefault(open_ann["name"], {
+            "count": 0, "joules_total": 0.0, "duration_total_s": 0.0,
+            "_durations_ms": [],
+        })
+        bucket["count"] += 1
+        bucket["joules_total"] += joules
+        bucket["duration_total_s"] += dur
+        bucket["_durations_ms"].append(dur * 1000.0)
+        if self._fp:
+            self._write_record(rec)
+        self._fanout(rec)
+        return rec
+
+    def stop(self) -> Dict:
+        if not self._started or self._stopped:
+            return self._summary() if self._stopped else {}
+        self._stop_evt.set()
+        if self._thread:
+            self._thread.join(timeout=max(2.0, self._interval_s * 4))
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+        try:
+            j, _ = self._client.read_energy()
+            self._j_last = float(j)
+        except (OSError, AttributeError, RuntimeError) as e:
+            _warnings.warn(
+                f"codegreen.Monitor.stop: final read_energy failed ({type(e).__name__}: {e}); "
+                f"using last sample's j",
+                RuntimeWarning, stacklevel=2,
+            )
+        # Snapshot per_label aggregate to sinks (give OTLP one last chance to
+        # observe final totals); then close sinks and merge their per-sink
+        # summary dicts into summary["exporters"][<name>].
+        if self._extra_sinks:
+            for s in self._extra_sinks:
+                try:
+                    s.feed_aggregate(self._per_label)
+                except Exception as e:  # noqa: BLE001
+                    _warnings.warn(
+                        f"codegreen.Monitor.stop: sink {s.name!r} feed_aggregate "
+                        f"raised ({type(e).__name__}: {e}); continuing",
+                        RuntimeWarning, stacklevel=2,
+                    )
+        summary = self._summary()
+        exporters_summary: Dict[str, Dict] = {}
+        for s in self._extra_sinks:
+            try:
+                exporters_summary[s.name] = s.close() or {}
+            except Exception as e:  # noqa: BLE001
+                exporters_summary[s.name] = {
+                    "error": f"{type(e).__name__}: {e}",
+                }
+        if exporters_summary:
+            summary["exporters"] = exporters_summary
+        self._extra_sinks = []
+        if self._fp:
+            try:
+                self._write_record({"type": "summary", **summary})
+            finally:
+                self._safe_close_fp()
+        self._stopped = True
+        return summary
+
+    def _summary(self) -> Dict:
+        duration = (time.monotonic() - self._t0) if self._t0 is not None else 0.0
+        total_j = (self._j_last - self._j0) if (self._j_last is not None and self._j0 is not None) else 0.0
+        avg_w = (total_j / duration) if duration > 0 else 0.0
+        proc_total = None
+        if self._proc is not None:
+            if self._attributor is not None and self._attribution_backend != "cpu_percent":
+                proc_total = round(self._cgroup_attributed_total, 6)
+            elif self._samples:
+                proc_total = round(sum(s.get("proc_attributed_joules", 0.0) for s in self._samples), 6)
+        per_label_out: Dict[str, Dict] = {}
+        top_n = int(self._cfg["annotation"]["summary_top_labels"])
+        items = sorted(self._per_label.items(), key=lambda kv: kv[1]["joules_total"], reverse=True)[:top_n]
+        overflow = self._per_label.get(self._overflow_key)
+        if overflow is not None and self._overflow_key not in dict(items):
+            items.append((self._overflow_key, overflow))
+        for name, b in items:
+            durs = sorted(b["_durations_ms"])
+            n = len(durs)
+            p50 = durs[n // 2] if n else 0.0
+            p95 = durs[int(0.95 * (n - 1))] if n else 0.0
+            per_label_out[name] = {
+                "count": b["count"],
+                "joules_total": round(b["joules_total"], 6),
+                "duration_total_s": round(b["duration_total_s"], 6),
+                "joules_per_call_avg": round(b["joules_total"] / b["count"], 6) if b["count"] else 0.0,
+                "latency_ms_p50": round(p50, 3),
+                "latency_ms_p95": round(p95, 3),
+            }
+        return {
+            "duration_s": round(duration, 4),
+            "total_joules": round(total_j, 6),
+            "avg_watts": round(avg_w, 4),
+            "samples": self._samples_count,
+            "samples_in_memory": len(self._samples) if self._max_in_mem > 0 else 0,
+            "pid": self._pid,
+            "proc_attributed_joules": proc_total,
+            "attribution_mode_requested": self._attribution_mode_req,
+            "attribution_backend": self._attribution_backend,
+            "terminated_reason": self._terminated_reason,
+            "annotations_open": len(self._annotations_open),
+            "per_label": per_label_out,
+            "max_labels": self._max_labels,
+            "overflow_bucket": self._overflow_key,
+            "distinct_labels": len(self._per_label),
+            "reload_count": self._reload_count,
+            "end_ts": _iso_utc_now(),
+        }
+
+    @property
+    def samples(self) -> List[Dict]:
+        return list(self._samples)
+
+
+def default_socket_path() -> str:
+    """Per-user annotation socket path shared by Monitor and annotate_request:
+    $XDG_RUNTIME_DIR/codegreen.sock, else /tmp/codegreen-<uid>/codegreen.sock."""
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    base = runtime_dir if runtime_dir else f"/tmp/codegreen-{os.getuid()}"
+    return os.path.join(base, "codegreen.sock")
+
+
+def _ensure_private_dir(path: str) -> None:
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise OSError(f"socket dir {path} must be a directory owned by uid {os.getuid()} with mode 0700")
+
+
+class _AnnotationListener:
+    """Unix-domain-socket server accepting line-delimited JSON annotation events.
+    Wire format (one JSON per line):
+      {"op":"start","name":"GET /users","labels":{...},"token":"opt"}  -> {"ok":true,"token":...}
+      {"op":"end","token":"...","status":"ok"}                           -> {"ok":true,"joules":...}
+    Designed for in-process Flask/Django middleware. Low-overhead (kernel-buffered),
+    language-agnostic (any client that can speak JSON over UDS works)."""
+
+    def __init__(self, monitor: "Monitor", path: str, ann_cfg: Dict):
+        self._mon = monitor
+        self._path = path
+        self._backlog = int(ann_cfg["listener_backlog"])
+        self._recv_buf = int(ann_cfg["recv_buf_bytes"])
+        self._sock: Optional[socket.socket] = None
+        self._stop = threading.Event()
+        self._accept_thread: Optional[threading.Thread] = None
+        self._client_threads: List[threading.Thread] = []
+        self._client_lock = threading.Lock()
+
+    def start(self) -> None:
+        parent = os.path.dirname(os.path.abspath(self._path))
+        if parent == os.path.dirname(default_socket_path()):
+            _ensure_private_dir(parent)
+        elif not os.path.isdir(parent):
+            raise OSError(f"socket parent dir does not exist: {parent}")
+        try:
+            st = os.lstat(self._path)
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid():
+                raise OSError(f"refusing to replace {self._path}: not a socket owned by uid {os.getuid()}")
+            os.unlink(self._path)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old_umask = os.umask(0o177)
+        try:
+            s.bind(self._path)
+            os.chmod(self._path, 0o600)
+            s.listen(self._backlog)
+            s.settimeout(0.5)
+        except BaseException:
+            s.close()
+            raise
+        finally:
+            os.umask(old_umask)
+        self._sock = s
+        self._stop.clear()
+        self._accept_thread = threading.Thread(target=self._accept_loop,
+                                               name="codegreen-monitor-uds", daemon=True)
+        self._accept_thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._accept_thread is not None:
+            self._accept_thread.join(timeout=2.0)
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            finally:
+                self._sock = None
+        try:
+            if stat.S_ISSOCK(os.lstat(self._path).st_mode):
+                os.unlink(self._path)
+        except FileNotFoundError:
+            pass
+        with self._client_lock:
+            threads = list(self._client_threads)
+        for t in threads:
+            t.join(timeout=1.0)
+
+    def _accept_loop(self) -> None:
+        assert self._sock is not None
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            t = threading.Thread(target=self._serve_client, args=(conn,),
+                                 name="codegreen-monitor-uds-cli", daemon=True)
+            with self._client_lock:
+                self._client_threads.append(t)
+            t.start()
+
+    def _serve_client(self, conn: socket.socket) -> None:
+        conn.settimeout(1.0)
+        buf = b""
+        try:
+            while not self._stop.is_set():
+                try:
+                    chunk = conn.recv(self._recv_buf)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if not line.strip():
+                        continue
+                    resp = self._handle(line)
+                    try:
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    except OSError:
+                        return
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def _handle(self, line: bytes) -> Dict:
+        try:
+            msg = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            return {"ok": False, "error": f"bad_json: {e}"}
+        op = msg.get("op")
+        try:
+            if op == "start":
+                if "name" not in msg:
+                    return {"ok": False, "error": "missing_field: name"}
+                tok = self._mon.annotate_start(msg["name"], msg.get("labels"), msg.get("token"))
+                return {"ok": True, "token": tok}
+            if op == "end":
+                if "token" not in msg:
+                    return {"ok": False, "error": "missing_field: token"}
+                try:
+                    rec = self._mon.annotate_end(msg["token"], msg.get("status", "ok"))
+                except KeyError as e:
+                    return {"ok": False, "error": f"unknown_token: {e.args[0]}"}
+                return {"ok": True, "joules": rec["joules"], "duration_s": rec["duration_s"]}
+        except (ValueError, RuntimeError) as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": f"unknown_op: {op!r}"}
+
+
+class annotate_request:
+    """Context manager wrapper that emits start/end events to a Monitor over UDS.
+    socket_path defaults to default_socket_path(), matching `--listen-on-socket default`.
+
+    Example (Flask):
+        @app.before_request
+        def _cg_start():
+            g._cg = annotate_request(f"{request.method} {request.path}").__enter__()
+        @app.teardown_request
+        def _cg_end(exc):
+            g._cg.__exit__(None, None, None)
+    """
+
+    def __init__(self, name: str, labels: Optional[Dict[str, str]] = None,
+                 socket_path: Optional[str] = None, timeout_s: float = 0.25):
+        self._name = name
+        self._labels = labels or {}
+        self._path = socket_path or default_socket_path()
+        self._timeout = timeout_s
+        self._sock: Optional[socket.socket] = None
+        self._token: Optional[str] = None
+        self._buf = b""
+
+    def __enter__(self) -> "annotate_request":
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(self._timeout)
+        s.connect(self._path)
+        self._sock = s
+        msg = {"op": "start", "name": self._name, "labels": self._labels}
+        s.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+        resp = self._recv_one()
+        if not resp.get("ok"):
+            self._close()
+            raise RuntimeError(f"annotation_start failed: {resp.get('error')}")
+        self._token = resp["token"]
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._sock is None or self._token is None:
+            return
+        try:
+            status = "ok" if exc is None else "error"
+            self._sock.sendall((json.dumps({"op": "end", "token": self._token,
+                                            "status": status}) + "\n").encode("utf-8"))
+            self._recv_one()
+        except OSError:
+            pass
+        finally:
+            self._close()
+
+    def _recv_one(self) -> Dict:
+        assert self._sock is not None
+        while b"\n" not in self._buf:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise RuntimeError("annotation socket closed unexpectedly")
+            self._buf += chunk
+        line, self._buf = self._buf.split(b"\n", 1)
+        return json.loads(line.decode("utf-8"))
+
+    def _close(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            finally:
+                self._sock = None
+
+
+
+
 # Export key functions for instrumented code
 __all__ = [
     'measure_checkpoint',
     'checkpoint',
     'Session',
+    'Monitor',
+    'annotate_request',
     'TaskResult',
     'task',
 ]

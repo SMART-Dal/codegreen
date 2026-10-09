@@ -1,6 +1,14 @@
-# Python examples
+# Python deep dive
 
-End-to-end workloads. New here? Start with the [Quickstart](../getting-started/quickstart.md). Looking up a parameter or field? Jump to the [Python API](../api/python.md).
+A detailed walk-through of every Python entry point that ships with
+CodeGreen. New here? Start with the [Quickstart](../getting-started/quickstart.md)
+or the [Examples index](index.md) for short, runnable scripts. Looking up
+a parameter or field? Jump to the [Python API](../api/python.md).
+
+This page complements the numbered, single-purpose examples
+([01](01_quickstart_measure.md)-[10](10_codegreen_vs_perf.md)). The 10
+canonical scripts show *how to use a feature in 30 lines*; this page
+shows *every form, every flag, every caveat*.
 
 The first half of this page covers the in-process `codegreen.Session`, the recommended interface. The second half covers the `codegreen measure` auto-instrumenter for legacy / no-source-edit scenarios.
 

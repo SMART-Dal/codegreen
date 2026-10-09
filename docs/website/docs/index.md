@@ -144,10 +144,12 @@ Get started with CodeGreen in just a few steps:
 
 ## What's new in 0.4.9
 
-- `codegreen monitor` / `codegreen.Monitor` -- continuous sampler with cgroup_v2 per-PID attribution. See [Continuous Monitoring](user-guide/continuous-monitoring.md).
-- `codegreen.annotate_request` over a UDS socket -- per-request energy in Flask/gunicorn webapps. See [08 Monitor socket](examples/08_monitor_socket.md).
-- `codegreen run --stdin <file>` -- pipe a fixed payload into the subprocess across all repeats. See [CLI: run](user-guide/cli-reference.md#run).
-- 10 worked end-to-end examples under [`examples/`](examples/index.md), each verified by `pytest tests/test_examples.py`.
+- Per-function attribution closes frames on every exit path (`try`/`finally`, C++ RAII guard, C return rewrite), so the work inside `return <expr>` is attributed and function names are qualified in all languages. See the [Changelog](about/changelog.md).
+- `codegreen project --sync-device cuda` attributes GPU work to the functions that launched it; `attribution_pct` is now exclusive and `--min-attribution-pct` flags low coverage. See [Project Profiling](user-guide/project-profiling.md).
+- `codegreen monitor` / `codegreen.Monitor` -- continuous sampler with cgroup_v2 per-PID attribution, per-request annotation over a UDS socket, and OTLP / Prometheus exporters. See [Continuous Monitoring](user-guide/continuous-monitoring.md).
+- `codegreen timeline` -- power, stacks, GC, allocation and GPU kernels on one axis, exported for ui.perfetto.dev. See [CLI: timeline](user-guide/cli-reference.md#timeline).
+- `codegreen run --stdin`, `--validate/--no-validate`, `--timeout`; the default per-run time limit is now unlimited. See [CLI: run](user-guide/cli-reference.md#run).
+- 14 worked end-to-end examples under [`examples/`](examples/index.md), each verified by `pytest tests/test_examples.py`.
 - Earlier 0.4.7 / 0.4.8 changes (schema overhaul, local-timezone display fields) are in the [Changelog](about/changelog.md).
 
 ## Supported Platforms

@@ -23,6 +23,13 @@
             "comment"
         ],
         "docstring_types": [],
+        "return_type": {
+            "specifier_nodes": ["type_qualifier", "primitive_type", "sized_type_specifier", "type_identifier", "struct_specifier", "union_specifier", "enum_specifier"],
+            "qualifiers": ["const", "volatile"],
+            "inline_definition_nodes": ["field_declaration_list", "enumerator_list"],
+            "pointer_node": "pointer_declarator",
+            "function_node": "function_declarator"
+        },
         "insertion_rules": {
             "function_enter": {
                 "mode": "inside_start",
@@ -77,7 +84,11 @@
     },
     "instrumentation_config": {
         "import_statement": "#include \"codegreen_runtime.h\"",
+        "exit_strategy": "return_rewrite",
         "templates": {
+            "function_return_value": "{ {type} cg_ret = {value}; {exit} return cg_ret; }",
+            "function_return_void": "{ {value}; {exit} return; }",
+            "function_return_bare": "{ {exit} return; }",
             "function_enter": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"enter\");",
             "function_exit": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
             "function_return": "codegreen_checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
@@ -191,10 +202,13 @@
         "for_statement_types": [
             "for_statement"
         ],
+        "non_braced_body_parents": [],
         "docstring_node_types": [],
         "docstring_delimiters": [],
         "comment_prefix": "//",
-        "indentation_sensitive": false
+        "indentation_sensitive": false,
+        "macro_definition_types": ["preproc_def", "preproc_function_def"],
+        "return_keywords": ["return"]
     },
     "project_config": {
         "source_patterns": [

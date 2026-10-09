@@ -1,4 +1,10 @@
-# Java Examples
+# Java deep dive
+
+For an end-to-end run with a build system and per-method attribution see
+[04 - Project hotspots (Java)](04_project_hotspots_java.md). This page
+covers the single-file `codegreen measure java` path.
+
+
 
 ## Basic Measurement
 

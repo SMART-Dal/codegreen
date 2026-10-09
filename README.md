@@ -24,6 +24,8 @@ pip install codegreen
 
 Pre-built wheels available for Linux x86_64 and macOS ARM64 (Apple Silicon). Includes the native NEMB energy measurement backend.
 
+Optional telemetry exporters for `codegreen monitor`: `pip install "codegreen[otlp]"` (OpenTelemetry/OTLP) or `pip install "codegreen[prometheus]"`.
+
 ### From source (recommended for development)
 
 ```bash
@@ -81,6 +83,23 @@ codegreen measure python script.py -g fine --json
 codegreen measure python script.py -g fine --export-plot energy.html
 ```
 
+### Project profiling, monitoring and timelines
+
+```bash
+# Per-function hotspots for a whole project (build once, run, attribute)
+codegreen project python ./src -r "python main.py" -s "**/*.py"
+
+# GPU work attributed to the launching function (torch/CUDA)
+codegreen project python ./src -r "python train.py" --sync-device cuda
+
+# Continuous host or per-PID sampling, optional OTLP / Prometheus export
+codegreen monitor -d 30 -o energy.jsonl
+codegreen monitor --pid 1234 --exporter prometheus --prometheus-port 9464
+
+# Power, stacks, GC and GPU kernels on one axis for ui.perfetto.dev
+codegreen timeline --nemb nemb.json --jfr run.json --out trace.json
+```
+
 ### Manual measurement from Python (Session API)
 
 For span-based measurement of arbitrary code regions, import `codegreen.Session` directly — no CLI, no AST instrumentation:
@@ -118,7 +137,7 @@ codegreen analyze python script.py --save-instrumented
 ### Benchmark validation (against perf RAPL ground truth)
 
 ```bash
-codegreen benchmark -p nbody spectralnorm -l python -r 5 --profilers codegreen perf
+codegreen benchmark -p nbody -p spectralnorm -l python -r 5 --profiler codegreen --profiler perf
 ```
 
 ## Output formats
@@ -129,7 +148,7 @@ JSON (default for `--json`), CSV, Markdown table, and text summary. The JSON out
 
 Adding a new language requires only a JSON config file in `codegreen/instrumentation/configs/` plus the tree-sitter grammar. No Python code changes needed.
 
-Currently supported: Python, C, C++, Java. JavaScript config exists but is not yet exposed via CLI.
+Currently supported: Python, C, C++, Java, JavaScript. Functions that cannot be framed safely (async, generators, coroutines, C++ `constexpr`) are reported as `skipped_functions` rather than instrumented.
 
 ## Benchmarking
 

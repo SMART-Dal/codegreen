@@ -97,7 +97,8 @@ class LanguageConfigManager:
                 "loop_types": ["for_statement", "while_statement", "do_statement"],
                 "return_types": ["return_statement"],
                 "comment_types": ["comment"],
-                "docstring_types": ["expression_statement"]
+                "docstring_types": ["expression_statement"],
+                "non_braced_body_parents": []
             }
         }
     

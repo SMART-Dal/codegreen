@@ -1,6 +1,9 @@
 # Configuration
 
 CodeGreen uses a JSON configuration file to customize behavior and sensor settings.
+This page is the minimum you need on day one; the
+[Configuration Reference](../user-guide/configuration-reference.md) covers
+every key (env vars, paths, language plumbing, migration from older configs).
 
 ## Configuration File Location
 

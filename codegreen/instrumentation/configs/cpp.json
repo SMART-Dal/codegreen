@@ -66,15 +66,13 @@
             "function_def": "function_enter",
             "function_name": "function_enter",
             "function.method": "function_enter",
-            "local.definition.function": "function_enter",
-            "return": "function_return"
+            "local.definition.function": "function_enter"
         },
         "priority_order": [
             "function_def",
             "function_name",
             "function.method",
-            "local.definition.function",
-            "return"
+            "local.definition.function"
         ],
         "deduplication_rules": {
             "function_enter": {
@@ -90,10 +88,9 @@
     },
     "instrumentation_config": {
         "import_statement": "#include <codegreen/runtime.hpp>",
+        "exit_strategy": "scope_guard",
         "templates": {
-            "function_enter": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"enter\");",
-            "function_exit": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
-            "function_return": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"exit\");",
+            "function_enter": "CodeGreen::Frame cg_frame(\"{checkpoint_id}\", \"{name}\");",
             "loop_start": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
             "loop_exit": "CodeGreen::checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
         },
@@ -219,10 +216,14 @@
         "for_statement_types": [
             "for_statement"
         ],
+        "non_braced_body_parents": [],
         "docstring_node_types": [],
         "docstring_delimiters": [],
         "comment_prefix": "//",
-        "indentation_sensitive": false
+        "indentation_sensitive": false,
+        "unsupported_function_tokens": {"constexpr": "a frame object cannot be declared in a constant-evaluated function", "consteval": "a frame object cannot be declared in a constant-evaluated function"},
+        "unsupported_body_nodes": {"co_await_expression": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions", "co_yield_expression": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions", "co_return_statement": "coroutines and generators suspend between enter and exit, so their frames would interleave with other functions"},
+        "unsupported_scope_boundaries": ["lambda_expression"]
     },
     "project_config": {
         "source_patterns": [

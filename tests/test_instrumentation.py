@@ -9,6 +9,8 @@ Verifies that CodeGreen correctly:
 Run: python -m pytest tests/test_instrumentation.py -v
 """
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -308,6 +310,531 @@ public class TestComments {
                                     capture_output=True, text=True, timeout=10)
             assert result.returncode == 0, f"Instrumented Python doesn't compile: {result.stderr}"
 
+    @pytest.mark.parametrize("name,code", [
+        ("nested_fn", "def outer(n):\n    def inner(x):\n        return x * 2\n    return inner(n)\nouter(5)\n"),
+        ("inline_one_liner", "def one(): return 42\none()\n"),
+        ("multiple_one_liners", "def a(): return 1\ndef b(): return 2\nc = a() + b()\n"),
+        ("ends_in_for", "def f(n):\n    t = 0\n    for i in range(n):\n        t += i\nf(7)\n"),
+        ("deeply_nested", "def d(n):\n    p = list(range(n))\n    for v in range(n):\n        for w in range(v):\n            p[w] = w\n    return p\nd(5)\n"),
+        ("generator_yield", "def g(n):\n    for i in range(n):\n        if i % 2:\n            yield i\n    yield n\nlist(g(8))\n"),
+        ("tab_indented", "def t(n):\n\ts = 0\n\tfor i in range(n):\n\t\ts += i\n\treturn s\nt(4)\n"),
+    ])
+    def test_instrumented_python_always_valid_syntax(self, name, code):
+        """Regression (fannkuch/one-liner class): instrumenting diverse function
+        shapes -- inline bodies, deep nesting, generators, tabs, functions ending in
+        compound statements -- must always yield syntactically VALID Python.
+
+        These shipped broken before because bad indentation slips past tree-sitter's
+        has_error (it does not flag Python 'unexpected indent'), producing a program
+        that dies with IndentationError and is silently reported as 0 J.
+        """
+        import ast
+        from codegreen.instrumentation.language_engine import LanguageEngine
+        engine = LanguageEngine()
+        analysis = engine.analyze_code(code, "python")
+        instrumented = engine.instrument_code(code, analysis.instrumentation_points, "python")
+        ast.parse(instrumented)  # raises SyntaxError if instrumentation broke the code
+
+
+def test_python_same_named_methods_get_distinct_checkpoint_names():
+    """A PyTorch file with Model/CausalSelfAttention/NewGELU `forward`s was
+    profiled as ONE function `forward` (calls summed, energy double-counted);
+    checkpoints carry the class-qualified name, as Java's already do."""
+    from codegreen.instrumentation.language_engine import LanguageEngine
+    code = ("class A:\n    def forward(self, x):\n        return x + 1\n\n"
+            "class B:\n    def forward(self, x):\n        return x * 2\n\n"
+            "def forward(x):\n    return x\n")
+    engine = LanguageEngine()
+    out = engine.instrument_code(code, engine.analyze_code(code, "python").instrumentation_points, "python")
+    for name in ("A.forward", "B.forward"):
+        assert f"'{name}', 'enter'" in out
+    assert "'forward', 'enter'" in out
+
+
+# --- Function frames: every exit path closes the frame with the qualified name, after the return value ---
+
+def _instrument(lang, code):
+    from codegreen.instrumentation.language_engine import LanguageEngine
+    engine = LanguageEngine()
+    result = engine.analyze_code(code, lang)
+    assert result.success, result.error
+    out = engine.instrument_code(code, result.instrumentation_points, lang,
+                                 pre_normalised_source=result.metadata["normalised_source"])
+    return out, {s["function"] for s in result.metadata["skipped_functions"]}
+
+
+def _verify_trace(lines):
+    """`enter F`/`exit F` frames nest; `eval F` (work inside F's return expression) runs while F is innermost."""
+    stack, seen = [], []
+    for ln in lines:
+        kind, _, name = ln.partition(" ")
+        if kind == "enter":
+            stack.append(name)
+            seen.append(name)
+        elif kind == "exit":
+            assert stack and stack.pop() == name, f"unbalanced exit: {ln} with stack {stack}"
+        elif kind == "eval":
+            assert stack and stack[-1] == name, f"{ln} ran outside its frame, stack {stack}"
+    assert not stack, f"frames left open: {stack}"
+    return seen
+
+
+def _run(cmd, cwd):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"{cmd}\n{r.stdout}\n{r.stderr}"
+    return r.stdout.splitlines()
+
+
+def _check_program(tmp_path, lang, files, main_file, build, run, expect_frames, expect_skipped=()):
+    """Build and run the original and the instrumented program: identical program output, balanced frames with
+    return-expression work inside them, every expected function framed, refused constructs reported."""
+    out, skipped = _instrument(lang, files[main_file])
+    stdout = {}
+    for tag, main_src in (("plain", files[main_file]), ("inst", out)):
+        d = tmp_path / tag
+        for name, text in {**files, main_file: main_src}.items():
+            (d / name).parent.mkdir(parents=True, exist_ok=True)
+            (d / name).write_text(text)
+        for cmd in build:
+            _run(cmd, d)
+        stdout[tag] = _run(run, d)
+    assert [ln for ln in stdout["inst"] if not ln.startswith(("enter ", "exit "))] == stdout["plain"], "instrumentation changed program output"
+    frames = _verify_trace(stdout["inst"])
+    assert set(expect_frames) <= set(frames), f"missing frames: {set(expect_frames) - set(frames)}"
+    assert skipped == set(expect_skipped)
+    assert not (set(expect_skipped) & set(frames))
+
+
+PY_PROGRAM = '''\
+LOG = []
+def side(tag, v=None): LOG.append("eval " + tag); return v
+
+class W:
+    def __init__(self, n):
+        self.n = n
+        side("W.__init__")
+
+    def run(self):
+        for i in range(self.n):
+            side("W.run")
+
+    def total(self):
+        return side("W.total", 5), side("W.total", 6)
+
+    def early(self, k):
+        if k:
+            return side("W.early", 1)
+        self.n += 1
+
+    def raises(self):
+        side("W.raises")
+        raise ValueError("x")
+
+    def text(self):
+        """doc"""
+        s = """a
+  b
+c"""
+        return s
+
+    def outer(self):
+        def inner():
+            return side("W.inner", 2)
+        return inner() + side("W.outer", 3)
+
+    def gen(self):
+        yield 1
+
+    async def co(self):
+        return 1
+
+    def fin(self):
+        try:
+            return side("W.fin", 1)
+        finally:
+            side("W.fin", 2)
+
+def tabbed(n):
+\ts = 0
+\tfor i in range(n):
+\t\ts += i
+\treturn side("tabbed", s)
+'''
+
+
+def test_python_frames_cover_every_exit_path(monkeypatch):
+    import ast
+    import sys
+    import types
+    out, skipped = _instrument("python", PY_PROGRAM)
+    ast.parse(out)
+    assert skipped == {"W.gen", "W.co"}
+    log: list = []
+    rt = types.ModuleType("codegreen_runtime")
+    rt.checkpoint = lambda cid, name, kind: log.append(f"{kind} {name}")
+    monkeypatch.setitem(sys.modules, "codegreen_runtime", rt)
+    ns: dict = {}
+    exec(out, ns)
+    ns["LOG"] = log
+    w = ns["W"](2)
+    w.run()
+    assert w.total() == (5, 6) and w.early(1) == 1 and w.early(0) is None
+    with pytest.raises(ValueError):
+        w.raises()
+    assert w.text() == "a\n  b\nc" and w.outer() == 5 and w.fin() == 1 and ns["tabbed"](4) == 6
+    assert list(w.gen()) == [1]
+    frames = _verify_trace(log)
+    assert log[:5] == ["enter W.__init__", "eval W.__init__", "exit W.__init__", "enter W.run", "eval W.run"]
+    i = log.index("enter W.total")
+    assert log[i:i + 5] == ["enter W.total", "eval W.total", "eval W.total", "exit W.total", "enter W.early"]
+    assert log[log.index("eval W.raises") + 1] == "exit W.raises"
+    assert "W.gen" not in frames and "W.co" not in frames and frames.count("W.run") == 1
+
+
+def test_python_unicode_and_inline_bodies_stay_valid():
+    import ast
+    code = "def a(): return 1\n\ndef b(x):\n    s = 'caf\u00e9 \u2713'\n    return s + str(x)\n\nclass C:\n    def m(self):\n        pass\n"
+    out, _ = _instrument("python", code)
+    ast.parse(out)
+    assert "def a(): return 1" in out and "'C.m', 'enter'" in out and "'C.m', 'exit'" in out
+
+
+JAVA_RUNTIME = """\
+package codegreen.runtime;
+public class CodeGreenRuntime {
+    public static void checkpoint(String id, String name, String type) { System.out.println(type + " " + name); }
+}
+"""
+
+JAVA_PROGRAM = """\
+import java.util.*;
+import java.util.function.*;
+public class Prog {
+    static <T> T side(String tag, T v) { System.out.println("eval " + tag); return v; }
+    // café ✓ non-ASCII text before every later method shifts byte offsets from character offsets
+    final int x;
+    Prog(int a) { this(a, 1); }
+    Prog(int a, int b) {
+        this.x = a + b;
+        side("Prog.Prog", 0);
+    }
+    static byte b() {
+        return 1;
+    }
+    static char c() {
+        return 'a' + 1;
+    }
+    static Byte boxed() {
+        return 1;
+    }
+    static long widen(int i) {
+        return side("Prog.widen", i);
+    }
+    static <T> List<T> gen(T t) {
+        List<T> l = new ArrayList<>();
+        l.add(t);
+        return side("Prog.gen", l);
+    }
+    static int tern(boolean f) {
+        return f ? side("Prog.tern", 1) : side("Prog.tern", 2);
+    }
+    static Supplier<Integer> lam(int k) {
+        Supplier<Integer> s = () -> { return side("Prog.main", k); };
+        return () -> { return s.get() + 1; };
+    }
+    static void vd(int c) {
+        if (c > 0) return;
+        side("Prog.vd", 0);
+    }
+    static int early(int c) {
+        for (int i = 0; i < 3; i++) { if (i == c) return side("Prog.early", i); }
+        return -1;
+    }
+    static int thrower(boolean t) throws Exception {
+        if (t) throw new Exception("boom");
+        return side("Prog.thrower", 1);
+    }
+    static int tryFinal() {
+        try {
+            return side("Prog.tryFinal", 1);
+        } finally {
+            side("Prog.tryFinal", 2);
+        }
+    }
+    static Object anon() {
+        return new Object() {
+            int m() {
+                return side("Prog.m", 7);
+            }
+            public String toString() {
+                return "anon" + m();
+            }
+        };
+    }
+    static int sw(int k) {
+        switch (k) {
+            case 0: return side("Prog.sw", 10);
+            default: return side("Prog.sw", 20);
+        }
+    }
+    interface I { default int d() {
+        return side("Prog.I.d", 3);
+    } }
+    static class Inner implements I {
+        int v() {
+            return d() + side("Prog.Inner.v", 1);
+        }
+    }
+    public static void main(String[] a) throws Exception {
+        System.out.println(new Prog(2).x + " " + b() + " " + c() + " " + boxed() + " " + widen(3) + " " + gen("g"));
+        System.out.println(tern(true) + " " + lam(4).get() + " " + early(1) + " " + tryFinal() + " " + sw(0) + sw(5));
+        vd(1);
+        vd(0);
+        try { thrower(true); } catch (Exception e) { System.out.println(e.getMessage()); }
+        System.out.println(thrower(false) + " " + anon() + " " + new Inner().v());
+    }
+}
+"""
+
+
+@pytest.mark.skipif(not shutil.which("javac"), reason="javac missing")
+def test_java_frames_cover_every_construct(tmp_path):
+    _check_program(
+        tmp_path, "java", {"Prog.java": JAVA_PROGRAM, "codegreen/runtime/CodeGreenRuntime.java": JAVA_RUNTIME}, "Prog.java",
+        [["javac", "--release", "11", "-Xlint:-options", "-d", ".", "Prog.java", "codegreen/runtime/CodeGreenRuntime.java"]],
+        ["java", "-cp", ".", "Prog"],
+        ["Prog.Prog", "Prog.b", "Prog.c", "Prog.boxed", "Prog.widen", "Prog.gen", "Prog.tern", "Prog.lam", "Prog.vd",
+         "Prog.early", "Prog.thrower", "Prog.tryFinal", "Prog.anon", "Prog.m", "Prog.toString", "Prog.sw", "Prog.I.d", "Prog.Inner.v", "Prog.main"])
+
+
+C_STUB = """\
+#include <stdio.h>
+#include <string.h>
+void nemb_mark_checkpoint(const char* name) {
+    char kind[16], rest[256];
+    sscanf(name, "%15[^:]:%255s", kind, rest);
+    char* id = strrchr(rest, ':');
+    if (id) *id = 0;
+    if (!strcmp(kind, "enter") || !strcmp(kind, "exit")) printf("%s %s\\n", kind, rest);
+}
+"""
+
+C_PROGRAM = """\
+#include <stdio.h>
+struct S { int a; double b; };
+static int side(const char *tag, int v) { printf("eval %s\\n", tag); return v; }
+static double sided(const char *tag, double v) { printf("eval %s\\n", tag); return v; }
+struct S mk(int a) {
+    struct S s = {a, 1.5};
+    return s;
+}
+static const char *name(int i) {
+    if (i) return "x";
+    return "y";
+}
+unsigned long big(void) {
+    return 1UL << 40;
+}
+double dbl(int i) {
+    return sided("dbl", i * 0.5);
+}
+int fib(int n) {
+    if (n <= 1) return side("fib", n);
+    else return fib(n - 1) + fib(n - 2);
+}
+void v(int *a) {
+    if (!a) return;
+    *a = side("v", 1);
+}
+void w(int *a) {
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            if (i + j == 3) return;
+    *a = 2;
+}
+int tern(int k) {
+    return k ? side("tern", 1) : side("tern", 2);
+}
+void *nul(void) {
+    return (void *)0;
+}
+enum { RA, RB } pick(void) {
+    return RB;
+}
+void fall(int *a) {
+    *a = side("fall", 4);
+}
+#define BAIL(x) if (!(x)) return -1
+int guarded(int v) {
+    BAIL(v > 0);
+    return side("main", v);
+}
+int main(void) {
+    int z = 0;
+    struct S s = mk(2);
+    printf("%d %s %lu %f %d %d %d %p\\n", s.a, name(0), big(), dbl(3), fib(5), tern(0), tern(1), nul());
+    v(&z);
+    v(0);
+    w(&z);
+    fall(&z);
+    printf("%d %d %d\\n", z, pick() == RB, guarded(2));
+}
+"""
+
+
+@pytest.mark.skipif(not shutil.which("gcc"), reason="gcc missing")
+def test_c_frames_cover_every_construct(tmp_path):
+    rt = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "language_runtimes" / "c"
+    _check_program(
+        tmp_path, "c", {"prog.c": C_PROGRAM, "stub.c": C_STUB}, "prog.c",
+        [["gcc", "-std=c11", "-Wall", "-Werror=return-type", "-I", str(rt), "-o", "prog", "prog.c", "stub.c"]],
+        ["./prog"],
+        ["mk", "big", "dbl", "fib", "v", "w", "tern", "fall", "main"], expect_skipped={"pick", "guarded"})
+
+
+CPP_STUB = """\
+#include <cstdio>
+#include <cstring>
+extern "C" void nemb_mark_checkpoint(const char* name) {
+    char kind[16], rest[256];
+    std::sscanf(name, "%15[^:]:%255s", kind, rest);
+    char* id = std::strrchr(rest, ':');
+    if (id) *id = 0;
+    if (!std::strcmp(kind, "enter") || !std::strcmp(kind, "exit")) std::printf("%s %s\\n", kind, rest);
+}
+"""
+
+CPP_PROGRAM = """\
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <vector>
+template <typename T> T side(const char* tag, T v) { std::printf("eval %s\\n", tag); return v; }
+// café ✓ non-ASCII text before every later function
+struct Big { std::vector<int> v; Big() : v(10, 1) {} Big(const Big&) = delete; Big(Big&&) = default; };
+Big make() {
+    return side("make", Big());
+}
+std::string str(int i) {
+    if (i) return side("str", std::string("x"));
+    return std::string("y");
+}
+void thrower(int i) {
+    if (i) throw std::runtime_error("e");
+    std::puts("ok");
+}
+void caught() {
+    try { thrower(1); } catch (const std::exception&) { std::puts("caught"); }
+}
+template <typename T>
+T twice(T x) {
+    return side("twice", x + x);
+}
+constexpr int cx(int x) {
+    return x * 2;
+}
+int lam() {
+    auto f = [](int a) { return a + 1; };
+    return side("lam", f(2));
+}
+void bare(int* p) {
+    if (!p) return;
+    *p = side("bare", 1);
+}
+int main() {
+    int z = 0;
+    bare(&z);
+    bare(nullptr);
+    caught();
+    std::printf("%zu %s %d %d %d\\n", make().v.size(), str(0).c_str(), twice(3), lam(), cx(2));
+}
+"""
+
+
+@pytest.mark.skipif(not shutil.which("g++"), reason="g++ missing")
+def test_cpp_frames_cover_every_construct(tmp_path):
+    rt = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "language_runtimes" / "cpp"
+    _check_program(
+        tmp_path, "cpp", {"prog.cpp": CPP_PROGRAM, "stub.cpp": CPP_STUB}, "prog.cpp",
+        [["g++", "-std=c++17", "-Wall", "-I", str(rt), "-o", "prog", "prog.cpp", "stub.cpp"]],
+        ["./prog"],
+        ["make", "str", "thrower", "caught", "twice", "lam", "bare", "main"], expect_skipped={"cx"})
+
+
+def test_cpp_coroutines_are_refused():
+    code = "#include <coroutine>\nstruct T {};\nT co() {\n    co_return;\n}\nint ok() {\n    return 1;\n}\n"
+    out, skipped = _instrument("cpp", code)
+    assert skipped == {"co"} and "Frame cg_frame" in out and out.count("Frame cg_frame") == 1
+
+
+JS_RUNTIME = "export const CodeGreen = { checkpoint(id, name, type) { console.log(type + ' ' + name); } };\n"
+
+JS_PROGRAM = """\
+function side(tag, v) { console.log('eval ' + tag); return v; }
+function plain(n) {
+    if (n < 2) return side('plain', n);
+    return plain(n - 1) + plain(n - 2);
+}
+class K {
+    constructor(a) {
+        this.a = a;
+        side('constructor', 0);
+    }
+    m() {
+        const f = (x) => { return x + 1; };
+        const g = (x) => x * 2;
+        return side('m', f(this.a) + g(1));
+    }
+    static s() {
+        return side('s', 1);
+    }
+    async am() {
+        return 2;
+    }
+    *g() {
+        yield 3;
+    }
+}
+function thrower(t) {
+    if (t) throw new Error('x');
+    return side('thrower', 1);
+}
+function comma() {
+    return side('comma', 1), side('comma', 2);
+}
+function nested() {
+    function inner() {
+        return side('inner', 5);
+    }
+    return inner() + side('nested', 1);
+}
+function tern(t) {
+    return t ? side('tern', 1) : side('tern', 2);
+}
+async function af() {
+    return await Promise.resolve(1);
+}
+function* gen() {
+    yield 1;
+}
+console.log(plain(4), new K(1).m(), K.s(), comma(), nested(), tern(false), [...gen()]);
+try { thrower(true); } catch (e) { console.log(e.message); }
+console.log(thrower(false));
+af().then((v) => console.log('af', v));
+new K(2).am().then((v) => console.log('am', v));
+console.log([...new K(3).g()]);
+"""
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node missing")
+def test_javascript_frames_cover_every_construct(tmp_path):
+    _check_program(
+        tmp_path, "javascript",
+        {"prog.mjs": JS_PROGRAM, "node_modules/codegreen-runtime/index.mjs": JS_RUNTIME,
+         "node_modules/codegreen-runtime/package.json": '{"name": "codegreen-runtime", "type": "module", "main": "index.mjs"}'},
+        "prog.mjs", [], ["node", "prog.mjs"],
+        ["plain", "constructor", "m", "s", "thrower", "comma", "nested", "inner", "tern"], expect_skipped={"af", "K.am", "K.g"})
+
 
 class TestConfigDriven:
     """Verify instrumentation is config-driven, not hardcoded."""
@@ -343,3 +870,71 @@ class TestConfigDriven:
                 if f'== "{lang}"' in line or f"== '{lang}'" in line:
                     if "if " in line or "elif " in line:
                         pytest.fail(f"Hardcoded language check at line {i+1}: {stripped}")
+
+
+JAVA_RAPL_PROG = """\
+import codegreen.runtime.CodeGreenStandaloneRuntime;
+import java.io.RandomAccessFile;
+public class Prog {
+    public static void main(String[] a) throws Exception {
+        CodeGreenStandaloneRuntime.checkpoint("1", "m", "enter");
+        for (int i = 0; i + 1 < a.length; i += 2)
+            try (RandomAccessFile f = new RandomAccessFile(a[i], "rw")) { f.write(a[i + 1].getBytes()); }
+        Thread.sleep(150);
+        CodeGreenStandaloneRuntime.checkpoint("2", "m", "exit");
+    }
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def java_rapl_prog(tmp_path_factory):
+    if not (shutil.which("javac") and shutil.which("java")):
+        pytest.skip("javac/java missing")
+    rt = Path(__file__).parent.parent / "codegreen" / "instrumentation" / "language_runtimes" / "java"
+    d = tmp_path_factory.mktemp("java_rapl")
+    (d / "Prog.java").write_text(JAVA_RAPL_PROG)
+    r = subprocess.run(["javac", "-cp", str(rt), "-d", str(d), str(d / "Prog.java")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return d
+
+
+def _fake_rapl(root, packages):
+    """packages: list of (name, energy_uj, max_range_uj); energy files are fixed-width so in-place rewrites never expose a short read."""
+    for i, (name, energy, rng) in enumerate(packages):
+        dom = root / f"intel-rapl:{i}"
+        dom.mkdir(parents=True)
+        (dom / "name").write_text(name + "\n")
+        (dom / "energy_uj").write_text(f"{energy:012d}\n")
+        (dom / "max_energy_range_uj").write_text(f"{rng}\n")
+
+
+def _run_java_rapl(prog, root, *writes):
+    ck = prog / "cp.txt"
+    ck.unlink(missing_ok=True)
+    r = subprocess.run(
+        ["java", f"-Dcodegreen.rapl.root={root}", "-cp", str(prog), "Prog", *writes],
+        capture_output=True, text=True, env={**os.environ, "CG_CP_CHECKPOINT_FILE": str(ck)}, timeout=60)
+    return r, (ck.read_text() if ck.exists() else "")
+
+
+def test_java_runtime_fails_loudly_without_rapl(java_rapl_prog, tmp_path):
+    r, out = _run_java_rapl(java_rapl_prog, tmp_path / "missing")
+    assert r.returncode != 0 and "no RAPL package domain" in r.stderr and out == ""
+
+
+def test_java_runtime_rejects_unreadable_package_domain(java_rapl_prog, tmp_path):
+    _fake_rapl(tmp_path, [("package-0", 5, 1000)])
+    (tmp_path / "intel-rapl:0" / "max_energy_range_uj").unlink()
+    r, _ = _run_java_rapl(java_rapl_prog, tmp_path)
+    assert r.returncode != 0 and "cannot read RAPL domain" in r.stderr
+
+
+def test_java_runtime_sums_packages_and_handles_counter_wrap(java_rapl_prog, tmp_path):
+    _fake_rapl(tmp_path, [("package-0", 900, 1000), ("package-1", 100, 5000), ("psys", 1, 10)])
+    d0, d1 = (tmp_path / f"intel-rapl:{i}" / "energy_uj" for i in (0, 1))
+    r, out = _run_java_rapl(java_rapl_prog, tmp_path, str(d0), f"{100:012d}\n", str(d1), f"{400:012d}\n")
+    assert r.returncode == 0, r.stderr
+    row = out.strip().split("|")
+    assert row[:3] == ["CG_CP_SUM", row[1], "m"] and row[3] == "1"
+    assert int(row[4]) == (100 + 1000 - 900) + (400 - 100)

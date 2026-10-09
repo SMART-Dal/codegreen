@@ -1,28 +1,35 @@
 # Quick start
 
-Get a real energy measurement in three steps. For end-to-end examples (training loops, GPT-2 inference, mode comparison), continue to [Python examples](../examples/python.md). For every parameter and field, see the [Python API](../api/python.md).
+Three commands to a real hardware-RAPL energy reading on Linux or macOS.
+For runnable, single-purpose scripts continue to the [Examples index](../examples/index.md);
+for every parameter and field, see the [Python API](../api/python.md).
 
 ## 1. Install
 
 ```bash
-git clone https://github.com/SMART-Dal/codegreen.git
-cd codegreen
-./install.sh
+pip install codegreen
 ```
 
-## 2. Initialize sensors
+(Source install: `git clone https://github.com/SMART-Dal/codegreen.git && cd codegreen && ./install.sh`.
+See [Installation](installation.md) for platform notes.)
+
+## 2. Initialize sensors (Linux only)
 
 ```bash
 sudo codegreen init-sensors
 ```
 
+macOS users skip this step; IOReport needs no setup. After logout/login on Linux,
+your user is in the `codegreen` group and `/sys/class/powercap` is readable.
+
 ## 3. Verify setup
 
 ```bash
-codegreen measure-workload --duration 5 --workload cpu_stress
+codegreen doctor
 ```
 
-If you see energy values (Joules/Watts), sensors are working.
+Expect at least one energy backend reported as `ok`. If you see permission errors,
+re-run step 2 and log out/in.
 
 ## 4. Measure your code
 
@@ -43,7 +50,10 @@ with codegreen.Session("training") as s:
 # writes codegreen_<pid>.json with per-task energy + per-domain breakdown
 ```
 
-For all three forms (context manager, explicit `start_task`/`stop_task`, decorator) and power-vs-time plots, see [Python examples](../examples/python.md). For every parameter and field, see the [Python API](../api/python.md).
+For all three forms (context manager, explicit `start_task`/`stop_task`, decorator),
+power-vs-time plots, and the full output schema, see
+[Example 03 - Session API](../examples/03_session_api.md) and
+[Python API](../api/python.md).
 
 ### Whole-script measurement (any command)
 
@@ -97,8 +107,9 @@ Output includes total energy (J), average power (W), per-function breakdown with
 
 ## Next steps
 
-- [Python examples](../examples/python.md) - end-to-end workloads, GPT-2 inference, CLI vs Session comparison
+- [Examples index](../examples/index.md) - 10 runnable single-purpose scripts (1 - 10)
 - [Python API](../api/python.md) - every `Session` parameter, every `TaskResult` field
 - [CLI reference](../user-guide/cli-reference.md) - all commands and options
-- [Configuration](configuration.md) - sampling rate, output paths
-- [CI/CD integration](../user-guide/cicd-integration.md) - continuous energy monitoring
+- [Continuous Monitoring](../user-guide/continuous-monitoring.md) - watch an already-running service or webapp
+- [Project Profiling](../user-guide/project-profiling.md) - per-function hotspots across a multi-file project
+- [CI/CD integration](../user-guide/cicd-integration.md) - energy budget gating in pipelines

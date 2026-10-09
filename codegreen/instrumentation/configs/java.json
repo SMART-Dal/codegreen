@@ -64,15 +64,13 @@
             "method_def": "function_enter",
             "method_name": "function_enter",
             "function.method": "function_enter",
-            "local.definition.method": "function_enter",
-            "return": "function_return"
+            "local.definition.method": "function_enter"
         },
         "priority_order": [
             "method_def",
             "method_name",
             "function.method",
-            "local.definition.method",
-            "return"
+            "local.definition.method"
         ],
         "deduplication_rules": {
             "function_enter": {
@@ -87,10 +85,11 @@
     },
     "instrumentation_config": {
         "import_statement": "import codegreen.runtime.CodeGreenRuntime;",
+        "exit_strategy": "try_finally",
         "templates": {
             "function_enter": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"enter\");",
             "function_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
-            "function_return": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
+            "function_frame": "{indent}{enter}\n{indent}try {\n{body}} finally { {exit} } ",
             "loop_start": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_start\");",
             "loop_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{name}\", \"loop_exit\");"
         },
@@ -226,6 +225,14 @@
         ],
         "for_statement_types": [
             "for_statement"
+        ],
+        "non_braced_body_parents": [
+            {"type": "if_statement",          "fields": ["consequence", "alternative"]},
+            {"type": "for_statement",         "fields": ["body"]},
+            {"type": "enhanced_for_statement","fields": ["body"]},
+            {"type": "while_statement",       "fields": ["body"]},
+            {"type": "do_statement",          "fields": ["body"]},
+            {"type": "labeled_statement",     "fields": ["statement"]}
         ],
         "docstring_node_types": [],
         "docstring_delimiters": [],

@@ -1,4 +1,11 @@
-# C/C++ Examples
+# C / C++ deep dive
+
+Single-file `codegreen measure c|cpp` walkthrough. For multi-file C/C++
+projects (Make / CMake), use
+[`codegreen project`](../user-guide/project-profiling.md) with
+`-b "make ..."` and `-r "./build/run"`.
+
+
 
 ## Basic C Measurement
 

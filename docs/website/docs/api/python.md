@@ -1,11 +1,31 @@
 # Python API
 
-Reference for the two Python entry points. For a guided tour with full workloads, see [Python examples](../examples/python.md). For a 60-second introduction, see the [Quickstart](../getting-started/quickstart.md).
+Reference for the public Python API. The runtime exposes:
 
-1. **`codegreen.Session`** — manual span-based measurement, imported and used directly in your code.
-2. **CLI auto-instrumenter** — runs `codegreen measure ...` over a script, injects checkpoints automatically.
+```python
+codegreen.__all__ = [
+    "Session", "Monitor", "annotate_request",
+    "TaskResult", "task",
+]
+```
 
-Both share the same NEMB C++ backend, the same JSON output envelope, and the same `libcodegreen-nemb.so` ABI (v2+). They can coexist in one process.
+Use:
+
+1. **`codegreen.Session`** -- manual span-based measurement, in-process.
+2. **`@codegreen.task`** -- decorator form of Session tasks.
+3. **`codegreen.Monitor`** -- continuous sampling of an already-running
+   service or the whole host.
+4. **`codegreen.annotate_request`** -- per-request span via a UDS
+   annotation channel served by a Monitor.
+5. **CLI auto-instrumenter** -- runs `codegreen measure ...` over a
+   script, injects checkpoints automatically (no Python import needed).
+
+All share the same NEMB C++ backend, the same JSON output envelope, and
+the same `libcodegreen-nemb.so` ABI (v2+). They can coexist in one
+process.
+
+For a guided tour with full workloads, see [Python examples](../examples/python.md).
+For a 60-second introduction, see the [Quickstart](../getting-started/quickstart.md).
 
 ## Manual API: `codegreen.Session`
 
@@ -173,7 +193,7 @@ So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]
 
 See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
 
-### Noise / quality reporting
+### Noise / quality reporting { #noise--quality-reporting }
 
 When `record_time_series=True`, every task carries a `noise` dict and `totals` carry a roll-up:
 
@@ -254,6 +274,103 @@ Per-session override: pass `sample_interval_ms=N` to `Session(...)` — it calls
 ### Multi-process / RAPL caveat
 
 RAPL counters are **system-wide, not per-process**. If two CodeGreen sessions overlap in wall time on the same socket, both readings include the other's energy (double-counting). The Session constructor warns when it detects another live CodeGreen pid via `$XDG_RUNTIME_DIR/codegreen-<uid>.pids`. For benchmarks, run sequentially or accept "system energy during this window" semantics.
+
+## `codegreen.Monitor`
+
+Continuous host / PID sampler for already-running services. Used by
+`codegreen monitor` under the hood. See the
+[Continuous Monitoring guide](../user-guide/continuous-monitoring.md) and
+example [06](../examples/06_monitor_host.md) /
+[07](../examples/07_monitor_pid.md) for runnable code.
+
+```python
+import codegreen
+
+m = codegreen.Monitor(interval_ms=200).start()
+# ... your service runs ...
+summary = m.stop()
+```
+
+### Constructor parameters
+
+| Param | Default | Notes |
+|---|---|---|
+| `interval_ms` | `200` | Sample period. `ValueError` if < 50 (RAPL noise floor) |
+| `duration_s` | `None` | Stop after N seconds; `None` = manual `.stop()` |
+| `pid` | `None` | PID to attribute (requires psutil) |
+| `attribution_mode` | `"auto"` | `auto`, `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
+| `output_path` | `None` | Stream samples as JSON-lines to this file |
+| `rotate_mb` | `0` | Rotate output file when it exceeds N MB (0 = off) |
+| `max_in_memory` | `1000` | Bound in-memory sample deque (0 = drop when streaming) |
+| `listen_socket_path` | `None` | Bind a UDS for `annotate_request` events |
+
+### Sample schema
+
+Each sample (also one JSON-line in `output_path`):
+
+| Key | Type | Notes |
+|---|---|---|
+| `t` | `float` | seconds since `start()` |
+| `joules_total` | `float` | cumulative system Joules since `start()` |
+| `joules_delta` | `float` | delta since previous sample |
+| `watts` | `float` | instantaneous watts from the backend |
+| `proc_cpu_percent` | `float` | (PID mode) parent + recursive children CPU% |
+| `proc_n_children` | `int` | (PID mode) live child count |
+| `proc_attributed_joules` | `float` | (PID mode) `joules_delta * share` |
+| `attribution_backend` | `str` | (PID mode, header only) `cgroup_v2` / `cgroup_v1` / `cpu_percent` |
+
+### Stop summary
+
+`m.stop()` returns a dict and (if `output_path` set) writes one final
+`summary` JSON-line:
+
+```python
+{
+  "duration_s": 30.0,
+  "total_joules": 126.4,
+  "mean_watts": 4.21,
+  "samples_captured": 150,
+  "terminated_reason": null,        # or "pid 1234 exited", "duration", "ctrl-c"
+  "attribution_backend": "cgroup_v2",
+  "per_label": {                    # only populated when listen_socket_path is set
+    "GET /search": {"count": 412, "total_joules": 8.31,
+                    "p50_ms": 21.0, "p95_ms": 84.3},
+  },
+}
+```
+
+### Caveats
+
+- One Monitor per process (raises `RuntimeError` on second `start()`).
+- RAPL is system-wide: overlapping Monitors double-count.
+- Sub-50 ms intervals raise `ValueError`.
+- PID death is caught only on `psutil.NoSuchProcess`; other exceptions
+  propagate.
+
+## `codegreen.annotate_request` { #annotate_request }
+
+Context manager that emits `start`/`end` events to a Monitor over a
+Unix-domain socket. Each span becomes a `per_label` bucket in the
+Monitor's summary.
+
+```python
+import codegreen
+
+with codegreen.annotate_request("GET /search", socket_path="/tmp/cg.sock"):
+    handle_search(...)
+```
+
+Constructor:
+
+| Param | Default | Notes |
+|---|---|---|
+| `name` | required | Label aggregated into `per_label[name]` |
+| `labels` | `None` | Optional extra dict; merged into the bucket metadata |
+| `socket_path` | `"/tmp/codegreen.sock"` | UDS path the Monitor listens on |
+| `timeout_s` | `0.25` | Drop the annotation if the Monitor is unreachable; never block the request |
+
+The full Flask/WSGI recipe and a Monitor-aware example live in
+[08 - Monitor socket](../examples/08_monitor_socket.md).
 
 ## Runtime module (auto-instrumenter)
 

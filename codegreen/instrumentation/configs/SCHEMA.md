@@ -44,6 +44,10 @@ CodeGreen executes Tree-sitter queries found in `third_party/nvim-treesitter/que
 * **`import_statement`**: The line to add at the top of the file (e.g., `import codegreen`).
 * **`templates`**: A dictionary of code templates. Use `{checkpoint_id}` and `{name}` as placeholders.
  * *Example:* `"_codegreen_rt.checkpoint('{checkpoint_id}', '{name}', 'enter')"`
+* **`exit_strategy`**: How a function frame is closed on every exit path (return, fall-through, exception), after the return value is evaluated. Without it the legacy per-return and implicit-exit probes are used.
+ * `try_finally` (Python, Java, JavaScript): the template `function_frame` (`{indent}`, `{unit}`, `{enter}`, `{body}`, `{exit}`) wraps the body as one atomic edit. Indentation-sensitive languages re-indent the body, leaving lines that start inside a literal (`node_types.literal_types`) untouched.
+ * `scope_guard` (C++): `function_enter` is an RAII declaration whose destructor exits.
+ * `return_rewrite` (C): `return v;` becomes `{ T tmp = v; exit; return tmp; }` via `function_return_value`, `function_return_void` (`void` function returning an expression) and `function_return_bare`; `ast_config.return_type` locates the declared type, and a function whose type cannot be written as a declaration is refused.
 
 ---
 
@@ -54,6 +58,8 @@ Beyond the standard `function_types`, `body_types`, `class_types`, and `return_t
 * **`terminating_types`**: Node types that unconditionally end control flow (e.g. `return_statement`, `throw_statement`). Used to detect whether an implicit function-exit checkpoint would be unreachable.
 * **`constructor_invocation_types`**: Node types for delegating constructor calls that must remain the first statement in a body (e.g. Java's `explicit_constructor_invocation`). The `inside_start` insertion rule skips past these before placing its checkpoint.
 * **`import_after_node_types`**: Top-level node types after which the runtime import should be placed (e.g. `package_declaration`). When set, the import insertion uses tree-sitter AST lookup instead of line-based scanning.
+* **`unsupported_function_tokens`**, **`unsupported_body_nodes`**, **`unsupported_scope_boundaries`**: Functions that cannot hold a frame (async, generators, coroutines, constexpr) are not instrumented and are listed in `AnalysisResult.metadata["skipped_functions"]` with the reason. The first two map a function child token / a body node type to the reason; the third lists nested scopes whose bodies are not scanned.
+* **`non_braced_body_parents`**: Control-flow parent node types whose body field(s) may be a bare statement instead of a block. Used by the `BraceNormaliser` pre-pass to wrap such bodies with `{ ... }` before instrumentation, so probe insertion never escapes its enclosing scope. Each entry is `{"type": <parent>, "fields": [<field>...]}`. Example for Java: `{"type": "if_statement", "fields": ["consequence", "alternative"]}`. Empty array disables the pass for the language.
 
 ---
 

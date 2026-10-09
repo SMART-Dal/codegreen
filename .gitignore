@@ -128,3 +128,12 @@ dist/
 codegreen/ide/vscode/node_modules/
 codegreen/ide/vscode/out/
 bin/
+codegreen_[0-9]*.json
+examples/**/codegreen_*.json
+examples/**/.work/
+examples/**/pipeline.html
+*.jar
+/lib/
+/include/
+/cg_telemetry.md
+.pypirc

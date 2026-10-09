@@ -29,4 +29,19 @@ inline void checkpoint(const std::string& id, const std::string& name, const std
     nemb_mark_checkpoint(ss.str().c_str());
 }
 
+/**
+ * Function frame: enter on construction, exit on destruction. The destructor runs after the return value is
+ * constructed and on every exit path (return, exception), so the frame owns the work inside return expressions
+ * and exit never mis-pairs. The ids and name must outlive the frame (string literals).
+ */
+class Frame {
+    const char* id_;
+    const char* name_;
+public:
+    Frame(const char* id, const char* name) : id_(id), name_(name) { checkpoint(id_, name_, "enter"); }
+    ~Frame() { checkpoint(id_, name_, "exit"); }
+    Frame(const Frame&) = delete;
+    Frame& operator=(const Frame&) = delete;
+};
+
 } // namespace CodeGreen
