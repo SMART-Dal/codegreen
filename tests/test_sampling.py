@@ -50,6 +50,8 @@ def test_jmh_forks_get_the_agent_once_other_jvms_via_tool_options(tmp_path):
     assert argv[-2:] == ["-jvmArgsAppend", "-agentpath:x"] and "JAVA_TOOL_OPTIONS" not in env
     argv, env = java_agent_command(["java", "-jar", str(app)], "-agentpath:x", {"JAVA_TOOL_OPTIONS": "-Xmx1g"})
     assert argv == ["java", "-jar", str(app)] and env["JAVA_TOOL_OPTIONS"] == "-Xmx1g -agentpath:x"
+    argv, _ = java_agent_command(["java", "-jar", str(jmh), "Bench", "-jvmArgsAppend", "-Xms4g -Xmx4g", "-rf", "json"], "-agentpath:x", {})
+    assert argv == ["java", "-jar", str(jmh), "Bench", "-jvmArgsAppend", "-Xms4g -Xmx4g -agentpath:x", "-rf", "json"]
 
 
 def test_energy_by_method_splits_each_interval_across_its_samples():

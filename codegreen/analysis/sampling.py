@@ -62,6 +62,11 @@ def java_agent_command(argv: list[str], agent: str, env: dict) -> tuple[list[str
     JMH forks via -jvmArgsAppend, any other JVM via JAVA_TOOL_OPTIONS."""
     jar = argv[argv.index("-jar") + 1] if "-jar" in argv else ""
     if jar and is_jmh_jar(jar):
+        # JMH splits one -jvmArgsAppend value on spaces but passes a second occurrence's values unsplit, so the fork gets
+        # "-Xms4g -Xmx4g" as one token, cannot start, and JMH still exits 0: merge into the existing value instead.
+        if "-jvmArgsAppend" in argv:
+            i = argv.index("-jvmArgsAppend") + 1
+            return [*argv[:i], f"{argv[i]} {agent}", *argv[i + 1:]], dict(env)
         return [*argv, "-jvmArgsAppend", agent], dict(env)
     return list(argv), {**env, "JAVA_TOOL_OPTIONS": " ".join(x for x in (env.get("JAVA_TOOL_OPTIONS", ""), agent) if x)}
 
