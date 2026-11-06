@@ -1777,6 +1777,8 @@ def test_version_comes_from_the_source_tree_not_stale_metadata():
     version = re.search(r'^version *= *"([^"]+)"', pyproject, re.M).group(1)
     assert codegreen.__version__ == version
     assert version in CliRunner().invoke(cli.app, ["--version"]).output
+    from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+    assert rt._runtime_version() == version  # meta.codegreen_version of every report read stale metadata
 
 
 def test_init_merges_detected_providers_into_the_user_config_on_every_environment(tmp_path, monkeypatch):

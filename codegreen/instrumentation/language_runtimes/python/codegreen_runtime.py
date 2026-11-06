@@ -174,12 +174,21 @@ def _python_monotonic_vs_t_ns_offset_ns(client=None) -> Optional[int]:
         return None
 
 
+@functools.lru_cache(maxsize=None)
 def _runtime_version() -> str:
-    try:
-        from importlib.metadata import version as _v
-        return _v("codegreen")
-    except Exception:
-        return "unknown"
+    """codegreen.__version__: pyproject.toml [project].version (the single source, also read by CMake) next to the
+    package (_package_file, so a copy injected into a project agrees), where installed metadata can be stale; the
+    installed distribution's metadata for a wheel."""
+    pkg = _package_file("config.json")
+    pyproject = pkg.parent.parent / "pyproject.toml" if pkg and pkg.is_file() else None
+    if pyproject and pyproject.is_file():
+        import re
+        m = re.search(r'^version *= *"([0-9]+\.[0-9]+\.[0-9]+[^"]*)"', pyproject.read_text(encoding="utf-8"), re.M)
+        if not m:
+            raise RuntimeError(f"no [project].version in {pyproject}")
+        return m.group(1)
+    from importlib.metadata import version
+    return version("codegreen")
 
 
 def _package_file(name: str) -> Optional[Path]:
