@@ -409,18 +409,38 @@ Lower-level function with additional context. `checkpoint()` delegates to this.
 
 ## Auto-instrumenter output format
 
-At process exit (`atexit`), the runtime prints checkpoint data to stdout:
+At process exit (`atexit`), the runtime writes checkpoint data to a copy of
+stdout taken at startup (so a workload that closes stdout does not lose it).
+Schema for `libcodegreen-nemb` ABI 4 (`nemb_abi_version() >= 4`; the same
+object is returned by `nemb_get_checkpoints_json`):
 
 ```
 --- CODEGREEN_RESULT_START ---
 {"measurements": [
-  {"checkpoint_id": "enter:main:1#inv_1_t...", "timestamp": 13973..., "joules": 6.80, "watts": 0.76},
-  {"checkpoint_id": "exit:main:2#inv_1_t...", "timestamp": 13973..., "joules": 8.91, "watts": 71.94}
-]}
+  {"checkpoint_id": "enter:main:1#inv_1_t...", "timestamp": 13973..., "joules": 6.80, "watts": 0.76,
+   "ri": 1, "clamp": "none", "provider_j": {"intel_rapl": 6.80}},
+  {"checkpoint_id": "exit:main:2#inv_1_t...", "timestamp": 13973..., "joules": 8.91, "watts": 71.94,
+   "ri": 41, "clamp": "none", "provider_j": {"intel_rapl": 8.91}}
+ ],
+ "sampler": {"interval_ms": 10, "buffer_capacity": 100000, "readings": 42, "wrapped": false,
+             "rejected_readings": 0, "dropped_checkpoints": 0, "first_ns": 13973..., "last_ns": 13973...,
+             "median_gap_ns": 10061234, "max_gap_ns": 10411021, "affinity_cpus": 8,
+             "providers": ["intel_rapl"], "config_path": "/.../codegreen/config.json"}}
 --- CODEGREEN_RESULT_END ---
 ```
 
-The CLI parses this output to extract measurement results.
+| Field | Meaning |
+|---|---|
+| `timestamp` | `CLOCK_MONOTONIC` nanoseconds |
+| `joules` | Cumulative energy interpolated at `timestamp`, the sum of `provider_j`; the difference between two markers is the energy of that window |
+| `ri` | Index of the first sampler reading at or after the marker (`readings` after the last one). The difference between two markers' `ri` is the number of readings inside that window |
+| `clamp` | `none`, or `before_first` / `after_last` when the marker lies outside the sampled range and took the edge reading |
+| `provider_j` | Interpolated cumulative joules per NEMB provider |
+| `sampler` | Background sampler statistics for the process (emitted even with no readings); see [Exit codes and measurement validity](../user-guide/cli-reference.md#exit-codes-and-measurement-validity) |
+
+The CLI parses this block and derives the `validity` verdict from it. A block
+without `sampler` comes from an older library and is reported as
+`STALE_LIBRARY`.
 
 ## CLI usage
 

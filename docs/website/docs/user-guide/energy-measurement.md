@@ -45,7 +45,16 @@ Instead of synchronous hardware reads at every checkpoint (~5-20us each), CodeGr
 
 ### Correlation and Interpolation
 
-After the workload completes, NEMB correlates checkpoint timestamps with the time-series energy data using binary search + linear interpolation to attribute energy between function enter/exit points.
+After the workload completes, NEMB correlates checkpoint timestamps with the time-series energy data using binary search + linear interpolation to attribute energy between function enter/exit points. The buffer is seeded with a synchronous reading before the sampler starts and closed with one at report time, so every marker is bracketed by real readings. A marker outside the sampled range (ring buffer wrapped) is flagged and the run is invalid (`MARKER_CLAMPED`), never silently assigned the edge value.
+
+### Validity
+
+Each result carries a `validity` verdict computed from the sampler statistics: CPU affinity, reading gaps, buffer wrap, clamped markers, window length in readings, and zero or negative energy. `measure` and `run` exit 3 on an invalid result. Reason codes and the JSON fields are listed under [Exit codes and measurement validity](cli-reference.md#exit-codes-and-measurement-validity).
+
+- Do not pin the measured process to one CPU: the sampler thread runs in it and would compete with the workload (`AFFINITY_SINGLE_CPU`).
+- A measured window must span several sampling intervals. Shorter windows are `TOTAL_BELOW_RESOLUTION`; repeat short commands with `codegreen run --repeat N --warmup M`.
+- Select sensors with `--sensors` on hosts with a GPU; otherwise GPU energy is summed into the total (`GPU_IN_TOTAL`).
+- Use `codegreen project` for exclusive per-function attribution and read each function's `resolution`.
 
 ## Granularity Modes
 

@@ -269,6 +269,49 @@ cp config/codegreen.json ~/.codegreen/codegreen.json
 }
 ```
 
+The `enabled` flags do not select providers at run time. NEMB uses every
+provider that initializes (`amd_rapl` only when `intel_rapl` does not, since
+both read the same package counter). To measure a subset, pass `--sensors` to
+`codegreen measure` or set `CODEGREEN_PROVIDERS`.
+
+### Measurement Validity
+
+Keys under `measurement` in `codegreen/config.json`. The CLI merges the
+bundled defaults with the active config key by key, so an older
+`~/.codegreen/config.json` cannot drop one.
+
+`measurement.report.validity` (thresholds of the
+[validity gate](cli-reference.md#exit-codes-and-measurement-validity)):
+
+| Key | Default | Description |
+|---|---|---|
+| `min_window_samples` | 2 | Fewest sampler readings a root window (and a `measured` function call) must span |
+| `max_gap_factor` | 3.0 | Max reading gap, in sampler intervals, before `SAMPLER_STARVED` |
+| `median_gap_factor` | 1.5 | Median reading gap, in sampler intervals, before `SAMPLER_STARVED` |
+| `java_max_gap_factor` | 3.0 | Java poller gap, in poll periods, that raises the `SAMPLER_GAP` warning |
+| `min_affinity_cpus` | 2 | Fewest CPUs the measured process may run on |
+| `rapl_update_ms` | 1 | RAPL counter update period; floor of the per-function resolution |
+| `min_run_updates` | 10 | `run`: fewest RAPL updates per run before `RUN_BELOW_RESOLUTION` |
+| `aggregate_min_factor` | 10 | `project`: total time, in resolutions, for `aggregate_only` |
+| `fail_on_invalid` | true | Exit 3 on an invalid `measure` or `run` result; `false` only reports |
+| `gpu_in_total` | `invalid` | `invalid`: a GPU summed into the total without `--sensors` is `GPU_IN_TOTAL`; `allow`: accepted |
+| `gpu_providers` | `["nvidia_gpu", "amd_gpu"]` | Providers counted as GPU for `GPU_IN_TOTAL` |
+
+Other keys:
+
+| Key | Default | Description |
+|---|---|---|
+| `measurement.report.max_checkpoints` | 2000000 | Markers NEMB stores per process; later ones are dropped and counted (`CHECKPOINT_CAP`) |
+| `measurement.sensor_providers` | `rapl`: `[intel_rapl, amd_rapl]`, `amd_cpu`: `[amd_rapl]`, `nvidia`: `[nvidia_gpu]`, `amd_gpu`: `[amd_gpu]` | `--sensors` value to NEMB provider names |
+| `measurement.run_path.sampler_interval_ms` | 1000 | Background sampler period during `codegreen run` sessions (kept at the coordinator interval when a GPU domain reports) |
+| `measurement.toolchain.c` / `.cpp` | `gcc` / `g++` | Compilers for instrumented C/C++ in `measure`; `CC`/`CXX` override |
+| `measurement.toolchain.prefer_dirs` | `["/usr/bin"]` | Directories searched for the compiler before `PATH`; the compile runs with the compiler's directory first on `PATH` |
+
+Size `measurement.nemb.coordinator.measurement_buffer_size` for the longest
+run: the buffer holds `measurement_buffer_size` x `measurement_interval_ms`
+of readings (100000 x 10 ms = 1000 s by default). A longer run is
+`BUFFER_WRAPPED`.
+
 ---
 
 ## Instrumentation Options
@@ -522,6 +565,8 @@ CodeGreen supports environment variables in config values:
 | `CODEGREEN_DEBUG` | Enable debug output |
 | `CODEGREEN_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CODEGREEN_CHECKPOINT_THROTTLE_MS` | Minimum interval (ms) between checkpoint recordings; reduces overhead for high-frequency checkpoints |
+| `CODEGREEN_PROVIDERS` | Comma-separated NEMB provider names (`intel_rapl`, `amd_rapl`, `nvidia_gpu`, `amd_gpu`, ...). Only these are initialized; an unknown or failing one is an error. Set by `measure --sensors` |
+| `CC` / `CXX` | Compiler for instrumented C / C++ in `measure` (overrides `measurement.toolchain`) |
 
 ---
 

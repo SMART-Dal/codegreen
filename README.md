@@ -192,7 +192,7 @@ See `codegreen/analysis/efg/README.md` for the module layout, a runnable example
 ```bash
 # Fail pipeline if energy exceeds budget
 codegreen run --budget 10.0 --json -- python tests/benchmark.py
-# Exit code 1 if mean energy > 10 Joules
+# Exit code 1 if mean energy > 10 Joules, 3 if the measurement is invalid (see validity.reasons)
 ```
 
 ## Upgrading

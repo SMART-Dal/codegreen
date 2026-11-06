@@ -83,6 +83,12 @@ schema as `codegreen measure -g fine`. Top fields:
 - `totals` - aggregate energy / duration over the whole run
 - `meta` - command, language, build/run commands, host info
 
+With `--json`, each run reports `sampler`, `validity` and `resolution_ns`, and
+each function a `resolution` of `measured`, `aggregate_only` or `invalid`. The
+command does not exit 3 on an invalid run; check `validity.status`. Pass
+`--cores` with at least two CPUs. See
+[Exit codes and measurement validity](cli-reference.md#exit-codes-and-measurement-validity).
+
 ## When to use `project` vs `measure`
 
 | Scenario | Use |

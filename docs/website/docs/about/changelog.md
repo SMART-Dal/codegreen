@@ -2,7 +2,67 @@
 
 For the latest release notes, see [GitHub Releases](https://github.com/SMART-Dal/codegreen/releases).
 
-## v0.4.9 (Current)
+## v0.5.0 (Current)
+
+### Measurement validity
+
+Every `measure`, `run` and `project` result now states whether it is a valid measurement. Before 0.5.0 several failure modes produced plausible numbers silently: markers outside the sampled range took the nearest edge reading, a starved or wrapped sampler went unreported, a failed provider read added `-1` J into totals that were then clamped to 0, `--sensors` was ignored, and a GPU was summed into CPU totals. These cases are now detected and reported. See [Exit codes and measurement validity](../user-guide/cli-reference.md#exit-codes-and-measurement-validity).
+
+- New `validity` block: `{status, reasons, detail, warnings}`. `status` is `valid` or `invalid`; `reasons` lists fatal codes, `detail` explains each, `warnings` holds non-fatal facts (`SAMPLER_GAP`, `OVERLAPPING_THREADS`).
+- `measure` and `run` exit 3 on an invalid measurement, with `success: false` and `error: "invalid_measurement: CODE[,CODE]"` in `--json` output. Set `measurement.report.validity.fail_on_invalid` to `false` to keep exit 0 and only report.
+- `--sensors` now selects the NEMB providers measured in the child process (through `measurement.sensor_providers` and `CODEGREEN_PROVIDERS`). A requested provider that cannot initialize is `NEMB_INIT_FAILED`. Without `--sensors`, a GPU summed into the total is `GPU_IN_TOTAL`.
+- `CODEGREEN_PROVIDERS` (comma-separated registry names: `intel_rapl`, `amd_rapl`, `nvidia_gpu`, `amd_gpu`, ...) restricts NEMB to those providers and fails loud on an unknown or failing one. Without it every provider that initializes is used, except `amd_rapl` when `intel_rapl` initializes (both read the same package counter, which counted it twice).
+
+### NEMB sampler and result block (ABI 4)
+
+- The reading buffer is seeded synchronously before the sampler thread starts, and a final synchronous reading is taken at report time, so every marker is bracketed by real readings. A marker outside the sampled range is flagged (`clamp`) instead of silently taking the edge value.
+- Each checkpoint carries `ri` (index of the upper bracketing reading), `clamp` (`none`, `before_first`, `after_last`) and `provider_j` (interpolated cumulative joules per provider, summing to `joules`).
+- The result block and `nemb_get_checkpoints_json` share one schema and add a `sampler` object (interval, buffer capacity, readings, wrap, rejected readings, dropped checkpoints, gap statistics, CPU affinity, providers, config path). `nemb_get_checkpoints_json` now returns the `measurements` key, not `checkpoints`.
+- A reading with a failed provider is rejected and counted (`rejected_readings`) instead of being buffered with that provider missing; negative provider energy is never summed.
+- `measurement.report.max_checkpoints` (default 2000000) caps stored markers; drops are counted and reported as `CHECKPOINT_CAP`.
+- The result block is written to a copy of stdout taken at initialization, so it survives a workload that closes stdout. A NEMB initialization failure is printed once on stderr (`NEMB init failed: ...`).
+- NVIDIA: a transient power-read miss keeps the GPU's cumulative energy instead of dropping it from the total; a GPU lost mid-run invalidates the readings.
+- Java standalone runtime: the RAPL poller reports its coverage as one `CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns` line per JVM.
+
+### `codegreen measure`
+
+- Per-function energy replays every call on per-thread stacks. Each entry reports `inclusive_j`, `exclusive_j`, `energy_j` (= inclusive), `wall_time_s`, `calls` and `quality` (`measured`, or `interpolated` when a call spans fewer than `min_window_samples` readings). Previously only the last call's enter/exit was used while every call was counted.
+- `summary` adds `energy_by_provider`, `providers`, `sensors_requested`, `exclusive_sum_j`, `exclusive_sum_ratio` and `overlapping_threads`. Top-level `sampler` and `validity` are added.
+- Negative energy deltas are no longer clamped to 0 (`NEGATIVE_ENERGY`). `wall_time_s` is always nanoseconds / 1e9 (the unit was guessed from magnitude before).
+- The child's exit code and a timeout are reported (`INCOMPLETE_CRASH`, `INCOMPLETE_TIMEOUT`); a malformed result block raises instead of being ignored. A compile error is `COMPILE_FAILED` with the compiler output.
+- C/C++ compilers come from `measurement.toolchain` (`CC`/`CXX` override), resolved in `prefer_dirs` before `PATH`.
+- Coarse C/C++ instrumentation keeps `main`'s return probes, so `main` closes on every return.
+
+### `codegreen run`
+
+- New `validity` block with `RUN_BELOW_RESOLUTION` (mean run shorter than `min_run_updates` RAPL updates) and `ZERO_ENERGY_RUNS`; `checks.affinity_cpus` records the CPU set the runs had.
+- During run sessions the NEMB background sampler is slowed to `measurement.run_path.sampler_interval_ms` (default 1000), because run energy is read synchronously at each boundary; it is kept at the coordinator interval when a GPU domain reports. The value is in `meta.run_sampler_interval_ms` (`null` when not changed).
+
+### `codegreen project`
+
+- Each run carries `sampler`, `validity` and `resolution_ns`; the top level repeats the last run's `validity`. Exit status is unchanged, so check `validity.status`.
+- Each function has `resolution`: `measured`, `aggregate_only` (per-call time below one resolution, total time at least `aggregate_min_factor` resolutions) or `invalid`.
+- Java standalone runs build `sampler` from the poller's `CG_CP_META` lines; a poller gap (GC safepoint) is the non-fatal `SAMPLER_GAP` and widens the resolution to the largest gap.
+- Injected runtime files are removed before their directories.
+
+### Changed behaviour and compatibility
+
+- **Exit code 3** from `measure` and `run` on an invalid measurement. Scripts that treat any non-zero exit as a crash should read `validity.reasons`.
+- **ABI 4.** The Python runtime refuses checkpoint readback from a `libcodegreen-nemb` older than ABI 4 and the CLI reports such runs as `STALE_LIBRARY`. Rebuild the native library together with the Python package.
+- **Pinning the measured process to one CPU is invalid** (`AFFINITY_SINGLE_CPU`): the sampler thread then competes with the workload. Pin to at least `min_affinity_cpus` (default 2) CPUs.
+- **Short windows are invalid.** A root window spanning fewer than `min_window_samples` sampler readings is `TOTAL_BELOW_RESOLUTION`; a `run` shorter than 10 RAPL updates is `RUN_BELOW_RESOLUTION`.
+- **Default sensors on GPU hosts.** Without `--sensors`, a host with an NVIDIA or AMD GPU reports `GPU_IN_TOTAL` from `measure`. Pass `--sensors rapl` for CPU-only energy, or set `measurement.report.validity.gpu_in_total` to `allow`.
+- **`codegreen init`** no longer shrinks `measurement_buffer_size` to 500 on shared servers and hosts with less than 4 GB of memory (a 5 s window at the default 10 ms interval).
+- `measure --json`: per-function `energy_j` is inclusive energy summed over every call, so values for functions called more than once change.
+
+### Known limitations
+
+- `project` reports `validity` but does not exit 3.
+- Without a config file NEMB still falls back to a 1 ms, 2000-reading buffer (a 2 s window). Longer runs are now reported as `BUFFER_WRAPPED` and `MARKER_CLAMPED` instead of losing energy silently.
+- The AMD GPU provider still drops a GPU from the total on a transient power-read miss.
+- Concurrent threads inside instrumented frames are each charged the whole package energy (`OVERLAPPING_THREADS`), so exclusive energies can sum above the total.
+
+## v0.4.9
 
 ### Per-function attribution: frames close on every exit path
 

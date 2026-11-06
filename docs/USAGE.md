@@ -81,7 +81,7 @@ codegreen measure [OPTIONS] LANGUAGE SCRIPT [ARGS...]
 
 **Options:**
 *   `-o, --output PATH`: Save results to file (JSON format)
-*   `-s, --sensors SENSOR`: Sensors to use (rapl, nvidia, amd_gpu, amd_cpu)
+*   `-s, --sensors SENSOR`: NEMB providers to measure (rapl, nvidia, amd_gpu, amd_cpu; default: every provider that initializes). An invalid measurement exits 3; see the `validity` block in `--json` output
 *   `-p, --precision LEVEL`: low (100ms), medium (10ms), high (1ms)
 *   `-t, --timeout SECONDS`: Execution timeout
 *   `--verbose`: Show detailed output

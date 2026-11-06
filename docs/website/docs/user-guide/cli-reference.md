@@ -39,7 +39,7 @@ codegreen measure [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} SCRIPT [ARGS
 | Option | Description |
 |--------|-------------|
 | `-o, --output PATH` | Output file for results |
-| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors to use |
+| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | NEMB providers to measure (repeatable). Default: every provider that initializes |
 | `-p, --precision [low\|medium\|high]` | Measurement precision (default: high) |
 | `-g, --granularity [coarse\|fine]` | Instrumentation level (default: coarse) |
 | `--export-plot PATH` | Export energy timeline (HTML default, or PNG/PDF) |
@@ -61,6 +61,33 @@ at module level or in child processes) and did not crash, it is re-measured at
 coarse granularity so the report keeps whole-program energy; `granularity` in
 the output then reads `coarse`. A failed or checkpoint-less run sets `error`.
 Pass script arguments after the script (`codegreen measure cpp main.cpp 5000`).
+
+**Sensors.** `--sensors` maps each sensor to NEMB registry names through
+`measurement.sensor_providers` (`rapl` -> `intel_rapl,amd_rapl`, `amd_cpu` ->
+`amd_rapl`, `nvidia` -> `nvidia_gpu`, `amd_gpu` -> `amd_gpu`) and passes them to
+the measured process as `CODEGREEN_PROVIDERS`. Only those providers are summed.
+A requested provider that is unknown or fails to initialize makes the run
+invalid (`NEMB_INIT_FAILED`). Without `--sensors`, a GPU provider summed into
+the total is `GPU_IN_TOTAL`; use `--sensors rapl` for CPU-only energy.
+
+**JSON output.** Besides `instrumentation_audit` and `error`:
+
+- `summary`: `total_energy_j`, `wall_time_s`, `avg_power_w`,
+  `checkpoint_count`, `energy_by_provider`, `providers`, `sensors_requested`,
+  `exclusive_sum_j`, `exclusive_sum_ratio`, `overlapping_threads`.
+- `per_function_energy`: per function `inclusive_j`, `exclusive_j`,
+  `energy_j` (= inclusive), `wall_time_s`, `avg_power_w`, `calls`, `quality`.
+  Every call on every thread is replayed. `quality` is `measured`, or
+  `interpolated` when a call spans fewer than `min_window_samples` sampler
+  readings.
+- `checkpoints`: the NEMB result block (`checkpoint_id`, `timestamp`,
+  `joules`, `watts`, `ri`, `clamp`, `provider_j`).
+- `sampler` and `validity`: see
+  [Exit codes and measurement validity](#exit-codes-and-measurement-validity).
+  `validity` is `null` when no energy backend is available.
+
+An invalid measurement exits 3 with `success: false` and
+`error: "invalid_measurement: CODE[,CODE]"`.
 
 **Examples:**
 ```bash
@@ -118,6 +145,18 @@ Use `--` before commands that have their own flags; otherwise flags such as
 - Min/max range
 - Mean wall time with standard deviation
 - Outlier detection and removal
+- A `validity` block (`--json`) with `checks.affinity_cpus`. Fatal reasons:
+  `RUN_BELOW_RESOLUTION` (mean run shorter than `min_run_updates` x
+  `rapl_update_ms`, default 10 ms) and `ZERO_ENERGY_RUNS` (a run read no
+  energy). An invalid result exits 3 with `success: false` and
+  `error: "invalid_measurement: ..."`, before the `--budget` check.
+
+Energy is read synchronously at each run boundary. During the runs the NEMB
+background sampler is slowed to `measurement.run_path.sampler_interval_ms`
+(reported as `meta.run_sampler_interval_ms`; `null` when unchanged, which
+happens when a GPU domain reports because GPU energy is integrated from the
+samples). For short commands use `--repeat` and `--warmup` rather than one
+long-tailed run, and keep each run well above 10 ms.
 
 **Examples:**
 ```bash
@@ -230,6 +269,23 @@ checkpoint records are captured, the command exits 1. JSON output includes
 `attribution_pct`, `attribution_warning`, `sync_device` and
 `skipped_functions` (async functions, generators, coroutines, C++
 `constexpr`/`consteval` and some C functions are not instrumented).
+
+Each entry of `runs` carries `sampler`, `validity`, `resolution_ns` and
+`overlapping_threads`; the top-level `validity` is the last run's. `project`
+does not exit 3 on an invalid run, so check `validity.status`. `GPU_IN_TOTAL`
+does not apply here: project totals include accelerators by design. Each
+function has `resolution`:
+
+- `measured`: mean time per call is at least one resolution
+  (`resolution_ns`, the larger of the sampler interval and `rapl_update_ms`,
+  widened to the largest Java poller gap on `SAMPLER_GAP`).
+- `aggregate_only`: per-call time is below one resolution but the function's
+  total time spans at least `aggregate_min_factor` resolutions. Use the
+  total, not per-call figures.
+- `invalid`: below both.
+
+`project` is the command for exclusive per-function attribution. Pass
+`--cores` with at least two CPUs; a one-CPU set is `AFFINITY_SINGLE_CPU`.
 
 **Examples:**
 ```bash
@@ -465,3 +521,59 @@ codegreen config [OPTIONS]
 | `--show` | Display current configuration |
 | `--edit` | Open configuration in editor |
 | `--reset` | Reset to default configuration |
+
+## Exit codes and measurement validity
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Success (for `project`, read `validity.status`) |
+| 1 | Error: bad arguments, build or run failure, `--budget` exceeded |
+| 3 | `measure` or `run`: invalid measurement (`measurement.report.validity.fail_on_invalid`, default `true`) |
+
+The `validity` block is `{"status": "valid"|"invalid", "reasons": [...],
+"detail": {code: text}, "warnings": {code: text}}`. Every reason is fatal;
+warnings are not.
+
+| Code | Command | Meaning |
+|---|---|---|
+| `STALE_LIBRARY` | measure, project | Result block without sampler statistics (`libcodegreen-nemb` older than ABI 4); rebuild it |
+| `NEMB_INIT_FAILED` | measure | NEMB could not start, e.g. a `--sensors` provider is unavailable |
+| `INCOMPLETE_TIMEOUT` | measure | Killed at `--timeout` |
+| `INCOMPLETE_CRASH` | measure, project | Non-zero exit or launch failure |
+| `INCOMPLETE_NO_CHECKPOINTS` | measure, project | Fewer than two markers in the result block |
+| `COMPILE_FAILED` | measure | C, C++ or Java compile error (compiler output in `detail`) |
+| `AFFINITY_SINGLE_CPU` | measure, project | Measured process allowed on fewer than `min_affinity_cpus` CPUs; the sampler competes with the workload |
+| `SAMPLER_STARVED` | measure, project | Max reading gap above `max_gap_factor` x interval, or median gap above `median_gap_factor` x interval |
+| `CHECKPOINT_CAP` | measure, project | Markers dropped at `measurement.report.max_checkpoints` |
+| `BUFFER_WRAPPED` | measure, project | Ring buffer overwrote the start of the run |
+| `MARKER_CLAMPED` | measure, project | A marker lies outside the sampled range |
+| `TOTAL_BELOW_RESOLUTION` | measure, project | Root window spans fewer than `min_window_samples` readings |
+| `ZERO_ENERGY` | measure, project | Root window measured 0 J |
+| `NEGATIVE_ENERGY` | measure, project | Cumulative energy decreases between markers |
+| `GPU_IN_TOTAL` | measure | GPU provider summed into the total without `--sensors` (`gpu_in_total: invalid`) |
+| `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` RAPL updates |
+| `ZERO_ENERGY_RUNS` | run | At least one run read no energy |
+| `SAMPLER_GAP` (warning) | project | Java poller gap above `java_max_gap_factor` x poll period; resolution widened |
+| `OVERLAPPING_THREADS` (warning) | measure, project | Several threads inside instrumented frames at once; each is charged the whole package energy |
+
+`sampler` (`measure`, and each `project` run) describes the NEMB background
+sampler for that run: `interval_ms`, `buffer_capacity`, `readings`, `wrapped`,
+`rejected_readings` (readings dropped because a provider failed),
+`dropped_checkpoints`, `first_ns`, `last_ns`, `median_gap_ns`, `max_gap_ns`,
+`affinity_cpus` (CPUs the measured process may run on), `providers` and
+`config_path`. Java standalone runs report `providers: ["java_rapl_poller"]`,
+`jvms` and `gap_statistic: "mean"`.
+
+Guidance for valid results:
+
+- Do not pin the measured process (or `codegreen` around it) to one CPU.
+  The sampler thread runs inside the measured process.
+- Keep measured windows several sampling intervals long. Below
+  `min_window_samples` readings the result is `TOTAL_BELOW_RESOLUTION`; for
+  short commands use `run --repeat N --warmup M`.
+- Choose providers with `--sensors` when a GPU is present.
+- Use `project` for exclusive per-function attribution across a code base,
+  and read each function's `resolution`.
+
+Thresholds live in `measurement.report.validity`; see the
+[Configuration Reference](configuration-reference.md#measurement-validity).

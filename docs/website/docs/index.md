@@ -142,6 +142,12 @@ Get started with CodeGreen in just a few steps:
 | Cross-validate against `perf` | [Energy Measurement](user-guide/energy-measurement.md) | [10 CodeGreen vs perf](examples/10_codegreen_vs_perf.md) |
 | Add a language or contribute | [Architecture](development/architecture.md) | [Contributing](development/contributing.md) |
 
+## What's new in 0.5.0
+
+- Every `measure`, `run` and `project` result carries a `validity` verdict with reason codes; `measure` and `run` exit 3 on an invalid measurement. See [Exit codes and measurement validity](user-guide/cli-reference.md#exit-codes-and-measurement-validity).
+- `--sensors` selects the NEMB providers that are measured (`CODEGREEN_PROVIDERS`); per-function energy counts every call, with inclusive and exclusive energy and per-provider totals.
+- NEMB result block ABI 4: per-marker bracketing index, clamp flag, per-provider energy and sampler statistics. See the [Changelog](about/changelog.md).
+
 ## What's new in 0.4.9
 
 - Per-function attribution closes frames on every exit path (`try`/`finally`, C++ RAII guard, C return rewrite), so the work inside `return <expr>` is attributed and function names are qualified in all languages. See the [Changelog](about/changelog.md).
