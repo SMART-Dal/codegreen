@@ -36,6 +36,7 @@ except ImportError:
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from codegreen import __version__ as _VERSION
 from rich.text import Text
@@ -928,9 +929,7 @@ def measure_energy(
 
             validity = (measurement_result or {}).get("validity")
             invalid = validity is not None and validity["status"] != "valid"
-            if invalid:
-                error = f"invalid_measurement: {','.join(validity['reasons'])}"
-            if json_output or (output and measurement_result is not None):
+            if json_output or measurement_result is not None:
                 combined_results = _build_comprehensive_json(
                     result, measurement_result, source_code, script, language.value, granularity.value, sensors
                 )
@@ -941,7 +940,7 @@ def measure_energy(
                     **({"warning": instrumentation_warning} if instrumentation_warning else {}),
                 }
                 if invalid:
-                    combined_results.update(success=False, error=error)
+                    combined_results.update(success=False, error=f"invalid_measurement: {','.join(validity['reasons'])}")
                 report = json.dumps(combined_results, indent=2)
                 if output and measurement_result is not None:
                     output.write_text(report, encoding="utf-8")
@@ -949,10 +948,8 @@ def measure_energy(
                         console.print(f"[green][ok] Results saved to: {output}[/green]")
                 if json_output:
                     print(report)
-            if invalid and not json_output:
-                console.print(f"[red]{error}[/red]")
-                for code, text in validity["detail"].items():
-                    console.print(f"  [red]{code}[/red]: {text}")
+                else:
+                    _print_measure_report(combined_results)
             if invalid and _measurement_cfg()["fail_on_invalid"]:
                 raise typer.Exit(3)
             if not json_output:
@@ -989,6 +986,32 @@ def measure_energy(
         else:
             print(json.dumps({"success": False, "error": str(e)}))
         raise typer.Exit(1)
+
+
+def _print_validity(validity: Dict[str, Any]) -> None:
+    """Text-mode verdict shared by measure, run and project (the --json `validity` block): the status, every fatal
+    reason with its detail and every warning."""
+    console.print("[bold]Validity:[/bold] [green]valid[/green]" if validity["status"] == "valid"
+                  else f"[red]invalid_measurement: {','.join(validity['reasons'])}[/red]")
+    for code, text in validity["detail"].items():
+        console.print(f"  [red]{code}[/red]: {escape(text)}")
+    for code, text in validity["warnings"].items():
+        console.print(f"  [yellow]WARNING {code}[/yellow]: {escape(text)}")
+
+
+def _print_measure_report(report: Dict[str, Any]) -> None:
+    """Text form of the `measure --json` document: total energy, per-function energy (by exclusive energy) and the
+    verdict."""
+    s, funcs = report["summary"], report["per_function_energy"]
+    console.print(f"\n[bold]Energy:[/bold] {s['total_energy_j']:.4f} J")
+    console.print(f"[bold]Time:[/bold]   {s['wall_time_s']:.4f} s")
+    console.print(f"[bold]Power:[/bold]  {s['avg_power_w']:.2f} W")
+    if funcs:
+        console.print(f"\n  {'Function':<28} {'Excl J':>10} {'Incl J':>10} {'Calls':>8}  Quality")
+        for name, d in sorted(funcs.items(), key=lambda x: -x[1]["exclusive_j"]):
+            console.print(f"  {escape(name):<28} {d['exclusive_j']:>10.4f} {d['inclusive_j']:>10.4f} {d['calls']:>8}  {d['quality']}")
+    if report["validity"] is not None:
+        _print_validity(report["validity"])
 
 
 def _filter_main_entry_points(points: List, language: str) -> List:
@@ -2914,12 +2937,9 @@ def run_command(
 
         if cv > 20:
             console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
-        if run_error:
-            console.print(f"[red]{run_error}[/red]")
-            for code, text in run_reasons.items():
-                console.print(f"  [red]{code}[/red]: {text}")
-            if vcfg["fail_on_invalid"]:
-                raise typer.Exit(3)
+        _print_validity(validity)
+        if run_error and vcfg["fail_on_invalid"]:
+            raise typer.Exit(3)
         if budget is not None:
             if budget_exceeded:
                 console.print(f"[red]BUDGET EXCEEDED: {e_mean:.4f}J > {budget}J[/red]")
@@ -4085,10 +4105,6 @@ def project_energy(
                 console.print(f"  Functions profiled: {len(last_funcs)}")
                 if all_runs[-1]["attribution_warning"]:
                     console.print(f"  [yellow]WARNING {all_runs[-1]['attribution_warning']['message']}[/yellow]")
-                for code, text in validity["detail"].items():
-                    console.print(f"  [red]INVALID {code}: {text}[/red]")
-                for code, text in validity["warnings"].items():
-                    console.print(f"  [yellow]WARNING {code}: {text}[/yellow]")
                 console.print(f"\n[bold]Top hotspots by exclusive energy:[/bold]")
                 console.print(f"  {'Rank':<5} {'Function':<35} {'Excl%':>7} {'Incl%':>7} {'Self':>6} "
                               f"{'Verdict':>8} {'Calls':>8} {'uJ/call':>10}")
@@ -4098,6 +4114,7 @@ def project_energy(
                                   f"{data['energy_pct']:>6.1f}% {data.get('self_ratio', 1.0):>5.2f} "
                                   f"{data.get('verdict', ''):>8} {data['calls']:>8} "
                                   f"{data['energy_per_call_uj']:>10.1f}")
+                _print_validity(validity)
 
             if output_dir:
                 with open(output_dir / "project_results.json", "w") as f:

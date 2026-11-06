@@ -582,6 +582,17 @@ class TestCLI:
         assert out.get("budget_exceeded") is True
         assert out.get("budget_j") == 0.001
 
+    def test_text_mode_prints_energy_and_verdict(self, tmp_path: Path) -> None:
+        """Without --json, measure prints the energy and per-function rows, and measure and run print the verdict."""
+        src = tmp_path / "w.py"
+        src.write_text("def spin(n):\n    return sum(i * i for i in range(n))\n\n\ndef main():\n    spin(3_000_000)\n\n\n"
+                       "if __name__ == '__main__':\n    main()\n")
+        verdict = re.compile(r"^(Validity: valid|invalid_measurement: [A-Z_,]+)$", re.M)
+        _, out, _, _ = _cli_run("measure", "python", str(src), "-g", "fine")
+        assert re.search(r"^Energy: \d+\.\d+ J$", out, re.M) and re.search(r"^  spin\s", out, re.M) and verdict.search(out)
+        _, out, _, _ = _cli_run("run", "-n", "2", "-w", "0", "--", *self.SMALL_WORKLOAD)
+        assert verdict.search(out)
+
     def test_include_warmup_separates_counts(self) -> None:
         out, _, _, _ = _cli_run("run", "--json", "-n", "3", "-w", "2", "--include-warmup",
                                 "--", *self.SMALL_WORKLOAD)
@@ -1893,6 +1904,14 @@ class TestValidity:
     def test_sampler_warnings(self, sampler_kw, code):
         v = self._check(sampler=_vsampler(**sampler_kw))
         assert v["status"] == "valid" and list(v["warnings"]) == [code]
+
+    def test_text_verdict_shows_status_reasons_and_warnings(self):
+        from codegreen.cli import cli
+        with cli.console.capture() as cap:
+            cli._print_validity(cli._validity({"ZERO_ENERGY": "root window measured 0 J"}, {"GPU_IN_TOTAL": "sums ['gpu']"}))
+            cli._print_validity(cli._validity({}))
+        assert cap.get().splitlines() == ["invalid_measurement: ZERO_ENERGY", "  ZERO_ENERGY: root window measured 0 J",
+                                          "  WARNING GPU_IN_TOTAL: sums ['gpu']", "Validity: valid"]
 
     def test_run_validity_reads_boundary_source(self):
         from codegreen.cli.cli import run_validity, _measurement_cfg

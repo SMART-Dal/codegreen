@@ -572,7 +572,12 @@ codegreen config [OPTIONS]
 
 The `validity` block is `{"status": "valid"|"invalid", "reasons": [...],
 "detail": {code: text}, "warnings": {code: text}}`. Every reason is fatal;
-warnings are not.
+warnings are not. Without `--json`, `measure`, `run` and `project` print the
+same verdict after the energy: `Validity: valid`, or
+`invalid_measurement: CODE[,CODE]` followed by one `CODE: detail` line per
+reason, then one `WARNING CODE: text` line per warning. `measure` prints the
+total energy, time and power and, per function, exclusive and inclusive
+energy, calls and `quality`.
 
 | Code | Command | Meaning |
 |---|---|---|
