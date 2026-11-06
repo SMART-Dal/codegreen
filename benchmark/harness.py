@@ -3,7 +3,6 @@ import math
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import Callable, List, Optional
 
 from benchmark.config import RunResult
@@ -49,6 +48,9 @@ class BenchmarkHarness:
         """Run a single task with a single profiler."""
         reps = repetitions or self.repetitions
         profiler = get_profiler(profiler_name)
+        if not profiler.is_available():
+            self.progress_callback(f"  Skipping {task.name} [{profiler_name}]: {profiler.unavailable_reason()}")
+            return []
         if hasattr(profiler, 'set_source') and task.source_file:
             profiler.set_source(task.source_file, task.language)
 
@@ -96,6 +98,7 @@ class BenchmarkHarness:
                     variant=task.variant,
                     suite=self.suite.name,
                     checkpoints=profile_result.checkpoints,
+                    validity=profile_result.validity,
                 )
                 results.append(result)
                 self.collector.add(result)
@@ -104,6 +107,21 @@ class BenchmarkHarness:
             except Exception as e:
                 self.progress_callback(f"  Run {i+1} failed: {e}")
         return results
+
+    def tasks(self, problem: str, languages: List[str], sizes: List[str]) -> List[Task]:
+        """Tasks of one problem at the given languages and sizes; the default suite is benchmarksgame."""
+        if self.suite is None:
+            from benchmark.suites.benchmarksgame import BenchmarksgameSuite
+            self.suite = BenchmarksgameSuite()
+        found = self.suite.discover({"problems": [problem], "languages": languages, "sizes": sizes})
+        if not found:
+            raise ValueError(f"{self.suite.name} has no task for {problem} in {languages} at sizes {sizes}")
+        return found
+
+    def run_problem(self, problem: str, languages: List[str], sizes: List[str], profilers: List[str],
+                    repetitions: Optional[int] = None) -> List[RunResult]:
+        """Run one problem for every language, size and profiler; returns the results of all runs."""
+        return [r for t in self.tasks(problem, languages, sizes) for p in profilers for r in self.run_task(t, p, repetitions)]
 
     def run_suite(self, profilers: Optional[List[str]] = None,
                   repetitions: Optional[int] = None,

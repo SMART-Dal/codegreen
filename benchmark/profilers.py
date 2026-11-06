@@ -1,21 +1,27 @@
 """Energy profiler interfaces for CodeGreen and perf RAPL."""
 import json
+import os
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from benchmark.config import PERF_CPU_EVENT_SETS
 
 @dataclass
 class ProfileResult:
-    energy_joules: float
+    energy_joules: Optional[float]
     time_seconds: float
     output: str
     checkpoints: List[Dict[str, Any]]
     raw_data: Dict[str, Any]
+    validity: Optional[Dict[str, Any]] = None
 
 class ProfilerInterface(ABC):
     @abstractmethod
@@ -25,6 +31,16 @@ class ProfilerInterface(ABC):
     @abstractmethod
     def is_available(self) -> bool:
         pass
+
+    def unavailable_reason(self) -> str:
+        return f"{type(self).__name__} is not available on this host"
+
+def perf_power_events() -> List[str]:
+    """RAPL events the kernel power PMU offers through perf (empty without perf or without a power PMU)."""
+    if not shutil.which("perf"):
+        return []
+    out = subprocess.run(["perf", "list", "power"], capture_output=True, text=True, timeout=60).stdout
+    return sorted(set(re.findall(r"power/(energy-[\w-]+)/", out)))
 
 class CodeGreenProfiler(ProfilerInterface):
     """Uses codegreen measure CLI for energy measurement."""
@@ -53,18 +69,24 @@ class CodeGreenProfiler(ProfilerInterface):
             # Fallback: detect from command
             lang, source, args = self._detect_from_cmd(cmd)
 
-        import os
         full_cmd = ["codegreen", "measure", lang, source, "--json", "--timeout", str(timeout)] + args
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
         start = time.perf_counter()
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout + 30, env=env)
         elapsed = time.perf_counter() - start
-
-        energy, checkpoints, raw, program_output = self._parse_output(result.stdout)
-        if energy <= 0.0 and checkpoints:
-            energy = 0.0
-        return ProfileResult(energy_joules=energy, time_seconds=elapsed, output=program_output, checkpoints=checkpoints, raw_data=raw)
+        # The JSON result is printed on every exit code (exit 3 = invalid measurement); signed energy is kept as reported.
+        try:
+            raw = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"codegreen measure exit {result.returncode} without a JSON result: {result.stderr[-500:]}")
+        validity = raw.get("validity")
+        if validity is None or result.returncode not in (0, 3):
+            detail = {**(validity or {}).get("detail", {}),
+                      "MEASURE_FAILED": raw.get("error") or f"codegreen measure exit {result.returncode}"}
+            validity = {**(validity or {"warnings": {}}), "status": "invalid", "reasons": list(detail), "detail": detail}
+        return ProfileResult((raw.get("summary") or {}).get("total_energy_j"), elapsed, "",
+                             raw.get("checkpoints") or [], raw, validity)
 
     def _detect_from_cmd(self, cmd: List[str]) -> tuple:
         """Fallback: detect language, source, args from command."""
@@ -79,111 +101,49 @@ class CodeGreenProfiler(ProfilerInterface):
             lang = "cpp" if (".gpp" in source or "cpp" in source) else "c"
             return lang, source, cmd[1:] if len(cmd) > 1 else []
 
-    def _parse_output(self, stdout: str) -> tuple:
-        energy, checkpoints, raw, program_output = 0.0, [], {}, ""
-        try:
-            raw = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return energy, checkpoints, raw, stdout
-
-        # Extract energy from summary (primary) or checkpoints (fallback)
-        summary = raw.get("summary", {})
-        if summary.get("total_energy_j", 0) > 0:
-            energy = summary["total_energy_j"]
-
-        checkpoints = raw.get("checkpoints", [])
-        if energy <= 0 and len(checkpoints) >= 2:
-            first_j = checkpoints[0].get("joules", 0)
-            last_j = checkpoints[-1].get("joules", 0)
-            energy = last_j - first_j
-            if energy < 0:
-                energy = 0.0
-
-        return energy, checkpoints, raw, program_output
-
     def is_available(self) -> bool:
-        try:
-            with open("/sys/class/powercap/intel-rapl:0/energy_uj") as f:
-                f.read()
-            return True
-        except (FileNotFoundError, PermissionError, OSError):
-            return False
+        return shutil.which("codegreen") is not None
 
 class PerfProfiler(ProfilerInterface):
+    """perf stat -a over the command: system-wide RAPL energy at the CPU domain set of PERF_CPU_EVENT_SETS, the
+    truth source for `codegreen run/measure --sensors rapl`."""
     def __init__(self):
-        self.perf_output_file: Path | None = None
-        self._events = self._detect_events()
+        offered = perf_power_events()
+        self.events = next(([e for e in s if e in offered] for s in PERF_CPU_EVENT_SETS if s[0] in offered), [])
         self.repeat_count: int = 1
 
-    def __del__(self):
-        self._cleanup()
-
-    def _detect_events(self) -> str:
-        try:
-            result = subprocess.run(["perf", "list", "power"], capture_output=True, text=True, timeout=5)
-            events = []
-            if "energy-pkg" in result.stdout:
-                events.append("power/energy-pkg/")
-            if "energy-ram" in result.stdout:
-                events.append("power/energy-ram/")
-            return ",".join(events) if events else "power/energy-pkg/"
-        except Exception:
-            return "power/energy-pkg/"
-
     def run(self, cmd: List[str], timeout: int = 300) -> ProfileResult:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-            self.perf_output_file = Path(f.name)
-        if self.repeat_count > 1:
-            shell_cmd = " ".join(f"'{c}'" for c in cmd)
-            loop_cmd = f"for i in $(seq 1 {self.repeat_count}); do {shell_cmd}; done"
-            full_cmd = ["perf", "stat", "-e", self._events, "-o",
-                        str(self.perf_output_file), "--", "bash", "-c", loop_cmd]
-        else:
-            full_cmd = ["perf", "stat", "-e", self._events, "-o",
-                        str(self.perf_output_file), "--"] + cmd
-        start = time.perf_counter()
-        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
-        elapsed = time.perf_counter() - start
-        energy = self._parse_perf_output()
-        if self.repeat_count > 1:
-            energy /= self.repeat_count
-            elapsed /= self.repeat_count
-        return ProfileResult(
-            energy_joules=energy,
-            time_seconds=elapsed,
-            output=result.stdout,
-            checkpoints=[],
-            raw_data={"perf_output": self.perf_output_file.read_text() if self.perf_output_file.exists() else "",
-                       "repeat_count": self.repeat_count}
-        )
-
-    def _parse_perf_output(self) -> float:
-        if not self.perf_output_file or not self.perf_output_file.exists():
-            return 0.0
-        content = self.perf_output_file.read_text()
-        total = 0.0
-        pkg_match = re.search(r'([\d.,]+)\s+Joules\s+power/energy-pkg/', content)
-        if pkg_match:
-            total += float(pkg_match.group(1).replace(',', ''))
-        ram_match = re.search(r'([\d.,]+)\s+Joules\s+power/energy-ram/', content)
-        if ram_match:
-            total += float(ram_match.group(1).replace(',', ''))
-        return total
-
-    def _cleanup(self):
-        if self.perf_output_file and self.perf_output_file.exists():
-            try:
-                self.perf_output_file.unlink()
-            except OSError:
-                pass
-            self.perf_output_file = None
+        body = cmd if self.repeat_count == 1 else [
+            "bash", "-c", f"for i in $(seq {self.repeat_count}); do {shlex.join(cmd)}; done"]
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+            out = Path(f.name)
+        try:
+            start = time.perf_counter()
+            result = subprocess.run(["perf", "stat", "-a", "-x,", "-e", ",".join(f"power/{e}/" for e in self.events),
+                                     "-o", str(out), "--", *body], capture_output=True, text=True, timeout=timeout)
+            elapsed = time.perf_counter() - start
+            text = out.read_text()
+        finally:
+            out.unlink()
+        if result.returncode:
+            raise RuntimeError(f"perf stat exit {result.returncode}: {result.stderr[-500:]}")
+        events = {}
+        for f in (line.split(",") for line in text.splitlines()):
+            if len(f) > 2 and f[2].startswith("power/"):
+                if not f[0][:1].isdigit():
+                    raise RuntimeError(f"perf could not count {f[2]}: {f[0]}")
+                events[f[2][6:-1]] = float(f[0]) / self.repeat_count
+        if sorted(events) != sorted(self.events):
+            raise RuntimeError(f"perf counted {sorted(events)}, expected {self.events}")
+        return ProfileResult(sum(events.values()), elapsed / self.repeat_count, result.stdout, [],
+                             {"events_j": events, "repeat_count": self.repeat_count})
 
     def is_available(self) -> bool:
-        try:
-            result = subprocess.run(["perf", "list", "power"], capture_output=True, text=True, timeout=5)
-            return "energy-pkg" in result.stdout
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+        return bool(self.events)
+
+    def unavailable_reason(self) -> str:
+        return (f"perf offers none of the power events {PERF_CPU_EVENT_SETS} (`perf list power`: "
+                f"{perf_power_events() or 'none'}); install perf on a host with a RAPL power PMU")
 
 class NativeProfiler(ProfilerInterface):
     """Runs without energy profiling - for baseline timing."""
@@ -192,7 +152,7 @@ class NativeProfiler(ProfilerInterface):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         elapsed = time.perf_counter() - start
         return ProfileResult(
-            energy_joules=0.0,
+            energy_joules=None,
             time_seconds=elapsed,
             output=result.stdout,
             checkpoints=[],
@@ -208,7 +168,7 @@ class CodeCarbonProfiler(ProfilerInterface):
         try:
             from codecarbon import EmissionsTracker
         except ImportError:
-            return ProfileResult(0.0, 0.0, "", [], {"error": "codecarbon not installed"})
+            raise RuntimeError("codecarbon not installed")
         tracker = EmissionsTracker(log_level="error", save_to_file=False)
         tracker.start()
         start = time.perf_counter()
@@ -220,11 +180,8 @@ class CodeCarbonProfiler(ProfilerInterface):
                              {"emissions_kg_co2": emissions, "energy_kwh": tracker._total_energy.kWh})
 
     def is_available(self) -> bool:
-        try:
-            import codecarbon
-            return True
-        except ImportError:
-            return False
+        import importlib.util
+        return importlib.util.find_spec("codecarbon") is not None
 
 
 class JoularJXProfiler(ProfilerInterface):
@@ -240,7 +197,7 @@ class JoularJXProfiler(ProfilerInterface):
 
     def run(self, cmd: List[str], timeout: int = 300) -> ProfileResult:
         if not self.agent_path:
-            return ProfileResult(0.0, 0.0, "", [], {"error": "JoularJX agent not found"})
+            raise RuntimeError("JoularJX agent not found")
         jx_cmd = cmd.copy()
         if cmd[0] == "java":
             jx_cmd.insert(1, f"-javaagent:{self.agent_path}")
@@ -253,7 +210,7 @@ class JoularJXProfiler(ProfilerInterface):
     def _parse_joularjx_output(self) -> float:
         csv_path = Path("joularJX-all-methods-energy.csv")
         if not csv_path.exists():
-            return 0.0
+            raise RuntimeError(f"JoularJX wrote no {csv_path}")
         total = 0.0
         for line in csv_path.read_text().splitlines()[1:]:
             parts = line.split(",")

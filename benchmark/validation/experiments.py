@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from benchmark.harness import BenchmarkHarness
-from benchmark.results import StatisticalAnalysis
+from benchmark.results import StatisticalAnalysis, valid_energies
 from validation.analysis import AccuracyAnalysis
 
 @dataclass
@@ -101,8 +101,7 @@ class AccuracyExperiment(Experiment):
                         perf_results = harness.run_problem(
                             problem, [lang], [size], ["perf"], self.repetitions
                         )
-                        cg_energies = [r.energy_joules for r in cg_results if r.energy_joules > 0]
-                        perf_energies = [r.energy_joules for r in perf_results if r.energy_joules > 0]
+                        cg_energies, perf_energies = valid_energies(cg_results), valid_energies(perf_results)
                         if cg_energies and perf_energies:
                             all_cg.extend(cg_energies)
                             all_perf.extend(perf_energies)
@@ -185,7 +184,7 @@ class CrossLanguageExperiment(Experiment):
         for lang in self.languages:
             harness.progress_callback(f"\nCross-language test: {self.problem}/{lang}")
             results = harness.run_problem(self.problem, [lang], [self.size], ["codegreen"], self.repetitions)
-            energies = [r.energy_joules for r in results if r.energy_joules > 0]
+            energies = valid_energies(results)
             if energies:
                 energies_by_lang[lang] = energies
                 raw_data[lang] = StatisticalAnalysis.summarize(energies)
@@ -213,7 +212,7 @@ class LinearityExperiment(Experiment):
         for size in self.sizes:
             harness.progress_callback(f"\nLinearity test: {self.problem}/{size}")
             results = harness.run_problem(self.problem, [self.language], [size], ["codegreen"], self.repetitions)
-            energies = [r.energy_joules for r in results if r.energy_joules > 0]
+            energies = valid_energies(results)
             if energies:
                 mean_e = sum(energies) / len(energies)
                 size_energy_pairs.append((int(size), mean_e))

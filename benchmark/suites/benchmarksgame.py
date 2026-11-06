@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from benchmark.suites.base import Suite, Task
-from benchmark.config import BenchmarkConfig, LanguageEnv
+from benchmark.config import LanguageEnv
 
 
 DEFAULT_DIR = Path(__file__).parent.parent / "benchmarksgame"
@@ -53,7 +53,7 @@ class BenchmarksgameSuite(Suite):
             prob_name = prob_cfg["name"]
             if prob_filter and prob_name not in prob_filter:
                 continue
-            sizes = self._size_filter or prob_cfg["sizes"]
+            sizes = (filters or {}).get("sizes", self._size_filter) or prob_cfg["sizes"]
 
             for lang_name in lang_filter:
                 env = LANGUAGES.get(lang_name)

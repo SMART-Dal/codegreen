@@ -1,9 +1,9 @@
 """Entry point for `python3 -m benchmark`."""
 import argparse
-import sys
 from pathlib import Path
 from benchmark.config import BenchmarkConfig
 from benchmark.harness import BenchmarkHarness
+from benchmark.suites.benchmarksgame import BenchmarksgameSuite
 
 def main():
     parser = argparse.ArgumentParser(description="CodeGreen Energy Benchmark Suite")
@@ -18,27 +18,23 @@ def main():
     args = parser.parse_args()
 
     config = BenchmarkConfig.from_yaml(args.config) if args.config else BenchmarkConfig.default()
-    harness = BenchmarkHarness(config)
+    suite = BenchmarksgameSuite(Path(config.benchmarks_dir) if config.benchmarks_dir else None,
+                                languages=args.languages, problems=args.problems, sizes=args.sizes)
+    harness = BenchmarkHarness(suite, repetitions=args.repetitions, warmup_runs=config.warmup_runs,
+                               timeout_seconds=config.timeout_seconds, min_runtime_seconds=config.min_runtime_seconds)
 
     try:
-        collector = harness.run_suite(
-            problems=args.problems,
-            languages=args.languages,
-            sizes=args.sizes,
-            profilers=args.profilers,
-            repetitions=args.repetitions,
-        )
+        collector = harness.run_suite(profilers=args.profilers, repetitions=args.repetitions)
         summaries = collector.summarize_all()
         print(f"\n{'='*60}")
         print(f"Results: {len(collector.results)} runs")
         print(f"{'='*60}")
         for key, data in sorted(summaries.items()):
-            e = data.get("energy")
-            t = data.get("time")
-            valid = data.get("valid_runs", 0)
-            total = data.get("total_runs", 0)
+            e, t = data["energy"], data["time"]
             energy_str = f"{e.mean:.4f} +/- {e.std:.4f} J" if e else "N/A"
-            print(f"  {key}: energy={energy_str}  time={t.mean:.3f}s  valid={valid}/{total}")
+            time_str = f"{t.mean:.3f}s" if t else "N/A"
+            print(f"  {key}: energy={energy_str}  time={time_str}  valid={data['valid_runs']}/{data['total_runs']}"
+                  f"  invalid={data['invalid_reasons']}")
 
         if args.output:
             collector.to_json(args.output)
