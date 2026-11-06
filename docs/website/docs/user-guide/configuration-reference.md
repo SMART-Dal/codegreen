@@ -292,7 +292,7 @@ Other keys:
 | Key | Default | Description |
 |---|---|---|
 | `measurement.report.max_checkpoints` | 2000000 | Markers NEMB stores per process; later ones are dropped and counted (`CHECKPOINT_CAP`) |
-| `measurement.report.outlier_method` | `iqr_1.5` | `run` statistics: `iqr_<k>` (Tukey fences at k IQRs, by energy; time and power use the same runs) or `none` |
+| `measurement.report.outlier_method` | `none` | `run`: `iqr_<k>` adds a `filtered` block over the runs inside Tukey fences at k IQRs of energy (time, power and domains use the same runs); the primary statistics stay unfiltered |
 | `measurement.default_sensors` | `"all"` | Sensors measured without `--sensors`: `"all"` or a list of `sensor_providers` keys |
 | `measurement.sensor_providers` | `rapl`: `[intel_rapl, amd_rapl]`, `amd_cpu`: `[amd_rapl]`, `nvidia`: `[nvidia_gpu]`, `amd_gpu`: `[amd_gpu]` | Sensor name (the `--sensors` choices) to NEMB provider alternatives |
 | `measurement.run_path.sampler_interval_ms` | 1000 | Background sampler period during `codegreen run` sessions (kept at the coordinator interval when a selected provider integrates power) |

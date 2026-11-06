@@ -87,7 +87,7 @@ Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric fi
     "codegreen_env": {"CODEGREEN_LIB_PATH": "..."},
     "measurement_quality": "ok",
     "domain_support": "full",
-    "outlier_method": "iqr_1.5",
+    "outlier_method": "none",
     "iso_timestamp_format": "rfc3339_utc",
     "nemb_abi_version": 3,
     "domain_topology": {
@@ -145,7 +145,7 @@ Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric fi
 | `codegreen_env` | snapshot of all `CODEGREEN_*` environment variables |
 | `measurement_quality` | `ok` \| `no_tasks` \| `no_backend` \| `provider_read_failed` \| `negative_energy` \| `energy_zero` \| `failed` \| `checkpoints_only` |
 | `domain_support` | `full` (per-domain breakdown) \| `scalar_only` (overall energy only) \| `none` (no backend) |
-| `outlier_method` | which outlier filter was applied to multi-run statistics (default `"iqr_1.5"`) |
+| `outlier_method` | `measurement.report.outlier_method`: `none` (default) or `iqr_<k>`, the filter behind `run`'s `filtered` block |
 | `iso_timestamp_format` | format contract for `started_at`/`ended_at`; pin in case future versions change it |
 | `nemb_abi_version` | C++ NEMB backend ABI version actually loaded |
 | `domain_topology` | machine-readable domain nesting (so consumers know which keys are top-level vs. nested) |

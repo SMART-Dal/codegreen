@@ -147,9 +147,12 @@ Use `--` before commands that have their own flags; otherwise flags such as
 - 95% confidence interval
 - Min/max range
 - Mean wall time with standard deviation
-- Outlier removal by `measurement.report.outlier_method` (`iqr_<k>` or
-  `none`). Runs are filtered by energy and `duration_s` and `power_w` are
-  summarized over the same runs. `energy_j.raw` is the unfiltered summary;
+- `energy_j`, `duration_s`, `power_w` (mean of per-run energy/time),
+  `domains` (mean joules) and `domains_power_w` (mean of per-run domain
+  joules/time) cover every `ok` run, unfiltered. With
+  `measurement.report.outlier_method` `iqr_<k>` (default `none`), `filtered`
+  adds `method`, `runs` and the same five summaries over the runs whose energy
+  lies inside the Tukey fences; `runs.iqr_outliers_removed` counts the rest.
   `runs.energies_j` lists every run's signed reading (`null` where the read
   failed) and `runs.status` its status (`ok`, `zero_energy`,
   `negative_energy`, `read_failed`). Only `ok` runs enter the statistics.

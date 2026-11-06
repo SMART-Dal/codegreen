@@ -59,7 +59,7 @@
       "iso_timestamp_format": "rfc3339_utc",
       "run_id_bytes": 6,
       "max_checkpoints": 2000000,
-      "outlier_method": "iqr_1.5",
+      "outlier_method": "none",
       "timeseries_clock_override": "",
       "noise_warning": {
         "within_task_power_cv_pct_threshold": 10.0,

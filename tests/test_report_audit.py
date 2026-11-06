@@ -570,7 +570,7 @@ class TestCLI:
         out, _, _, _ = _cli_run("run", "--json", "-n", "2", "-w", "0", "--", *self.SMALL_WORKLOAD)
         assert isinstance(out["meta"]["argv"], list)
         assert out["meta"]["cwd"]
-        assert out["meta"]["outlier_method"] == "iqr_1.5"
+        assert out["meta"]["outlier_method"] == "none"
         assert out["meta"]["iso_timestamp_format"] == "rfc3339_utc"
 
     def test_budget_exceeded_path_includes_meta(self) -> None:
@@ -2100,23 +2100,42 @@ class TestValidity:
         assert (out.get("error") == f"invalid_measurement: {code}") if code else "error" not in out
         assert out["runs"]["energies_j"] == [e for e, _ in pairs] and len(out["runs"]["status"]) == 3
 
-    def test_run_stats_are_paired_and_raw_is_reported(self, monkeypatch):
+    def test_run_stats_are_raw_and_filtering_is_an_opt_in_side_block(self, monkeypatch, tmp_path):
+        """energy_j.mean was IQR-filtered while its min/max and the domains covered every run, and domains_power_w
+        divided all-run domain joules by the filtered mean duration; every field now has one definition."""
         from typer.testing import CliRunner
         import codegreen.cli.cli as cli
-        it = iter([(5.0, 1.0), (5.1, 1.1), (4.9, 0.9), (5.0, 1.0), (50.0, 1.0)])
+        pairs = [(5.0, 1.0), (5.1, 1.1), (4.9, 0.9), (5.0, 1.0), (50.0, 2.0)]
 
         class Fake(cli._EnergyBackend):
             name = "fake"
             def is_available(self): return True
-            def measure(self, command, timeout=None): return next(it)
+            def measure(self, command, timeout=None):
+                self.last = pairs[len(seen)]
+                seen.append(self.last)
+                return self.last
+            def get_last_domain_breakdown(self): return {"package-0": self.last[0]}
 
+        def run(method):
+            (tmp_path / "c.json").write_text(json.dumps({"measurement": {"report": {"outlier_method": method}}}))
+            monkeypatch.setenv("CODEGREEN_CONFIG", str(tmp_path / "c.json"))
+            seen.clear()
+            r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "5", "-w", "0", "--", "true"])
+            return json.loads(r.stdout)
+
+        seen = []
         monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
-        r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "5", "-w", "0", "--", "true"])
-        out = json.loads(r.stdout)
-        assert out["runs"]["iqr_outliers_removed"] == 1 and out["energy_j"]["mean"] == pytest.approx(5.0)
-        assert out["energy_j"]["raw"]["mean"] == pytest.approx(14.0) and out["energy_j"]["raw"]["n"] == 5
-        assert out["duration_s"]["mean"] == pytest.approx(1.0) and out["duration_s"]["outliers_removed"] == 1
-        assert list(out["validity"]["warnings"]) == ["RESOLUTION_UNKNOWN"] and r.exit_code == 0
+        out = run("none")
+        assert "filtered" not in out and out["meta"]["outlier_method"] == "none"
+        assert out["energy_j"]["mean"] == pytest.approx(14.0) == out["domains"]["package-0"]
+        assert out["energy_j"]["max"] == 50.0 and out["duration_s"]["mean"] == pytest.approx(1.2)
+        assert out["power_w"]["mean"] == pytest.approx(sum(e / t for e, t in pairs) / 5, abs=1e-4)
+        assert out["power_w"]["mean"] == out["domains_power_w"]["package-0"]
+        f = run("iqr_1.5")["filtered"]
+        assert f["method"] == "iqr_1.5" and f["runs"] == 4 and f["energy_j"]["max"] == 5.1
+        assert f["energy_j"]["mean"] == pytest.approx(5.0) == f["domains"]["package-0"]
+        assert f["duration_s"]["mean"] == pytest.approx(1.0)
+        assert f["power_w"]["mean"] == f["domains_power_w"]["package-0"]
 
     def test_run_accepts_sensors(self, monkeypatch):
         from typer.testing import CliRunner
