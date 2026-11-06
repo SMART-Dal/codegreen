@@ -63,7 +63,7 @@ class CodeGreenProfiler(ProfilerInterface):
             if cmd[0] == "python3":
                 args = cmd[2:] if len(cmd) > 2 else []
             elif cmd[0] == "java":
-                args = cmd[3:] if len(cmd) > 3 else []  # java -cp dir class args
+                args = cmd[4:]  # java -cp dir class args
             else:
                 args = cmd[1:] if len(cmd) > 1 else []  # binary args
         else:
@@ -95,7 +95,7 @@ class CodeGreenProfiler(ProfilerInterface):
             return "python", cmd[1] if len(cmd) > 1 else cmd[0], cmd[2:] if len(cmd) > 2 else []
         elif cmd[0] == "java":
             # java -cp dir class args -> need source from set_source
-            return "java", str(self.source_path) if self.source_path else "", cmd[3:] if len(cmd) > 3 else []
+            return "java", str(self.source_path) if self.source_path else "", cmd[4:]
         else:
             # Compiled binary
             source = str(self.source_path) if self.source_path else cmd[0]

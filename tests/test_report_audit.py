@@ -2381,6 +2381,18 @@ class TestValidityDefects:
             **real(lang), "instrumentation_config": {**real(lang)["instrumentation_config"], "entry_points": ["run"]}})
         assert [p.type for p in cli._filter_main_entry_points(pts, "c")] == ["function_enter", "function_return"]
 
+    def test_benchmark_java_args_follow_the_class_name(self, tmp_path, monkeypatch):
+        """`java -cp dir Class args`: the class name was passed as the first program argument (NumberFormatException)."""
+        import benchmark.profilers as bp
+        seen = []
+        out = json.dumps({"validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}})
+        monkeypatch.setattr(bp.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or subprocess.CompletedProcess(cmd, 0, out, ""))
+        prof, cmd = bp.CodeGreenProfiler(), ["java", "-cp", str(tmp_path), "binarytrees", "10"]
+        prof.run(cmd)
+        prof.set_source(tmp_path / "binarytrees.java", "java")
+        prof.run(cmd)
+        assert [c[7:] for c in seen] == [["10"], ["10"]]
+
 
 class TestRound3:
     """Injected-runtime cleanup order, stdout-closing workloads, and toolchain selection."""
