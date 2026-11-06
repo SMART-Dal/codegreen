@@ -1256,8 +1256,9 @@ def _fake_rapl(root, packages, subs=()):
 
 def _java_rapl_env():
     """The poller settings `codegreen project` exports from java.json project_config.runtime_injection.env."""
+    from codegreen.cli.cli import _runtime_env
     cfg = json.loads((Path(__file__).parent.parent / "codegreen/instrumentation/configs/java.json").read_text())
-    return cfg["project_config"]["runtime_injection"]["env"]
+    return _runtime_env(cfg["project_config"])
 
 
 def _run_java_rapl(prog, root, *writes, env=None):
@@ -1300,17 +1301,29 @@ def test_java_runtime_sums_packages_and_handles_counter_wrap(java_rapl_prog, tmp
 
 
 def test_java_runtime_sums_the_domains_nemb_sums(java_rapl_prog, tmp_path):
-    """The poller summed package zones only, while NEMB's intel_rapl provider sums a psys zone alone when present and
-    otherwise every zone plus the dram sub-zones (a counter outside the package), never core."""
-    a, b, rng = tmp_path / "a", tmp_path / "b", 10**9
+    """One zone rule for the poller and NEMB's intel_rapl provider (nemb_validation_test test_rapl_zone_rule checks
+    the same cases), read from measurement.nemb.providers.intel_rapl: every psys zone when any exists, else every zone plus the
+    dram sub-zones (a counter outside the package), never core."""
+    a, b, c, rng = tmp_path / "a", tmp_path / "b", tmp_path / "c", 10**9
     _fake_rapl(a, [("package-0", 0, rng)], [(0, "core", 0, rng), (0, "dram", 0, rng)])
-    _fake_rapl(b, [("package-0", 0, rng), ("psys", 0, rng)], [(0, "dram", 0, rng)])
+    _fake_rapl(b, [("package-0", 0, rng), ("psys", 0, rng), ("PSYS", 0, rng)], [(0, "dram", 0, rng)])
+    _fake_rapl(c, [("package-0", 0, rng), ("package-1", 0, rng)], [(0, "dram", 0, rng), (1, "dram", 0, rng)])
     for root, deltas, want in ((a, {"intel-rapl:0": 10, "intel-rapl:0:0": 1000, "intel-rapl:0:1": 3}, 13),
-                               (b, {"intel-rapl:0": 10, "intel-rapl:1": 50, "intel-rapl:0:0": 3}, 50)):
+                               (b, {"intel-rapl:0": 10, "intel-rapl:1": 50, "intel-rapl:2": 7, "intel-rapl:0:0": 3}, 57),
+                               (c, {"intel-rapl:0": 10, "intel-rapl:0:0": 3, "intel-rapl:1": 20, "intel-rapl:1:1": 4}, 37)):
         r, out = _run_java_rapl(java_rapl_prog, root, *(x for d, v in deltas.items()
                                                          for x in (str(root / d / "energy_uj"), f"{v:012d}\n")))
         assert r.returncode == 0, r.stderr
         assert int(next(ln for ln in out.splitlines() if ln.startswith("CG_CP_SUM|")).split("|")[4]) == want
+
+
+def test_java_poller_zone_rule_comes_from_the_nemb_config():
+    """java.json held its own copy of the zone rule NEMB hard-coded; both now read measurement.nemb.providers.intel_rapl."""
+    from codegreen.cli.cli import _runtime_env, _load_language_config
+    from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import load_config
+    rapl = load_config()["measurement"]["nemb"]["providers"]["intel_rapl"]
+    env = _runtime_env(_load_language_config("java")["project_config"])
+    assert (env["CODEGREEN_RAPL_SUPERSET"], env["CODEGREEN_RAPL_DISJOINT"]) == (rapl["superset_zone"], rapl["disjoint_subzone"])
 
 
 @pytest.mark.needs_energy

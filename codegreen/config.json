@@ -40,7 +40,12 @@
         "clock_source": "auto"
       },
       "providers": {
-        "intel_rapl": {"enabled": true},
+        "intel_rapl": {
+          "enabled": true,
+          "_zones_comment": "Summed powercap zones, read by NEMB and by the Java poller (codegreen project): every zone whose name matches superset_zone when any does (psys holds package and dram), else every zone plus the sub-zones whose name matches disjoint_subzone (dram counts outside its package); other sub-zones (core, uncore) are inside their zone. Full-name regular expressions, case-insensitive",
+          "superset_zone": ".*(psys|platform).*",
+          "disjoint_subzone": "dram.*"
+        },
         "amd_rapl": {"enabled": true},
         "nvidia_gpu": {"enabled": true},
         "amd_gpu": {"enabled": true}

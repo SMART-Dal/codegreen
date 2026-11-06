@@ -53,8 +53,9 @@ import java.util.regex.Pattern;
  *   codegreen.rapl.superset / CODEGREEN_RAPL_SUPERSET regex on a zone's name file: a zone covering all others (psys)
  *   codegreen.rapl.disjoint / CODEGREEN_RAPL_DISJOINT regex on a sub-zone's name file: a counter outside its zone (dram)
  *   codegreen.rapl.poll_us  / CODEGREEN_RAPL_POLL_US  poll period in microseconds
- * The summed domains follow NEMB's intel_rapl provider (IntelRAPLProvider::detect_rapl_domains): the superset zones
- * alone when present, else every zone plus its disjoint sub-zones; nested sub-zones (core, uncore) never.
+ * The summed domains are NEMB's intel_rapl rule from the same config keys (measurement.nemb.providers.intel_rapl
+ * superset_zone, disjoint_subzone; names match case-insensitively): every superset zone when any matches, else every
+ * zone plus its disjoint sub-zones; nested sub-zones (core, uncore) never.
  *
  * Wire format on shutdown: one poller line per JVM (a single-line JSON object shaped like
  * the NEMB sampler block, ABI 4), then one line per (thread, method):
@@ -74,8 +75,10 @@ public class CodeGreenStandaloneRuntime {
     // startup; checkpoints read the published value (marker_reads "last_poll").
     private static final String RAPL_ROOT = setting("codegreen.rapl.root", "CODEGREEN_RAPL_ROOT");
     private static final Pattern RAPL_ZONE = Pattern.compile(setting("codegreen.rapl.zone", "CODEGREEN_RAPL_ZONE"));
-    private static final Pattern RAPL_SUPERSET = Pattern.compile(setting("codegreen.rapl.superset", "CODEGREEN_RAPL_SUPERSET"));
-    private static final Pattern RAPL_DISJOINT = Pattern.compile(setting("codegreen.rapl.disjoint", "CODEGREEN_RAPL_DISJOINT"));
+    private static final Pattern RAPL_SUPERSET =
+        Pattern.compile(setting("codegreen.rapl.superset", "CODEGREEN_RAPL_SUPERSET"), Pattern.CASE_INSENSITIVE);
+    private static final Pattern RAPL_DISJOINT =
+        Pattern.compile(setting("codegreen.rapl.disjoint", "CODEGREEN_RAPL_DISJOINT"), Pattern.CASE_INSENSITIVE);
     private static final long POLL_NS = Long.parseLong(setting("codegreen.rapl.poll_us", "CODEGREEN_RAPL_POLL_US")) * 1000L;
     private static final int AFFINITY_CPUS = allowedCpus("/proc/self/status");
     private static volatile long raplUj = 0L;

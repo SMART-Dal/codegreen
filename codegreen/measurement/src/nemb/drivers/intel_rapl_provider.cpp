@@ -10,6 +10,9 @@
 #include <chrono>
 #include <limits>
 #include <ctime>
+#include <regex>
+
+#include "../../../include/nemb/config_loader.hpp"
 
 namespace codegreen::nemb::drivers {
 
@@ -282,8 +285,10 @@ bool IntelRAPLProvider::detect_rapl_domains() {
         std::string base = root_ + "/intel-rapl:" + std::to_string(pkg);
         std::string energy_path = base + "/energy_uj";
         if (!std::filesystem::exists(energy_path)) break;
+        // A name another zone already has (psys or dram of each socket) is qualified with this zone's index.
+        auto unique = [&](const std::string& n) { return domain_paths_.count(n) ? n + "-" + std::to_string(pkg) : n; };
         std::string domain_name = read_sysfs(base + "/name");
-        if (domain_name.empty()) domain_name = "zone-" + std::to_string(pkg);
+        domain_name = unique(domain_name.empty() ? "zone-" + std::to_string(pkg) : domain_name);
         available_domains_.push_back(domain_name);
         domain_paths_[domain_name] = energy_path;
         zone_level_domains.insert(domain_name);
@@ -298,7 +303,7 @@ bool IntelRAPLProvider::detect_rapl_domains() {
             std::string sub_energy = sub_base + "/energy_uj";
             if (!std::filesystem::exists(sub_energy)) break;
             std::string sub_name = read_sysfs(sub_base + "/name");
-            if (sub_name.empty()) sub_name = "sub-" + std::to_string(sub);
+            sub_name = unique(sub_name.empty() ? "sub-" + std::to_string(sub) : sub_name);
             available_domains_.push_back(sub_name);
             domain_paths_[sub_name] = sub_energy;
             // Sub-domains (intel-rapl:X:Y) are NOT added to zone_level_domains
@@ -316,57 +321,21 @@ bool IntelRAPLProvider::detect_rapl_domains() {
         return false;
     }
 
-    // Top-level = all sysfs zone-level domains (intel-rapl:X) PLUS any
-    // sub-zone whose name starts with "dram".
-    //
-    // Why DRAM is special: per Intel SDM Vol 4 §14.10, MSR_PKG_ENERGY_STATUS
-    // (0x611) and MSR_DRAM_ENERGY_STATUS (0x619) are SEPARATE physical
-    // counters — package energy covers cores+uncore+ring+LLC only, NOT DRAM.
-    // The kernel exposes DRAM as `intel-rapl:0/intel-rapl:0:0/name=dram`
-    // (a sub-zone) on most Skylake-SP+ Xeons for hierarchical-organisation
-    // reasons, but the underlying counter values are disjoint. Treating
-    // DRAM as nested-in-package undercounts total system energy by 10-15%
-    // on memory-bound workloads (verified on Intel Xeon Gold, 2026-05-10).
-    //
-    // Other sub-zones (`core`/`pp0`, `uncore`/`pp1`) ARE genuine subsets of
-    // package energy and must remain excluded to avoid double-counting.
-    //
-    // PSYS, when present, is the most-inclusive platform counter and
-    // SUPERSEDES everything else (covers PKG + DRAM + platform rails).
-    auto is_dram_name = [](const std::string& s) {
-        std::string lo;
-        for (char c : s) lo += std::tolower(c);
-        return lo.rfind("dram", 0) == 0;  // "dram" or "dram-N"
-    };
+    // Summed domains, one rule shared with the Java poller (measurement.nemb.providers.intel_rapl in config.json):
+    // every zone matching superset_zone when any does (psys covers package and dram), else every zone plus the
+    // sub-zones matching disjoint_subzone. DRAM is a separate counter (Intel SDM Vol 4 14.10: MSR_PKG_ENERGY_STATUS
+    // 0x611 excludes MSR_DRAM_ENERGY_STATUS 0x619) that the kernel lists as a package sub-zone; core and uncore
+    // sub-zones are inside the package and never summed.
+    const auto cfg = ConfigLoader::load_config();
+    const std::regex superset(cfg.rapl_superset_zone, std::regex::icase), disjoint(cfg.rapl_disjoint_subzone, std::regex::icase);
     top_level_domains_.clear();
-    bool has_psys = false;
-    std::string psys_name;
-    for (auto& d : zone_level_domains) {
-        std::string lower;
-        for (char c : d) lower += std::tolower(c);
-        if (lower.find("psys") != std::string::npos || lower.find("platform") != std::string::npos) {
-            has_psys = true;
-            psys_name = d;
-        }
-    }
-    if (has_psys) {
-        top_level_domains_.insert(psys_name);
-    } else {
-        top_level_domains_ = zone_level_domains;
-        // Promote any sub-zone DRAM (Skylake-SP+ kernel layout) to top-level.
-        // Idempotent: if dram is already a zone-level domain (older Xeons),
-        // the std::set insert is a no-op.
-        for (const auto& d : available_domains_) {
-            if (is_dram_name(d) && !zone_level_domains.count(d)) {
-                top_level_domains_.insert(d);
-            }
-        }
-    }
-    // Fallback: if empty (shouldn't happen), include all
+    for (const auto& d : zone_level_domains) if (std::regex_match(d, superset)) top_level_domains_.insert(d);
     if (top_level_domains_.empty()) {
-        for (auto& d : available_domains_) top_level_domains_.insert(d);
+        top_level_domains_ = zone_level_domains;
+        for (const auto& d : available_domains_)
+            if (!zone_level_domains.count(d) && std::regex_match(d, disjoint)) top_level_domains_.insert(d);
     }
-    
+
     // Set access method
     access_method_ = AccessMethod::SYSFS_POWERCAP;
     return true;

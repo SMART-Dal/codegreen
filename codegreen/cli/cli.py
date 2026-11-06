@@ -20,6 +20,7 @@ import subprocess
 import platform
 import time
 import shutil
+import functools
 import itertools
 import json
 import tempfile
@@ -3384,6 +3385,14 @@ def _find_source_roots(file_paths, proj_cfg: dict) -> set:
     return roots
 
 
+def _runtime_env(proj_cfg: dict) -> Dict[str, str]:
+    """project_config.runtime_injection.env of a language config. A value "{config:a.b.c}" is that key of the active
+    config, so a setting the injected runtime shares with NEMB (the RAPL zone rule) has one source."""
+    cfg = load_config()
+    return {k: str(functools.reduce(lambda d, key: d[key], v[8:-1].split("."), cfg)) if v.startswith("{config:") else v
+            for k, v in proj_cfg.get("runtime_injection", {}).get("env", {}).items()}
+
+
 def _rewrite_instrumented_for_standalone(code: str, rt_cfg: dict) -> str:
     """Rewrite instrumented code to use standalone runtime instead of JNI runtime."""
     rewrites = rt_cfg.get("import_rewrite", {})
@@ -3898,7 +3907,7 @@ def project_energy(
         # package config relative to themselves; point them at the install.
         _, nemb_lib_dir = _get_c_runtime_paths()
         # runtime_injection.env (language config) holds the injected runtime's settings; the caller's env overrides.
-        run_env = {**proj_cfg.get("runtime_injection", {}).get("env", {}), **os.environ}
+        run_env = {**_runtime_env(proj_cfg), **os.environ}
         run_env.setdefault("CODEGREEN_INSTALL_DIR", str(Path(__file__).resolve().parents[2]))
         run_env.setdefault("CODEGREEN_CONFIG", str(get_config_path()))
         run_env["CODEGREEN_EMIT_RESULT"] = "1"

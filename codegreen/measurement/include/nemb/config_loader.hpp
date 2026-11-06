@@ -67,6 +67,8 @@ public:
         CoordinatorConfig coordinator;
         std::map<std::string, ProviderConfig> providers;
         uint32_t max_checkpoints{2000000};  // measurement.report.max_checkpoints; markers beyond it are dropped and counted
+        std::string rapl_superset_zone{".*(psys|platform).*"};  // measurement.nemb.providers.intel_rapl.superset_zone
+        std::string rapl_disjoint_subzone{"dram.*"};           // measurement.nemb.providers.intel_rapl.disjoint_subzone
     };
     
     /**

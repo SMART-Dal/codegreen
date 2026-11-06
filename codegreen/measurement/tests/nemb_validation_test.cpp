@@ -4,9 +4,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 #include "nemb/codegreen_energy.hpp"
 #include "nemb/config_loader.hpp"
@@ -385,6 +387,49 @@ static void test_rapl_partial_domain() {
     fs::remove_all(root);
 }
 
+// Energy (J) the provider sums for the writes (zone dir -> energy_uj) on a fake powercap tree of (zone dir, name).
+static double rapl_sum(const std::string& tag, const std::vector<std::pair<std::string, std::string>>& zones,
+                       const std::map<std::string, uint64_t>& writes) {
+    auto root = fs::temp_directory_path() / ("nemb_rule_" + tag + "_" + std::to_string(getpid()));
+    for (const auto& [dir, name] : zones) {
+        fs::create_directories(root / dir);
+        write_file(root / dir / "name", name + "\n");
+        write_file(root / dir / "energy_uj", "1000\n");
+        write_file(root / dir / "max_energy_range_uj", "262143328850\n");
+    }
+    drivers::IntelRAPLProvider rapl(root.string());
+    CHECK(rapl.initialize());
+    double e0 = rapl.get_reading().energy_joules;
+    for (const auto& [dir, uj] : writes) write_file(root / dir / "energy_uj", std::to_string(1000 + uj) + "\n");
+    double e = rapl.get_reading().energy_joules - e0;
+    rapl.shutdown();
+    fs::remove_all(root);
+    return e;
+}
+
+// The zone rule of measurement.nemb.providers.intel_rapl, shared with the Java poller (test_java_runtime_sums_the_
+// domains_nemb_sums uses the same trees): every superset (psys) zone when any exists, else every zone plus the
+// disjoint (dram) sub-zones; core never. Zones sharing a name (psys, dram of each socket) are each summed.
+static void test_rapl_zone_rule() {
+    const std::vector<std::pair<std::string, std::string>> pkg = {{"intel-rapl:0", "package-0"}, {"intel-rapl:0:0", "core"},
+                                                                  {"intel-rapl:0:1", "dram"}};
+    const std::map<std::string, uint64_t> w = {{"intel-rapl:0", 10000000}, {"intel-rapl:0:0", 1000000000}, {"intel-rapl:0:1", 3000000}};
+    CHECK(std::fabs(rapl_sum("pkg", pkg, w) - 13) < 1e-9);
+    CHECK(std::fabs(rapl_sum("psys", {{"intel-rapl:0", "package-0"}, {"intel-rapl:0:0", "dram"}, {"intel-rapl:1", "psys"},
+                                      {"intel-rapl:2", "psys"}},
+                             {{"intel-rapl:0", 10000000}, {"intel-rapl:0:0", 3000000}, {"intel-rapl:1", 50000000},
+                              {"intel-rapl:2", 7000000}}) - 57) < 1e-9);
+    CHECK(std::fabs(rapl_sum("sockets", {{"intel-rapl:0", "package-0"}, {"intel-rapl:0:0", "dram"}, {"intel-rapl:1", "package-1"},
+                                         {"intel-rapl:1:0", "dram"}},
+                             {{"intel-rapl:0", 10000000}, {"intel-rapl:0:0", 3000000}, {"intel-rapl:1", 20000000},
+                              {"intel-rapl:1:0", 4000000}}) - 37) < 1e-9);
+    auto cfg = write_config("rule", "{\n  \"superset_zone\": \"PSYS\",\n  \"disjoint_subzone\": \"none\"\n}\n");
+    setenv("CODEGREEN_CONFIG", cfg.c_str(), 1);
+    CHECK(std::fabs(rapl_sum("cfg", pkg, w) - 10) < 1e-9);  // the rule is read from the config file
+    unsetenv("CODEGREEN_CONFIG");
+    fs::remove(cfg);
+}
+
 extern "C" void nemb_mark_checkpoint(const char* n);
 extern "C" int nemb_probe();
 extern "C" int nemb_get_checkpoints_json(char* b, int m);
@@ -452,6 +497,7 @@ int main(int argc, char** argv) {
     test_config_resolution();
     test_meter_sampler();
     test_rapl_partial_domain();
+    test_rapl_zone_rule();
     test_probe();
     test_result_fd();
     std::cout << (failures ? "FAILED " : "PASSED ") << failures << " failure(s)\n";

@@ -175,6 +175,8 @@ ConfigLoader::NEMBConfig ConfigLoader::parse_json_config(const std::string& json
         c.cross_validation_threshold = get_double("cross_validation_threshold", c.cross_validation_threshold);
         c.measurement_buffer_size = get_uint("measurement_buffer_size", c.measurement_buffer_size);
         config.max_checkpoints = get_uint("max_checkpoints", config.max_checkpoints);
+        config.rapl_superset_zone = get_str("superset_zone", config.rapl_superset_zone);
+        config.rapl_disjoint_subzone = get_str("disjoint_subzone", config.rapl_disjoint_subzone);
         c.auto_restart_failed_providers = get_bool("auto_restart_failed_providers", c.auto_restart_failed_providers);
         uint32_t restart_ms = get_uint("provider_restart_interval", static_cast<uint32_t>(c.provider_restart_interval.count() * 1000));
         c.provider_restart_interval = std::chrono::seconds(restart_ms / 1000);

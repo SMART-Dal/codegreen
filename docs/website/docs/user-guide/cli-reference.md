@@ -290,8 +290,10 @@ Each entry of `runs` carries `sampler`, `validity`, `resolution_ns` and
 prefixed `run N:`), and an invalid result exits 3 with `success: false` like
 `measure`. Java standalone runs build `sampler` from each JVM's
 `CG_CP_META|<json>` record (`marker_reads: "last_poll"`); the poller settings
-come from `project_config.runtime_injection.env` in `java.json`, and the
-caller's environment overrides them. Each function has `quality`.
+come from `project_config.runtime_injection.env` in `java.json` (a value
+`{config:a.b.c}` is that key of the active config, as for the RAPL zone rule
+`measurement.nemb.providers.intel_rapl`), and the caller's environment
+overrides them. Each function has `quality`.
 
 #### Per-function quality
 

@@ -255,6 +255,16 @@ needed to exclude it). `codegreen init` enables the detected providers and
 lists their sensors in `default_sensors`. RAPL domains (`package`, `pp0`,
 `pp1`, `dram`, `psys`) are reported per task and per run.
 
+`intel_rapl.superset_zone` (default `.*(psys|platform).*`) and
+`intel_rapl.disjoint_subzone` (default `dram.*`) decide which powercap zones
+the total sums, for NEMB and for the Java poller of `codegreen project` alike:
+every zone whose name matches `superset_zone` when any does, else every zone
+plus the sub-zones matching `disjoint_subzone`; other sub-zones (`core`,
+`uncore`) lie inside their zone and are never summed. Both are full-name
+regular expressions matched case-insensitively. A name that several zones
+share (the `dram` of each socket) is reported with the zone index appended
+(`dram`, `dram-1`).
+
 ### Config file resolution
 
 The CLI, the Python runtime and the native library read one file:
