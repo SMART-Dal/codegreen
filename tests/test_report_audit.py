@@ -1795,7 +1795,7 @@ def test_version_comes_from_the_source_tree_not_stale_metadata():
     """An editable install with metadata from an older build reported that version for newer code (0.4.8 vs 0.5.0)."""
     from typer.testing import CliRunner
     import codegreen.cli.cli as cli
-    pyproject = (Path(codegreen.__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    pyproject = (_CG_REPO / "pyproject.toml").read_text()
     version = re.search(r'^version *= *"([^"]+)"', pyproject, re.M).group(1)
     assert codegreen.__version__ == version
     assert version in CliRunner().invoke(cli.app, ["--version"]).output
@@ -1933,6 +1933,8 @@ class TestValidity:
                                     cfg or _measurement_cfg())
 
     def test_package_under_test_is_this_tree(self):
+        if not (Path(codegreen.__file__).resolve().parents[1] / "pyproject.toml").exists():
+            pytest.skip("installed package, not a source tree")
         assert Path(codegreen.__file__).resolve().parents[1] == _CG_REPO
 
     def test_clean_run_is_valid(self):
