@@ -150,7 +150,23 @@
         ".py",
         ".pyw",
         ".pyi"
-      ]
+      ],
+      "line_sampler": {
+        "_comment": "codegreen.analysis.line_sampling: py-spy line-level CPU samples on a profiled run only. record: py-spy arguments before --rate; flags: always on; feature_flags: in-run features a caller switches on by name (native: C-extension frames); pass_flags: extra profiled runs (idle: waiting threads included, gil: GIL holder only). frame_re matches one collapsed frame (groups func, file, line; no match = native), library_re a library file, irreducible_re library or native frames a source rewrite cannot remove. interpreter_re finds the interpreter word of the workload command for the tracemalloc run (alloc_*).",
+        "binary": "py-spy",
+        "rate_hz": 97,
+        "record": ["record", "--format", "raw", "--full-filenames"],
+        "flags": [],
+        "feature_flags": {"native": ["--native"]},
+        "pass_flags": {"idle": ["--idle"], "gil": ["--gil"]},
+        "frame_re": "(?P<func>.*) \\((?P<file>[^()]*\\.pyw?):(?P<line>\\d+)\\)",
+        "library_re": "(?:site|dist)-packages/|/lib/python\\d+(?:\\.\\d+)*/",
+        "irreducible_re": "(?i)blas|lapack|\\bmkl|gemm|_multiarray_umath",
+        "interpreter_re": "(?:python|pypy)[\\d.]*",
+        "alloc_frames": 1,
+        "alloc_top": 50,
+        "alloc_interval_s": 0.5
+      }
     },
     "c": {
       "executable": "gcc",
