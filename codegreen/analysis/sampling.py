@@ -19,10 +19,18 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
+import subprocess
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Optional
+
+from codegreen.analysis import languages
+from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import load_config
 
 ASYNC_PROFILER_ENV = "CODEGREEN_ASYNC_PROFILER"
+TIME_EVENTS = ("cpu", "wall", "itimer")   # async-profiler events whose interval is time; any other is a perf event count
 _ANNOT = re.compile(r"_\[([jiIk0-9]+)\]$")
 
 
@@ -38,17 +46,20 @@ def async_profiler_lib(root: str = "") -> Path:
     return lib
 
 
-def java_agent_option(out_dir: Path, interval_us: int, event: str = "cpu", root: str = "") -> str:
-    """-agentpath option sampling into out_dir/<pid>.collapsed; `ann` marks
-    JIT-compiled (_[j]) and inlined (_[i]) frames. Use an interval that is not
-    a multiple of common timer periods (e.g. 997 us) so samples do not lock
-    step with periodic work. The profiled JVM resolves `file=` against its own
-    working directory and does not create directories, so the path is made
-    absolute here (a relative one silently yields no profile)."""
+def java_agent_option(out_dir: Path, interval: int, event: str = "cpu", root: str = "") -> str:
+    """-agentpath option sampling `event` into out_dir/<pid>.collapsed; `ann` marks
+    JIT-compiled (_[j]) and inlined (_[i]) frames. `interval` is microseconds for
+    a time event (TIME_EVENTS) and occurrences for a perf event (cache-misses,
+    ...), which async-profiler's perf_events mode samples with JIT frames that
+    perf alone cannot resolve. Use an interval that is not a multiple of common
+    timer periods (e.g. 997 us) so samples do not lock step with periodic work.
+    The profiled JVM resolves `file=` against its own working directory and does
+    not create directories, so the path is made absolute here (a relative one
+    silently yields no profile)."""
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    return (f"-agentpath:{async_profiler_lib(root)}=start,event={event},interval={interval_us}us,"
-            f"ann,collapsed,file={out_dir}/%p.collapsed")
+    return (f"-agentpath:{async_profiler_lib(root)}=start,event={event},interval={int(interval)}"
+            f"{'us' if event in TIME_EVENTS else ''},ann,collapsed,file={out_dir}/%p.collapsed")
 
 
 def is_jmh_jar(path: str) -> bool:
@@ -160,3 +171,116 @@ def energy_by_method(samples: list[tuple[int, tuple[str, ...]]],
     return {"energy_j": series[-1][1] - series[0][1], "unattributed_j": unattributed,
             "samples_used": len(inside), "samples_outside": len(samples) - len(inside),
             "methods": {n: {"self_j": self_j.get(n, 0.0), "total_j": total_j[n]} for n in total_j}}
+
+
+# --- Event samplers (the `events` component of a language adapter, codegreen.analysis.languages) ---------------------
+# How to sample an event (a CPU timer or a hardware event) with call stacks, where the collapsed stacks land, and how a
+# collapsed frame normalizes to (scope, name, line). Metric providers (metrics.py) attribute their events through these,
+# so a language gets every provider's function shares by registering one event sampler.
+
+_OFFSET = re.compile(r"\+0x[0-9a-f]+$")
+_PYPERF = re.compile(r"py::(?P<func>[^:]+):(?P<file>.+)")
+Frame = Optional[tuple[str, str, Optional[int]]]
+
+
+def perf_record_argv(argv: list[str], event: str, period: int, out: Path, perf: str) -> list[str]:
+    """`perf record` sampling `event` every `period` occurrences with call stacks into `out`."""
+    return [perf, "record", "-e", event, "-c", str(int(period)), "-g", "-o", str(out), "--", *argv]
+
+
+def parse_perf_script(text: str) -> Counter:
+    """{root-first frame tuple: samples} from `perf script -F comm,period,event,ip,sym`: a header line per sample
+    (comm, period, event:) then its frames leaf first ('ip sym+0xoff'), a blank line between samples. Weights are sample
+    counts, as in async-profiler's collapsed output, so every backend's stacks share one unit (each sample stands for the
+    recording's fixed period of events). A header without an integer period means the output is not in the requested
+    format and raises; a sample without frames is kept as an [unknown] stack, so no sample's weight is lost."""
+    out: Counter = Counter()
+    head, frames = None, []
+    for line in [*text.splitlines(), ""]:
+        if not line.strip():
+            if head is not None:
+                out[tuple(reversed(frames)) or ("[unknown]",)] += 1
+            head, frames = None, []
+        elif line[0].isspace():
+            frames.append(_OFFSET.sub("", line.strip().partition(" ")[2].strip() or "[unknown]"))
+        elif not any(t.isdigit() for t in line.split()):
+            raise ValueError(f"perf script sample header without an integer period: {line!r}")
+        else:
+            head = line
+    return out
+
+
+def perf_script_to_collapsed(perf_data: Path, out: Path, perf: str) -> Path:
+    """`perf script` of a recording written as collapsed stacks (root first, sample counts) to `out`."""
+    argv = [perf, "script", "-F", "comm,period,event,ip,sym", "-i", str(perf_data)]
+    p = subprocess.run(argv, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"{shlex.join(argv)} exited {p.returncode}: {p.stderr.strip()[-300:]}")
+    stacks = parse_perf_script(p.stdout)
+    if not stacks:
+        raise ValueError(f"{perf_data}: perf recorded no samples")
+    Path(out).write_text("".join(f"{';'.join(fr)} {n}\n" for fr, n in stacks.items()))
+    return Path(out)
+
+
+@dataclass(frozen=True)
+class EventSampler:
+    command: Callable[[list[str], dict, Path, str, int], tuple[list[str], dict]]   # (argv, env, out_dir, event, period)
+    read: Callable[[Path], list[Path]]                                             # out_dir -> collapsed files
+    frames: Callable[[], Callable[[str], Frame]]                                   # -> collapsed frame -> (scope, name, line)
+
+
+def register_backend(language: str, backend: EventSampler) -> EventSampler:
+    languages.add(language, events=backend)
+    return backend
+
+
+def backend_for(language: str) -> EventSampler:
+    return languages.component(language, "events")
+
+
+def event_languages() -> list[str]:
+    """Languages with a registered event sampler."""
+    return languages.supporting("events")
+
+
+def sampled_stacks(language: str, files: list[Path]) -> list[tuple[tuple, float]]:
+    """Normalized stacks [(frames root first, weight)] of a backend's collapsed files; frames the backend does not
+    recognize are kept as ("", raw, None) so a stack's weight is never lost."""
+    norm = backend_for(language).frames()
+    out = []
+    for p in files:
+        for line in Path(p).read_text().splitlines():
+            stack, _, count = line.rpartition(" ")
+            if stack:
+                out.append((tuple(norm(f) or ("", f, None) for f in stack.split(";")), float(count)))
+    return out
+
+
+def _perf_backend(env_extra: dict, frame: Callable[[str], Frame]) -> EventSampler:
+    """perf record with call stacks, through the perf binary of config hw_counters.perf."""
+    def command(argv, env, out_dir, event, period):
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        return perf_record_argv(argv, event, period, Path(out_dir) / "perf.data", load_config()["hw_counters"]["perf"]), {**env, **env_extra}
+
+    def read(out_dir):
+        return [perf_script_to_collapsed(Path(out_dir) / "perf.data", Path(out_dir) / "perf.collapsed", load_config()["hw_counters"]["perf"])]
+    return EventSampler(command, read, lambda: frame)
+
+
+def _python_perf_frame(raw: str) -> Frame:
+    m = _PYPERF.fullmatch(raw)
+    return (m["file"], m["func"], None) if m else None
+
+
+def _java_frames() -> Callable[[str], Frame]:
+    from codegreen.analysis import line_sampling   # the Java frame grammar is data of its line sampler (config.json)
+    return line_sampling.frame_parser("java")
+
+
+register_backend("java", EventSampler(
+    lambda argv, env, out_dir, event, period: java_agent_command(
+        argv, java_agent_option(out_dir, period, event, root=env.get(ASYNC_PROFILER_ENV, "")), env),
+    lambda out_dir: sorted(Path(out_dir).glob("*.collapsed")), _java_frames))
+register_backend("python", _perf_backend({"PYTHONPERFSUPPORT": "1"}, _python_perf_frame))   # CPython >= 3.12 perf trampoline
+register_backend("native", _perf_backend({}, lambda raw: ("", raw, None)))

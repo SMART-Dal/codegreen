@@ -199,7 +199,12 @@
       "compiler": "javac",
       "extensions": [
         ".java"
-      ]
+      ],
+      "line_sampler": {
+        "_comment": "Java frame grammar of async-profiler collapsed stacks, shared by the event sampler (codegreen.analysis.sampling) and the line sampler: frame_re groups file (the class), func and an optional line (jfrconv --lines), an optional JIT annotation is dropped, a shared object or a C++ frame is native; file_replace turns '/' class separators into '.'.",
+        "frame_re": "(?!.*\\.so(?:\\.\\d+)*$)(?P<file>[\\w$/.<>-]+)\\.(?P<func>[\\w$<>-]+)(?::(?P<line>\\d+))?(?:_\\[[jiIk0-9]+\\])?",
+        "file_replace": {"/": "."}
+      }
     }
   },
   "monitor": {

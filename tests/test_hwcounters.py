@@ -3,7 +3,7 @@ import types
 import pytest
 
 from codegreen.analysis import hwcounters as hw
-from codegreen.analysis import metrics
+from codegreen.analysis import metrics, sampling
 
 AMD = "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\n\nprocessor\t: 1\nvendor_id\t: other\n"
 INTEL = "vendor_id\t: GenuineIntel\ncpu family\t: 6\n"
@@ -125,3 +125,48 @@ def test_a_registry_probes_each_provider_once_until_it_is_replaced():
     assert r.probe()[0].available and r.available() and len(calls) == 1
     r.put(P())
     assert r.available() and len(calls) == 2
+
+
+def test_perf_script_becomes_root_first_weighted_stacks():
+    text = ("python3 10007 cache-misses: \n\t 7f12 py::work:/src/app.py\n\t 7f00 _PyEval_EvalFrameDefault+0x1a2\n\t 7e00 main+0x5\n\n"
+            "python3 10007 cache-misses: \n\t 7f12 py::work:/src/app.py\n\t 7e00 main+0x9\n\npython3 10007 cache-misses: \n")
+    st = sampling.parse_perf_script(text)
+    assert st[("main", "_PyEval_EvalFrameDefault", "py::work:/src/app.py")] == 1
+    assert st[("main", "py::work:/src/app.py")] == 1 and st[("[unknown]",)] == 1   # a stackless sample keeps its weight
+    with pytest.raises(ValueError, match="without an integer period"):
+        sampling.parse_perf_script("python3 cache-misses: \n\t 7f12 main+0x5\n")
+
+
+def test_backends_sample_any_event_per_language_and_normalize_frames(tmp_path, monkeypatch):
+    lib = tmp_path / "ap" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "libasyncProfiler.so").write_text("")
+    env = {sampling.ASYNC_PROFILER_ENV: str(tmp_path / "ap")}
+    argv, env2 = sampling.backend_for("java").command(["java", "-cp", "x", "Main"], env, tmp_path / "o", "cache-misses", 10007)
+    assert "event=cache-misses,interval=10007,ann,collapsed" in env2["JAVA_TOOL_OPTIONS"]
+    _, env3 = sampling.backend_for("java").command(["java", "Main"], env, tmp_path / "o", "cpu", 997)
+    assert "event=cpu,interval=997us" in env3["JAVA_TOOL_OPTIONS"]
+    monkeypatch.setattr(sampling, "load_config", lambda: {"hw_counters": {"perf": "/opt/perf"}})
+    argv, env4 = sampling.backend_for("python").command(["python", "app.py"], {}, tmp_path / "p", "cache-misses", 10007)
+    assert argv[:2] == ["/opt/perf", "record"] and "-g" in argv and env4["PYTHONPERFSUPPORT"] == "1"
+    (tmp_path / "o" / "1.collapsed").write_text("java.lang.Thread.run;org/rb/Util.lowbits_[j] 7\nlibjvm.so 3\n")
+    (tmp_path / "p" / "perf.collapsed").write_text("main;py::work:/src/app.py 5\n")
+    js = sampling.sampled_stacks("java", sampling.backend_for("java").read(tmp_path / "o"))
+    assert ((("java.lang.Thread", "run", None), ("org.rb.Util", "lowbits", None)), 7.0) in js and ((("", "libjvm.so", None),), 3.0) in js
+    py = sampling.sampled_stacks("python", [tmp_path / "p" / "perf.collapsed"])
+    assert py == [((("", "main", None), ("/src/app.py", "work", None)), 5.0)]
+    with pytest.raises(KeyError, match="no events sampler for language .cobol."):
+        sampling.backend_for("cobol")
+
+
+def test_one_language_registry_holds_every_sampler_component_and_refuses_duplicates():
+    from codegreen.analysis import languages, line_sampling
+    assert {"java", "python", "native"} <= set(languages.supporting("events")) and "python" in languages.supporting("lines")
+    py = languages.get("python")
+    assert py.events is sampling.backend_for("python") and py.lines is line_sampling.adapter("python")
+    with pytest.raises(ValueError, match="already has a events component"):
+        languages.add("python", events=py.events)
+    with pytest.raises(ValueError, match="unknown language component"):
+        languages.add("python", grammar=object())
+    with pytest.raises(KeyError, match="no lines sampler for language 'native'"):
+        languages.component("native", "lines")
