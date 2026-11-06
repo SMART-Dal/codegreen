@@ -1,4 +1,5 @@
 #include "../../../include/nemb/core/measurement_coordinator.hpp"
+#include "../../../include/nemb/utils/precision_timer.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -194,7 +195,8 @@ std::map<std::string, MeasurementCoordinator::ProviderCounts> MeasurementCoordin
     std::map<std::string, ProviderCounts> counts;
     for (const auto& [name, state] : providers_)
         counts[name] = {state.rejected, state.provider->get_held_readings(), state.provider->get_boundary_held(),
-                        state.provider->get_boundary_held_max_ns(), state.restarts, state.provider->counter_checks()};
+                        state.provider->get_boundary_held_max_ns(), state.restarts, state.provider->counter_checks(),
+                        state.readings, state.last_ns, state.max_stall_ns};
     return counts;
 }
 
@@ -387,6 +389,12 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
             if (reading_ok(reading)) {
                 state.last_successful_reading = std::chrono::steady_clock::now();
                 state.consecutive_failures = 0;
+                if (!boundary) {  // stall facts: a provider whose cumulative energy stops changing is counted, never filled
+                    uint64_t t = utils::PrecisionTimer::monotonic_timestamp_ns();
+                    if (!state.readings++ || reading.energy_joules != state.last_j) { state.last_j = reading.energy_joules; state.advance_ns = t; }
+                    state.max_stall_ns = std::max(state.max_stall_ns, t - state.advance_ns);
+                    state.last_ns = t;
+                }
             } else {
                 state.consecutive_failures++;
                 if (state.consecutive_failures > config_.max_consecutive_failures) {

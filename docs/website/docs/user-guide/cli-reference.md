@@ -564,6 +564,7 @@ warnings are not.
 | `COMPILE_FAILED` | measure | C, C++ or Java compile error (compiler output in `detail`) |
 | `SAMPLER_STARVED` | measure, project | Max reading gap above `gap_policy.<marker_reads>.max_gap_factor` x interval, or median gap above `median_gap_factor` x interval, where that policy's `severity` is `fatal` (NEMB `interpolated` markers) |
 | `PROVIDER_READ_FAILED` | all | A provider read failed where the result depends on it: `last_poll` markers (`failed_reads`), a provider restart (counter discontinuity), a failed `run` session read, a failed `Session` task or a failed final `Monitor` read |
+| `PROVIDER_STALLED` | measure, run, project | A provider stopped reporting mid-run: no successful read, or its cumulative energy unchanged or unread (`providers[].max_stall_ns`, `last_ns`) for more than `provider_stall_resolutions` of its resolution. Its share of the total is missing; nothing is filled in |
 | `CHECKPOINT_CAP` | measure, project | Markers dropped at `measurement.report.max_checkpoints` |
 | `BUFFER_WRAPPED` | measure, project | Ring buffer overwrote the start of the run |
 | `MARKER_CLAMPED` | measure, project | A marker lies outside the sampled range |
@@ -606,6 +607,9 @@ with a total-energy counter read it there), `update_interval_ms`,
 value), `boundary_held` (boundary reads answered from the previous read, since a
 fresh counter read within one update period would discard energy) and
 `boundary_held_max_ns` (the longest span such an answer covered) and
+`readings`, `last_ns` and `max_stall_ns` (successful sampler and one-shot reads,
+the time of the last one, and the longest span over them with unchanged
+cumulative energy; `null` from the Java poller, which does not track it),
 `counter_check` (per domain, `counter_j` and `integral_j`: the energy of the
 boundary counter and of the power integral from the first to the last counter
 read, `span_ns` apart, and `reads`, the counter reads in that span; empty for a

@@ -326,7 +326,7 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             st->providers.push_back({name, spec.hardware_type, spec.energy_source,
                                      spec.boundary_source.empty() ? spec.energy_source : spec.boundary_source,
                                      spec.counter_group, spec.update_interval.count() / 1000.0, c.rejected, c.held,
-                                     c.boundary_held, c.boundary_held_max_ns});
+                                     c.boundary_held, c.boundary_held_max_ns, {}, c.readings, c.last_ns, c.max_stall_ns});
             for (const auto& [dom, k] : c.counter_check) st->providers.back().counter_check[dom] = {k.counter_j, k.integral_j, k.span_ns, k.reads};
             st->failed_reads += c.rejected;
             st->provider_restarts += c.restarts;
@@ -613,7 +613,8 @@ extern "C" {
                << ", \"update_interval_ms\": " << p.update_interval_ms
                << ", \"counter_group\": " << json_str(p.counter_group) << ", \"rejected\": " << p.rejected
                << ", \"held\": " << p.held << ", \"boundary_held\": " << p.boundary_held
-               << ", \"boundary_held_max_ns\": " << p.boundary_held_max_ns << ", \"counter_check\": {";
+               << ", \"boundary_held_max_ns\": " << p.boundary_held_max_ns << ", \"readings\": " << p.readings
+               << ", \"last_ns\": " << p.last_ns << ", \"max_stall_ns\": " << p.max_stall_ns << ", \"counter_check\": {";
             bool first = true;
             for (const auto& [dom, k] : p.counter_check) {
                 ss << (first ? "" : ", ") << json_str(dom) << ": {\"counter_j\": " << k.counter_j << ", \"integral_j\": "

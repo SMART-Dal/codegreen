@@ -312,6 +312,7 @@ public:
         uint64_t rejected{0}, held{0}, boundary_held{0}, boundary_held_max_ns{0};
         struct CounterCheck { double counter_j{0}, integral_j{0}; uint64_t span_ns{0}, reads{0}; };
         std::map<std::string, CounterCheck> counter_check;  // per domain: boundary counter vs power integral, same span
+        uint64_t readings{0}, last_ns{0}, max_stall_ns{0};  // non-boundary reads: count, last time, longest unchanged span
     };
     struct SamplerStats {
         int64_t interval_ms{0}, interval_ms_min{0}, interval_ms_max{0};

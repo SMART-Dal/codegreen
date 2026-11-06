@@ -1817,7 +1817,8 @@ def _jprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", m
 
 
 def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
-    return {**_jprov(name, hw, source, ms), "boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {}, **kw}
+    return {**_jprov(name, hw, source, ms), "boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {},
+            "readings": 50, "last_ns": 500_000_000, "max_stall_ns": 0, **kw}
 
 
 def _vsampler(**kw) -> Dict:
@@ -1904,6 +1905,21 @@ class TestValidity:
         cfg = _measurement_cfg()
         cfg["counter_check"] = {**cfg["counter_check"], "severity": "warning"}
         assert list(run_validity([45.0] * 3, 2.0, _vsampler(providers=[gpu]), cfg)["warnings"]) == reasons
+
+    @pytest.mark.parametrize("gpu_kw,lost", [
+        ({}, False),
+        ({"readings": 0, "last_ns": 0}, True),                # never read successfully
+        ({"max_stall_ns": 1_000_000_000}, False),            # 10 resolutions of the 100 ms update interval
+        ({"max_stall_ns": 1_000_000_001}, True),             # energy unchanged for longer: lost mid-run
+        ({"last_ns": 500_000_000 - 1_000_000_001}, True),    # no successful read since then while the CPU kept reading
+    ])
+    def test_provider_stalled(self, gpu_kw, lost):
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        sampler = _vsampler(providers=[_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, **gpu_kw)])
+        assert ("PROVIDER_STALLED" in self._check(sampler=sampler)["reasons"]) == lost
+        assert ("PROVIDER_STALLED" in run_validity([5.0], 2.0, sampler, _measurement_cfg())["reasons"]) == lost
+        cpu = _vsampler(providers=[_vprov(max_stall_ns=100_000_001)])  # CPU: 10 x the 10 ms sampler interval
+        assert self._check(sampler=cpu)["reasons"] == ["PROVIDER_STALLED"]
 
     def test_counter_check_merges_across_processes(self):
         from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import _merge_samplers
@@ -2009,6 +2025,8 @@ class TestValidity:
             (1012, 1.0, 1_100_000, 4, 2)
         assert s["providers"][0]["update_interval_ms"] == 2.0 and s["providers"][0]["boundary_held"] == 0
         assert s["providers"][0]["counter_check"] == {}
+        assert (s["providers"][0]["readings"], s["providers"][0]["last_ns"], s["providers"][0]["max_stall_ns"]) == \
+            (1012, 1_100_000_000, None)
         v = measurement_validity(None, s, {}, _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
         v = measurement_validity(None, _poller_sampler([meta(5, 4_000_000, 1_000_000, failed=1)]), {}, _measurement_cfg())
