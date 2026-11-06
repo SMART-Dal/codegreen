@@ -11,8 +11,8 @@ namespace codegreen::nemb {
 /**
  * @brief Configuration loader for NEMB settings
  * 
- * Loads configuration from CodeGreen config file with fallback to defaults.
- * Optimized for accuracy-first operation with minimal measurement noise.
+ * Loads configuration from the CodeGreen config file; there is no file-less fallback.
+ * Member defaults below apply only to keys missing from that file and equal the bundled config.json.
  */
 class ConfigLoader {
 public:
@@ -33,7 +33,7 @@ public:
     };
     
     struct TimingConfig {
-        std::string precision{"maximum"};
+        std::string precision{"high"};
         std::string clock_source{"auto"};
         std::string sync_method{"tsc"};
         uint32_t calibration_samples{100};
@@ -51,15 +51,15 @@ public:
         bool cross_validation{true};
         double cross_validation_threshold{0.05};
         double temporal_alignment_tolerance_ms{0.1};
-        uint32_t measurement_buffer_size{1000};
+        uint32_t measurement_buffer_size{100000};
         bool auto_restart_failed_providers{true};
-        std::chrono::seconds provider_restart_interval{30};
+        std::chrono::seconds provider_restart_interval{5};
         uint32_t max_consecutive_failures{5};
         bool real_time_filtering{false};  // EMA power reported next to (never instead of) raw power
     };
 
     struct NEMBConfig {
-        std::string path;  // file the values came from; empty = built-in defaults
+        std::string path;  // file the values came from
         bool enabled{true};
         std::string accuracy_mode{"production"};
         AccuracyConfig accuracy;
@@ -71,34 +71,22 @@ public:
     
     /**
      * @brief Load NEMB configuration from file
-     * @param config_path Path to config file (empty: find_config_file(), built-in defaults when none)
+     * @param config_path Path to config file (empty: find_config_file())
      * @return Parsed configuration
-     * @throws std::runtime_error naming the path when the file cannot be read or parsed
+     * @throws std::runtime_error when no file is found, or naming the path when it cannot be read or parsed
      */
     static NEMBConfig load_config(const std::string& config_path = "");
     
     /**
-     * @brief Get default configuration for maximum accuracy
-     * @return Default accuracy-optimized configuration
-     */
-    static NEMBConfig get_accuracy_optimized_config();
-    
-    /**
-     * @brief Get default configuration for minimal overhead
-     * @return Default performance-optimized configuration
-     */
-    static NEMBConfig get_performance_optimized_config();
-    
-    /**
      * @brief Config file the loader resolves: $CODEGREEN_CONFIG (must exist, else throws), then the
-     * bundled config.json next to this library (<libdir>/../config.json, <libdir>/../codegreen/config.json);
-     * empty when none exists and built-in defaults are used.
+     * bundled config.json next to this library (<libdir>/../config.json, ../codegreen/config.json,
+     * ../share/codegreen/config.json);
+     * empty when none exists (load_config then throws).
      */
     static std::string find_config_file();
 
 private:
     static NEMBConfig parse_json_config(const std::string& json_content);
-    static std::string get_default_config_path();
 };
 
 } // namespace codegreen::nemb

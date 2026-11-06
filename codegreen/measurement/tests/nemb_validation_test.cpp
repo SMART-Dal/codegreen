@@ -257,8 +257,13 @@ static void test_config_resolution() {
     auto negative = write_config("neg", "{\n  \"max_consecutive_failures\": -1\n}\n");
     CHECK(load_throws_naming(bad_value) && load_throws_naming(truncated) && load_throws_naming(negative));
     CHECK(load_throws_naming(fs::temp_directory_path() / "nemb_no_such_config.json"));
-    auto found = ConfigLoader::find_config_file();  // library-relative bundled config, or none
-    CHECK(found.empty() || fs::is_regular_file(found));
+    auto found = ConfigLoader::find_config_file();  // the build tree places the bundled config at <libdir>/../config.json
+    CHECK(!found.empty() && fs::is_regular_file(found));
+    auto bundled = ConfigLoader::load_config(found);
+    auto partial = ConfigLoader::load_config(good.string());  // keys missing here fall back to member defaults == bundled values
+    CHECK(partial.coordinator.measurement_buffer_size == bundled.coordinator.measurement_buffer_size &&
+          partial.coordinator.provider_restart_interval == bundled.coordinator.provider_restart_interval &&
+          partial.coordinator.real_time_filtering == bundled.coordinator.real_time_filtering && !bundled.coordinator.real_time_filtering);
     for (const auto& p : {good, bad_value, truncated, negative}) fs::remove(p);
 }
 
