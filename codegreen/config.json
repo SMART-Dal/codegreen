@@ -83,7 +83,7 @@
       }
     },
     "run_path": {
-      "_comment": "codegreen run reads energy synchronously at each run boundary; the NEMB background sampler only has to outpace counter wrap there, so it is slowed to sampler_interval_ms to cut its wakeups (kept at the coordinator interval when a GPU domain reports, since GPU energy is power-integrated from the samples).",
+      "_comment": "codegreen run reads energy synchronously at each run boundary; the NEMB background sampler only has to outpace counter wrap there, so it is slowed to sampler_interval_ms to cut its wakeups (kept at the coordinator interval when a selected provider's boundary_source is integrated_power, since its run energy is integrated from the samples).",
       "sampler_interval_ms": 1000
     },
     "toolchain": {

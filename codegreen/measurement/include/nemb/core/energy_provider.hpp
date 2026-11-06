@@ -79,6 +79,7 @@ struct EnergyProviderSpec {
     std::chrono::microseconds update_interval{0};      ///< Hardware update period of the energy value; 0 = unknown
     uint32_t counter_bits{32};                        ///< Counter width for wraparound handling
     std::string energy_source{"counter"};             ///< "counter" (hardware cumulative energy) | "integrated_power" (power samples integrated in software)
+    std::string boundary_source;                      ///< energy_source of get_boundary_reading(); empty = energy_source
     std::string counter_group;                        ///< Providers reading the same physical counter share a group; detection keeps one per group
     
     // Advanced capabilities
@@ -119,7 +120,14 @@ public:
      * @return EnergyReading structure with current measurement data
      */
     virtual EnergyReading get_reading() = 0;
-    
+
+    /**
+     * @brief Reading at a session boundary (start/stop); the sampler and one-shot reads use get_reading().
+     * A provider whose hardware keeps a cumulative counter that sampling would disturb reads it only here
+     * (spec boundary_source); its cumulative values are then comparable only with other boundary readings.
+     */
+    virtual EnergyReading get_boundary_reading() { return get_reading(); }
+
     /**
      * @brief Get provider specification and capabilities
      * @return EnergyProviderSpec describing this provider

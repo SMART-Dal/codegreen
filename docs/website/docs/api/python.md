@@ -440,7 +440,7 @@ object is returned by `nemb_get_checkpoints_json`):
              "sampler_affinity_cpus": 8, "interval_ms_min": 10, "interval_ms_max": 10, "failed_reads": 0,
              "marker_reads": "interpolated", "config_path": "/.../codegreen/config.json",
              "providers": [{"name": "intel_rapl", "hardware_type": "cpu", "energy_source": "counter",
-                            "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0}]},
+                            "boundary_source": "counter", "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0}]},
  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}}
 --- CODEGREEN_RESULT_END ---
 ```

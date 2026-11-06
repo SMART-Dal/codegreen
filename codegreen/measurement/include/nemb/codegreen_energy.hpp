@@ -307,7 +307,7 @@ public:
     };
     /** @brief One selected provider: facts from its EnergyProviderSpec plus per-provider sampler counts. */
     struct ProviderInfo {
-        std::string name, hardware_type, energy_source, counter_group;
+        std::string name, hardware_type, energy_source, boundary_source, counter_group;  // boundary_source: session start/stop reads
         double update_interval_ms{0};  // 0 = unknown
         uint64_t rejected{0}, held{0};
     };

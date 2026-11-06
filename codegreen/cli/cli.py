@@ -3220,8 +3220,9 @@ class _NEMBBackend(_EnergyBackend):
     def slow_sampler(self, interval_ms: int) -> Optional[int]:
         """Run path: sessions are synchronous boundary reads, so the background sampler only adds wakeups and NVML
         polls to the measured energy (about 5 W at idle). Widen the sampler period unless a selected provider
-        integrates power from the samples (provider fact energy_source). Returns the period set, or None."""
-        if any(p["energy_source"] == "integrated_power" for p in self.sampler()["providers"]):
+        integrates power from the samples at the run boundaries (provider fact boundary_source). Returns the period
+        set, or None."""
+        if any(p["boundary_source"] == "integrated_power" for p in self.sampler()["providers"]):
             return None
         lib = self._init()
         lib.nemb_set_measurement_interval_ms.argtypes = [ctypes.c_int]

@@ -69,6 +69,7 @@ struct NvmlAPI {
     using DeviceGetUUID_t = nvmlReturn_t(*)(nvmlDevice_t, char*, unsigned int);
     using DeviceGetMemoryInfo_t = nvmlReturn_t(*)(nvmlDevice_t, nvmlMemory_t*);
     using DeviceGetPowerUsage_t = nvmlReturn_t(*)(nvmlDevice_t, unsigned int*);
+    using DeviceGetTotalEnergyConsumption_t = nvmlReturn_t(*)(nvmlDevice_t, unsigned long long*);
     using DeviceGetTemperature_t = nvmlReturn_t(*)(nvmlDevice_t, nvmlTemperatureSensors_t, unsigned int*);
     using DeviceGetClockInfo_t = nvmlReturn_t(*)(nvmlDevice_t, nvmlClockType_t, unsigned int*);
     using DeviceGetUtilizationRates_t = nvmlReturn_t(*)(nvmlDevice_t, nvmlUtilization_t*);
@@ -85,6 +86,7 @@ struct NvmlAPI {
     DeviceGetUUID_t DeviceGetUUID = nullptr;
     DeviceGetMemoryInfo_t DeviceGetMemoryInfo = nullptr;
     DeviceGetPowerUsage_t DeviceGetPowerUsage = nullptr;
+    DeviceGetTotalEnergyConsumption_t DeviceGetTotalEnergyConsumption = nullptr;  // optional (Volta and later)
     DeviceGetTemperature_t DeviceGetTemperature = nullptr;
     DeviceGetClockInfo_t DeviceGetClockInfo = nullptr;
     DeviceGetUtilizationRates_t DeviceGetUtilizationRates = nullptr;
@@ -169,6 +171,7 @@ struct NvmlAPI {
         DeviceGetUUID = resolve<DeviceGetUUID_t>("nvmlDeviceGetUUID");
         DeviceGetMemoryInfo = resolve<DeviceGetMemoryInfo_t>("nvmlDeviceGetMemoryInfo");
         DeviceGetPowerUsage = resolve<DeviceGetPowerUsage_t>("nvmlDeviceGetPowerUsage");
+        DeviceGetTotalEnergyConsumption = resolve<DeviceGetTotalEnergyConsumption_t>("nvmlDeviceGetTotalEnergyConsumption");
         DeviceGetTemperature = resolve<DeviceGetTemperature_t>("nvmlDeviceGetTemperature");
         DeviceGetClockInfo = resolve<DeviceGetClockInfo_t>("nvmlDeviceGetClockInfo");
         DeviceGetUtilizationRates = resolve<DeviceGetUtilizationRates_t>("nvmlDeviceGetUtilizationRates");
@@ -230,6 +233,29 @@ static NvmlAPI& nvml() {
 namespace codegreen::nemb::drivers {
 
 namespace {
+    constexpr std::chrono::microseconds NVML_UPDATE_NOMINAL{100000};  // documented NVML power sample period
+    constexpr std::chrono::microseconds COUNTER_POLL{500};            // timing precision of the counter period
+
+    // The total-energy counter's update period: the time between two changes of its value. A read discards what the
+    // counter accumulated since its last update, so it is polled only here, before any measurement. 0 = no counter.
+    uint64_t counter_update_period_ns(nvmlDevice_t h, unsigned long long& mj) {
+        auto& api = nvml();
+        if (!api.DeviceGetTotalEnergyConsumption) return 0;
+        if (nvmlReturn_t r = api.DeviceGetTotalEnergyConsumption(h, &mj); r != NVML_SUCCESS) {
+            if (r != NVML_ERROR_NOT_SUPPORTED) std::cerr << "NVML total energy: " << api.error_string(r) << std::endl;
+            return 0;
+        }
+        uint64_t t0 = utils::PrecisionTimer::monotonic_timestamp_ns(), changes[2]{}, n = 0;
+        uint64_t timeout = 10 * std::chrono::duration_cast<std::chrono::nanoseconds>(NVML_UPDATE_NOMINAL).count();
+        for (unsigned long long v; n < 2 && utils::PrecisionTimer::monotonic_timestamp_ns() - t0 < timeout; mj = v) {
+            std::this_thread::sleep_for(COUNTER_POLL);
+            if (api.DeviceGetTotalEnergyConsumption(h, &v) != NVML_SUCCESS) return 0;
+            if (v != mj) changes[n++] = utils::PrecisionTimer::monotonic_timestamp_ns();
+        }
+        if (n < 2) std::cerr << "NVML total-energy counter did not advance twice in " << timeout / 1e9 << " s; using power integration" << std::endl;
+        return n < 2 ? 0 : changes[1] - changes[0];
+    }
+
     bool registered = []() {
         EnergyProvider::register_provider("nvidia_gpu", []() {
             return std::make_unique<NVIDIAGPUProvider>();
@@ -256,8 +282,37 @@ bool NVIDIAGPUProvider::initialize() {
             std::cerr << "Warning: Failed to initialize monitoring for GPU " << i << std::endl;
         }
     }
+    counters_ = std::all_of(gpu_states_.begin(), gpu_states_.end(), [](const GPUState& g) { return !g.available || g.counter.period_ns(); });
     initialized_ = true;
     return true;
+}
+
+// Session boundaries read the total-energy counter instead of the power integral. A read within one counter update
+// period of the previous one would discard energy, so it is answered with the previous read's value (held).
+EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
+    EnergyReading reading = get_reading();
+    if (!counters_ || reading.energy_joules < 0) return reading;
+    std::lock_guard<std::mutex> lock(reading_mutex_);
+    reading.energy_joules = 0.0;
+    for (uint32_t i = 0; i < gpu_count_; ++i) {
+        auto& gs = gpu_states_[i];
+        if (!gs.available || !gs.monitoring_enabled) continue;
+        std::string dom = "gpu" + std::to_string(i);
+        uint64_t t = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
+        unsigned long long mj = 0;
+        if (!gs.counter.due(t)) {
+            held_readings_++;
+        } else if (nvmlReturn_t r = nvml().DeviceGetTotalEnergyConsumption(gs.device_handle, &mj); r == NVML_SUCCESS) {
+            gs.counter.add(mj, t);
+        } else {
+            handle_nvml_error("get_total_energy", r);
+            reading.domain_energy_joules[dom] = reading.energy_joules = -1.0;
+            return reading;
+        }
+        reading.domain_energy_joules[dom] = gs.counter.joules();
+        reading.energy_joules += gs.counter.joules();
+    }
+    return reading;
 }
 
 EnergyReading NVIDIAGPUProvider::get_reading() {
@@ -306,9 +361,12 @@ EnergyProviderSpec NVIDIAGPUProvider::get_specification() const {
         spec.measurement_domains.push_back("gpu" + std::to_string(i));
     spec.energy_resolution_joules = 1e-3;
     spec.power_resolution_watts = 1e-3;
-    spec.update_interval = std::chrono::microseconds(100000);  // nominal NVML power sample period
+    uint64_t period_ns = 0;
+    for (const auto& g : gpu_states_) if (g.available) period_ns = std::max(period_ns, g.counter.period_ns());
+    spec.update_interval = counters_ && period_ns ? std::chrono::microseconds(period_ns / 1000) : NVML_UPDATE_NOMINAL;
     spec.counter_bits = 32;
     spec.energy_source = "integrated_power";
+    spec.boundary_source = counters_ ? "counter" : "integrated_power";
     return spec;
 }
 
@@ -416,8 +474,11 @@ bool NVIDIAGPUProvider::detect_gpus() {
         if (gi.supports_power_monitoring)
             gi.power_limit_watts = power_mw / 1000;
 
+        unsigned long long mj = 0;
+        uint64_t period = counter_update_period_ns(gs.device_handle, mj);
+        gs.counter = GPUEnergyCounter(period, mj);
         gi.device_index = i;
-        gi.supports_energy_monitoring = false;
+        gi.supports_energy_monitoring = period > 0;
         gs.info = gi;
         gs.available = true;
     }

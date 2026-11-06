@@ -1811,7 +1811,7 @@ def _vcp(cid: str, ts: int, joules: float, ri: int, clamp: str = "none", tid: st
 
 
 def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
-    return {"name": name, "hardware_type": hw, "energy_source": source, "update_interval_ms": ms,
+    return {"name": name, "hardware_type": hw, "energy_source": source, "boundary_source": source, "update_interval_ms": ms,
             "counter_group": "cpu_package" if hw == "cpu" else "", "rejected": 0, "held": 0, **kw}
 
 
@@ -1862,6 +1862,15 @@ class TestValidity:
     def test_sampler_warnings(self, sampler_kw, code):
         v = self._check(sampler=_vsampler(**sampler_kw))
         assert v["status"] == "valid" and list(v["warnings"]) == [code]
+
+    def test_run_validity_reads_boundary_source(self):
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)
+        v = run_validity([5.0], 2.0, _vsampler(providers=[gpu]), _measurement_cfg())
+        assert v["status"] == "valid" and list(v["warnings"]) == ["RUN_POWER_INTEGRATED"]
+        v = run_validity([5.0], 2.0, _vsampler(providers=[{**gpu, "boundary_source": "counter", "held": 2}]),
+                         _measurement_cfg())
+        assert v["status"] == "valid" and list(v["warnings"]) == ["GPU_READ_HELD"]
 
     def test_gap_policy_is_config(self):
         from codegreen.cli.cli import _measurement_cfg
@@ -1973,6 +1982,10 @@ class TestValidity:
         assert resolution_ns(_vsampler(providers=[_vprov(ms=0)]), boundary=True) == 10e6  # 0: update period unknown
         assert resolution_ns(_vsampler(providers=[_vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)]),
                              boundary=True) == 100e6
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 1.0)  # boundaries read a counter: no sampler interval
+        assert resolution_ns(_vsampler(providers=[gpu]), boundary=True) == 10e6
+        assert resolution_ns(_vsampler(providers=[{**gpu, "boundary_source": "counter"}]), boundary=True) == 1e6
+        assert resolution_ns(_vsampler(providers=[{**gpu, "boundary_source": "counter"}])) == 10e6
         assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": 3}, res, cfg) == "measured"
         assert function_quality({"calls": 2, "time_ns": 30e6}, res, cfg) == "measured"
         assert function_quality({"calls": 1000, "time_ns": 100e6}, res, cfg) == "aggregate_only"
@@ -2160,7 +2173,8 @@ class TestValidityDefects:
         assert out["summary"]["overlapping_threads"] == 3 and out["summary"]["exclusive_sum_ratio"] > 1
 
     @pytest.mark.parametrize("providers,expected", [
-        ([_vprov()], 1000), ([_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)], None)])
+        ([_vprov()], 1000), ([_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)], None),
+        ([_vprov(), {**_vprov("nvidia_gpu", "gpu", "integrated_power", 100.0), "boundary_source": "counter"}], 1000)])
     def test_run_path_slows_the_sampler_unless_power_is_integrated(self, monkeypatch, providers, expected):
         import types
         import codegreen.cli.cli as cli
@@ -2272,7 +2286,7 @@ class TestInvalidReads:
             return len(buf.value)
         lib = types.SimpleNamespace(nemb_start_session=lambda n: next(ids), nemb_stop_session_v2=stop,
                                     nemb_abi_version=lambda: 4)
-        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4, gpu_energy_source=lambda: ""))
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4))
         s = rt.Session("inv", save_to_file=False, warn_on_concurrent=False).start()
         for name in ("ok", "bad"):
             with s.task(name):

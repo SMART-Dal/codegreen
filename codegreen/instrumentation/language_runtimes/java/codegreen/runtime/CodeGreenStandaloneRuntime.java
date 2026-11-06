@@ -55,7 +55,7 @@ import java.util.regex.Pattern;
  *
  * Wire format on shutdown: one poller line per JVM (a single-line JSON object shaped like
  * the NEMB sampler block, ABI 4), then one line per (thread, method):
- *   CG_CP_META|{"marker_reads":"last_poll","interval_ms":D,"readings":N,"failed_reads":N,"first_ns":N,"last_ns":N,"max_gap_ns":N,"affinity_cpus":N,"sampler_affinity_cpus":N,"providers":[{"name":"intel_rapl","hardware_type":"cpu","energy_source":"counter","update_interval_ms":D,"counter_group":"cpu_package","rejected":0,"held":0}]}
+ *   CG_CP_META|{"marker_reads":"last_poll","interval_ms":D,"readings":N,"failed_reads":N,"first_ns":N,"last_ns":N,"max_gap_ns":N,"affinity_cpus":N,"sampler_affinity_cpus":N,"providers":[{"name":"intel_rapl","hardware_type":"cpu","energy_source":"counter","boundary_source":"counter","update_interval_ms":D,"counter_group":"cpu_package","rejected":0,"held":0}]}
  *   CG_CP_SUM|tid|name|calls|inclusive_uj|exclusive_uj|time_ns
  * max_gap_ns includes the gap from the last poll to shutdown; update_interval_ms is the observed
  * mean period between counter advances (the whole polled span when it advanced fewer than twice).
@@ -323,6 +323,7 @@ public class CodeGreenStandaloneRuntime {
           .append(",\"max_gap_ns\":").append(Math.max(s[3], System.nanoTime() - s[2]))
           .append(",\"affinity_cpus\":").append(AFFINITY_CPUS).append(",\"sampler_affinity_cpus\":").append(s[8])
           .append(",\"providers\":[{\"name\":\"intel_rapl\",\"hardware_type\":\"cpu\",\"energy_source\":\"counter\"")
+          .append(",\"boundary_source\":\"counter\"")
           .append(",\"update_interval_ms\":").append(updateMs)
           .append(",\"counter_group\":\"cpu_package\",\"rejected\":0,\"held\":0}]}\n");
         for (ThreadState ts : registry) {

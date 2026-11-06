@@ -76,6 +76,29 @@ struct GPUPowerState {
 };
 
 /**
+ * @brief Cumulative joules of an NVML total-energy counter (mJ). The counter advances once per update period and a
+ * read discards what it accumulated since its last update, so session boundaries read it at most once per period:
+ * due() is false within one period of the previous read and the caller answers with joules() (a held value).
+ * Deltas accumulate, so a driver counter reset counts from zero. period_ns 0 = no counter; the first read is due.
+ */
+class GPUEnergyCounter {
+public:
+    GPUEnergyCounter(uint64_t period_ns = 0, unsigned long long total_mj = 0) : period_ns_(period_ns), last_mj_(total_mj) {}
+    bool due(uint64_t t_ns) const { return !t_ns_ || t_ns - t_ns_ >= period_ns_; }
+    void add(unsigned long long total_mj, uint64_t t_ns) {
+        j_ += (total_mj >= last_mj_ ? total_mj - last_mj_ : total_mj) / 1000.0;
+        last_mj_ = total_mj;
+        t_ns_ = t_ns;
+    }
+    double joules() const { return j_; }
+    uint64_t period_ns() const { return period_ns_; }
+private:
+    uint64_t period_ns_, t_ns_{0};
+    unsigned long long last_mj_;
+    double j_{0};
+};
+
+/**
  * @brief NVIDIA GPU energy provider implementation
  * 
  * Provides comprehensive energy monitoring for NVIDIA GPUs using NVML
@@ -83,7 +106,8 @@ struct GPUPowerState {
  * 
  * Features:
  * - Real-time power monitoring with high precision
- * - Energy calculation through power integration
+ * - Energy calculation through power integration (sampler); session boundaries read the
+ *   cumulative energy counter (nvmlDeviceGetTotalEnergyConsumption) when every GPU has one
  * - Multi-GPU synchronization and aggregation
  * - Advanced power state monitoring
  * - Workload-aware power modeling
@@ -98,6 +122,7 @@ public:
     // EnergyProvider interface implementation
     bool initialize() override;
     EnergyReading get_reading() override;
+    EnergyReading get_boundary_reading() override;
     EnergyProviderSpec get_specification() const override;
     bool self_test() override;
     bool is_available() const override;
@@ -170,6 +195,7 @@ private:
         bool available{false};
         GPUPowerState last_power_state;
         std::chrono::steady_clock::time_point last_reading_time;
+        GPUEnergyCounter counter;
     };
     
     std::vector<GPUState> gpu_states_;
@@ -233,6 +259,7 @@ private:
     // Configuration
     double power_measurement_timeout_ms_{100.0};
     PowerIntegrator integrator_;  // per-GPU energy; a lost GPU makes every later reading invalid
+    bool counters_{false};        // every GPU has a total-energy counter: boundary reads use it
     bool enable_advanced_metrics_{true};
     bool enable_workload_detection_{true};
 };

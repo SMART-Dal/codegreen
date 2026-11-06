@@ -164,7 +164,7 @@ void MeasurementCoordinator::stop_measurements() {
     if (provider_health_thread_.joinable()) provider_health_thread_.join();
 }
 
-SynchronizedReading MeasurementCoordinator::get_synchronized_reading() {
+SynchronizedReading MeasurementCoordinator::get_synchronized_reading(bool boundary) {
     if (!running_.load()) {
         SynchronizedReading reading;
         reading.providers_active = 0;
@@ -172,7 +172,7 @@ SynchronizedReading MeasurementCoordinator::get_synchronized_reading() {
         return reading;
     }
     
-    auto provider_readings = collect_provider_readings();
+    auto provider_readings = collect_provider_readings(boundary);
     return align_measurements(provider_readings);
 }
 
@@ -367,7 +367,7 @@ void MeasurementCoordinator::provider_health_loop() {
     }
 }
 
-std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_readings() {
+std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_readings(bool boundary) {
     std::unique_lock<std::shared_mutex> lock(providers_mutex_);
     
     std::map<std::string, EnergyReading> readings;
@@ -380,7 +380,7 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
         
         try {
             // Direct provider reading - no timeout needed with non-blocking I/O
-            auto reading = state.provider->get_reading();
+            auto reading = boundary ? state.provider->get_boundary_reading() : state.provider->get_reading();
             readings[name] = reading;
             
             if (reading_ok(reading)) {

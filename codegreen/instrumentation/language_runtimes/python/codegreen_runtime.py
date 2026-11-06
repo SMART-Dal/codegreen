@@ -292,7 +292,9 @@ def _run_reasons(run: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
-    """Scope labels from the providers' hardware facts (sampler.providers[].hardware_type, .held)."""
+    """Scope labels from the providers' hardware facts (sampler.providers[].hardware_type, .held). held counts device
+    reads answered with a held value: a failed power read keeps the last good value, and a cumulative counter read
+    within one update period of the previous read (which would discard energy) answers with that read."""
     names = [p["name"] for p in sampler["providers"]]
     gpu = [p["name"] for p in sampler["providers"] if p["hardware_type"] == "gpu"]
     if gpu and len(gpu) < len(names):
@@ -300,17 +302,17 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
                              "with --sensors or measurement.default_sensors")
     held = {p["name"]: p["held"] for p in sampler["providers"] if p["held"]}
     if held:
-        w["GPU_READ_HELD"] = f"failed reads replaced by the last good power value: {held}"
+        w["GPU_READ_HELD"] = f"reads answered with a held value (failed read, or counter read within its period): {held}"
 
 
 def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False, finest: bool = False) -> float:
-    """Smallest energy window the run can resolve: per provider its update interval, and, unless the provider is a
-    counter read synchronously at the window boundaries (boundary=True), the sampler interval. The slowest provider
-    bounds the total; finest=True returns the best-resolved provider instead. A non-fatal SAMPLER_GAP widens the
-    result to the largest gap (markers read the last polled value). update_interval_ms 0 means unknown: the sampler
-    interval stands in."""
+    """Smallest energy window the run can resolve: per provider its update interval, and, unless the provider reads a
+    counter synchronously at the window boundaries (boundary=True and its boundary_source is a counter), the sampler
+    interval. The slowest provider bounds the total; finest=True returns the best-resolved provider instead. A
+    non-fatal SAMPLER_GAP widens the result to the largest gap (markers read the last polled value).
+    update_interval_ms 0 means unknown: the sampler interval stands in."""
     iv = sampler["interval_ms_max"]
-    ms = [max(p["update_interval_ms"] or iv, iv) if not boundary or p["energy_source"] == "integrated_power"
+    ms = [max(p["update_interval_ms"] or iv, iv) if not boundary or p["boundary_source"] == "integrated_power"
           else p["update_interval_ms"] or iv for p in sampler["providers"]]
     gap = sampler["max_gap_ns"] if validity and "SAMPLER_GAP" in validity["warnings"] else 0
     return max((min if finest else max)(ms) * 1e6, gap)
@@ -387,6 +389,10 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
         w["RESOLUTION_UNKNOWN"] = "the backend reports no provider update interval; RUN_BELOW_RESOLUTION not checked"
         return _validity(r, w)
     _provider_warnings(sampler, w)
+    integrated = [p["name"] for p in sampler["providers"] if p["boundary_source"] == "integrated_power"]
+    if integrated:
+        w["RUN_POWER_INTEGRATED"] = (f"run energy of {integrated} integrates sampled power (no energy counter at the run "
+                                     "boundaries): it depends on the sampler interval and misses changes between samples")
     floor_s = cfg["min_run_updates"] * resolution_ns(sampler, boundary=True, finest=True) / 1e9
     if mean_s < floor_s:
         r["RUN_BELOW_RESOLUTION"] = f"mean duration {mean_s:.6f} s < {cfg['min_run_updates']} resolutions ({floor_s} s)"
