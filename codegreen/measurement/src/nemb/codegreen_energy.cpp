@@ -64,7 +64,7 @@ public:
     
     bool is_available() const;
     std::vector<std::string> get_provider_info() const;
-    EnergyResult read(bool boundary = false);
+    EnergyResult read(bool boundary = false, bool shared = false);
     uint64_t start_session(const std::string& name);
     EnergyDifference end_session(uint64_t session_id);
     void mark_checkpoint(const std::string& name);
@@ -336,11 +336,11 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
     return cps;
 }
 
-EnergyResult EnergyMeter::Impl::read(bool boundary) {
+EnergyResult EnergyMeter::Impl::read(bool boundary, bool shared) {
     if (!coordinator_ || coordinator_->get_active_providers().empty()) {
         EnergyResult res; res.is_valid = false; res.error_message = "Unavailable"; return res;
     }
-    auto sync_reading = coordinator_->get_synchronized_reading(boundary);
+    auto sync_reading = coordinator_->get_synchronized_reading(boundary, shared);
     return convert_synchronized_reading(sync_reading);
 }
 
@@ -364,7 +364,8 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
 uint64_t EnergyMeter::Impl::start_session(const std::string& name) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     uint64_t id = next_session_id_++;
-    active_sessions_[id] = {name, read(true), timer_.get_timestamp_ns(), true};
+    // A boundary read while another session is open is shared: it must not disturb that session's counter.
+    active_sessions_[id] = {name, read(true, !active_sessions_.empty()), timer_.get_timestamp_ns(), true};
     return id;
 }
 
@@ -372,7 +373,7 @@ EnergyDifference EnergyMeter::Impl::end_session(uint64_t id) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     auto it = active_sessions_.find(id);
     if (it == active_sessions_.end()) return {0,0,0,0,false};
-    auto diff = energy_utils::calculate_difference(read(true), it->second.baseline);
+    auto diff = energy_utils::calculate_difference(read(true, active_sessions_.size() > 1), it->second.baseline);
     active_sessions_.erase(it);
     return diff;
 }

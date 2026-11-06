@@ -85,9 +85,10 @@ public:
         if (hold_) held_readings_++;
         return r;
     }
-    EnergyReading get_boundary_reading() override {  // a separate counter series, far above the sampled one
+    EnergyReading get_boundary_reading(bool shared) override {  // a separate counter series, far above the sampled one
         EnergyReading r = get_reading();
-        if (boundary_) { r.energy_joules = b_ += 10; record_boundary_hold(static_cast<uint64_t>(b_ - 1e6)); }
+        if (boundary_ && shared) r.energy_joules = b_ + 1;  // last counter value plus the integral since: no counter read
+        else if (boundary_) { r.energy_joules = b_ += 10; record_boundary_hold(static_cast<uint64_t>(b_ - 1e6)); }
         return r;
     }
     std::map<std::string, CounterCheck> counter_checks() const override {
@@ -212,6 +213,7 @@ static void test_gpu_energy_counter() {
     c.add(200, 1100, 7.5);                                    // driver counter reset counts from zero
     CHECK(std::fabs(c.joules() - 2.7) < 1e-12);
     CHECK(std::fabs(c.check().counter_j - 0.2) < 1e-12 && c.check().integral_j == 0.5 && c.check().span_ns == 100 && c.check().reads == 2);
+    CHECK(std::fabs(c.joules_at(8.0) - 3.2) < 1e-12);  // shared read: last counter value plus the integral since
     CHECK(drivers::GPUEnergyCounter().period_ns() == 0);
 }
 
@@ -330,13 +332,15 @@ static void test_meter_sampler() {
         EnergyMeter m;
         auto d = m.end_session(m.start_session("s"));
         CHECK(d.is_valid && d.energy_joules == 10);  // sessions read get_boundary_reading
+        uint64_t outer = m.start_session("outer"), inner = m.start_session("inner");
+        CHECK(m.end_session(inner).energy_joules == 0 && m.end_session(outer).energy_joules == 10);  // nested reads are shared
         CHECK(m.read().energy_joules < 1e6);          // one-shot reads and the sampler read get_reading
         EnergyMeter::SamplerStats st;
         for (const auto& c : m.get_checkpoint_measurements(&st)) CHECK(c.cumulative_energy_joules < 1e6);
         CHECK(st.providers[0].energy_source == "integrated_power" && st.providers[0].boundary_source == "counter");
-        CHECK(st.providers[0].held == 0 && st.providers[0].boundary_held == 2 && st.providers[0].boundary_held_max_ns == 20);
+        CHECK(st.providers[0].held == 0 && st.providers[0].boundary_held == 4 && st.providers[0].boundary_held_max_ns == 40);
         const auto& k = st.providers[0].counter_check.at("dev0");
-        CHECK(st.providers[0].counter_check.size() == 1 && k.counter_j == 20 && k.integral_j == 9.5 && k.span_ns == 1000 && k.reads == 3);
+        CHECK(st.providers[0].counter_check.size() == 1 && k.counter_j == 40 && k.integral_j == 9.5 && k.span_ns == 1000 && k.reads == 3);
     }
     setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_bad,fake_hold", 1);
     {

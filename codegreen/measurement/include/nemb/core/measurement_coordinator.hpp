@@ -101,10 +101,10 @@ public:
     void stop_measurements();
     
     /**
-     * @brief Get current synchronized reading from all providers (boundary: their get_boundary_reading)
+     * @brief Get current synchronized reading from all providers (boundary: their get_boundary_reading(shared))
      * @return SynchronizedReading with aligned measurements
      */
-    SynchronizedReading get_synchronized_reading(bool boundary = false);
+    SynchronizedReading get_synchronized_reading(bool boundary = false, bool shared = false);
 
     /**
      * @brief Take one sampler reading now. A reading with a failed provider is counted in
@@ -285,7 +285,7 @@ private:
      * @brief Collect readings from all active providers
      * @return Map of provider name to reading
      */
-    std::map<std::string, EnergyReading> collect_provider_readings(bool boundary = false);
+    std::map<std::string, EnergyReading> collect_provider_readings(bool boundary = false, bool shared = false);
     
     /**
      * @brief Time-align measurements from different providers

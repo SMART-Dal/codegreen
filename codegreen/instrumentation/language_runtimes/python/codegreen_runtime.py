@@ -448,6 +448,35 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
     return _validity(r, w)
 
 
+def task_checks(tasks: List[Dict[str, Any]], sampler: Dict, cfg: Dict[str, Any], r: Dict[str, str],
+                w: Dict[str, str]) -> None:
+    """Session tasks are boundary-read windows like runs (run_validity). A task with shared_boundary had a boundary
+    read while another task was open; a counter read there would discard the open task's energy (about half a counter
+    update period per read), so the backend answers it from the last counter read plus the power integral since: those
+    providers (energy_source integrated_power) give that task integrated power, like every task of a provider whose
+    boundary_source is integrated_power (TASK_POWER_INTEGRATED). A task shorter than min_run_updates of its resolution
+    (update interval; the sampler interval too where power is integrated) is TASK_BELOW_RESOLUTION."""
+    _provider_warnings(sampler, w)
+    _counter_divergence(sampler, cfg, r, w)
+    _provider_stalls(sampler, cfg, r)
+    iv, integrated, short = sampler["interval_ms_max"], {}, []
+    for t in tasks:
+        integ = [p["name"] for p in sampler["providers"] if p["boundary_source"] == "integrated_power"
+                 or (t["shared_boundary"] and p["energy_source"] == "integrated_power")]
+        for n in integ:
+            integrated.setdefault(n, []).append(t["name"])
+        res_ms = max(max(p["update_interval_ms"] or iv, iv) if p["name"] in integ else p["update_interval_ms"] or iv
+                     for p in sampler["providers"])
+        if t["duration_s"] < cfg["min_run_updates"] * res_ms / 1e3:
+            short.append(t["name"])
+    if integrated:
+        w["TASK_POWER_INTEGRATED"] = (f"task energy integrates sampled power (shared boundary or no energy counter): "
+                                      f"{ {n: f'{len(v)} task(s), first {v[:3]}' for n, v in integrated.items()} }")
+    if short:
+        w["TASK_BELOW_RESOLUTION"] = (f"{len(short)} task(s) shorter than {cfg['min_run_updates']} provider resolutions "
+                                      f"(first {short[:3]}): their energy is not resolved")
+
+
 def function_quality(d: Dict[str, Any], res_ns: float, cfg: Dict[str, Any]) -> str:
     """Per-function verdict shared by `measure` and `project`: measured when every call spans min_window_samples
     sampler readings (reading indices, when the markers carry them) or else one resolution per call on average;
@@ -1109,6 +1138,7 @@ class TaskResult:
     noise: Optional[Dict[str, float]] = None             # populated when timeseries present
     valid: bool = True                                   # False: energy_j/domains are not a measurement
     invalid_reason: Optional[str] = None                 # provider_read_failed | negative_energy
+    shared_boundary: bool = False                        # a boundary read while another task was open (task_checks)
 
 
 # Sample size estimate (matches SynchronizedReading on 64-bit) for buffer sizing
@@ -1216,7 +1246,7 @@ class Session:
         self._tasks: List[TaskResult] = []
         self._tasks_lock = threading.Lock()
         self._tls = threading.local()  # per-thread stack of (name, sid, t_start, depth)
-        self._all_open: Dict[int, Tuple[str, int, float, int]] = {}  # sid -> meta (for cleanup)
+        self._all_open: Dict[int, Tuple[str, int, int, float, int, bool]] = {}  # sid -> meta (for cleanup)
         self._started = False
         self._stopped = False
         self._finalized_report: Optional[Dict] = None
@@ -1389,7 +1419,7 @@ class Session:
         self.stop()
         return False
 
-    def _stack(self) -> List[Tuple[str, int, float, int]]:
+    def _stack(self) -> List[Tuple[str, int, int, float, int, bool]]:
         if not hasattr(self._tls, "stack"):
             self._tls.stack = []
         return self._tls.stack
@@ -1401,14 +1431,15 @@ class Session:
             raise RuntimeError("Session already stopped.")
         if _is_child_process or self._noop:
             return -1
-        sid = int(self._client.lib.nemb_start_session(name.encode("utf-8")))
         stack = self._stack()
         depth = len(stack)
-        # Track both monotonic (matches C++ sample timestamps) and wall clock
-        meta = (name, sid, time.monotonic_ns(), time.time(), depth)
-        stack.append(meta)
-        with self._tasks_lock:
+        with self._tasks_lock:  # the backend reads a boundary as shared while another session is open: the same view
+            shared = bool(self._all_open)
+            sid = int(self._client.lib.nemb_start_session(name.encode("utf-8")))
+            # Track both monotonic (matches C++ sample timestamps) and wall clock
+            meta = (name, sid, time.monotonic_ns(), time.time(), depth, shared)
             self._all_open[sid] = meta
+        stack.append(meta)
         return sid
 
     def _end_task(self, expected_name: Optional[str] = None) -> Optional[TaskResult]:
@@ -1417,30 +1448,31 @@ class Session:
         stack = self._stack()
         if not stack:
             raise RuntimeError("end_task called with no active task in this thread")
-        name, sid, t_mono_ns, t_start, depth = stack.pop()
+        name, sid, t_mono_ns, t_start, depth, shared = stack.pop()
         if expected_name is not None and expected_name != name:
-            stack.append((name, sid, t_mono_ns, t_start, depth))
+            stack.append((name, sid, t_mono_ns, t_start, depth, shared))
             raise RuntimeError(
                 f"task mismatch in thread: trying to end '{expected_name}' "
                 f"but innermost open task is '{name}'"
             )
-        with self._tasks_lock:
-            self._all_open.pop(sid, None)
         parent = stack[-1][0] if stack else None
-        return self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent)
+        return self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent, shared)
 
     def _close_by_sid(self, name: str, sid: int, t_mono_ns: int, t_start: float,
-                      depth: int, parent: Optional[str]) -> Optional[TaskResult]:
+                      depth: int, parent: Optional[str], shared: bool) -> Optional[TaskResult]:
         e, p, dur = c_double(), c_double(), c_double()
         buf = ctypes.create_string_buffer(4096)
-        ret = self._client.lib.nemb_stop_session_v2(
-            ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
-        )
-        if ret < 0:
-            buf = ctypes.create_string_buffer((-ret) + 1)
+        with self._tasks_lock:  # closed and stopped together, so _all_open is the backend's open-session view
+            self._all_open.pop(sid, None)
+            shared = shared or bool(self._all_open)
             ret = self._client.lib.nemb_stop_session_v2(
                 ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
             )
+            if ret < 0:
+                buf = ctypes.create_string_buffer((-ret) + 1)
+                ret = self._client.lib.nemb_stop_session_v2(
+                    ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
+                )
         # ret 0: the backend could not read the providers at start or stop, so e/p/dur were never written.
         domains: Dict[str, float] = json.loads(buf.value.decode("utf-8")) if ret > 0 else {}
         invalid_reason = ("provider_read_failed" if ret == 0 else
@@ -1471,7 +1503,7 @@ class Session:
             depth=depth, parent=parent, domains=domains,
             domains_power_w=domains_power,
             started_at_mono_ns=t_mono_ns, ended_at_mono_ns=t_end_mono_ns,
-            timeseries=ts, valid=invalid_reason is None, invalid_reason=invalid_reason,
+            timeseries=ts, valid=invalid_reason is None, invalid_reason=invalid_reason, shared_boundary=shared,
         )
         with self._tasks_lock:
             self._tasks.append(result)
@@ -1502,16 +1534,15 @@ class Session:
                     break
                 items = sorted(self._all_open.items(),
                                key=lambda kv: (-kv[1][4], -kv[1][2]))
-                sid, (name, _sid, t_mono_ns, t_start, depth) = items[0]
-                self._all_open.pop(sid, None)
-                remaining = list(self._all_open.values())
+                sid, (name, _sid, t_mono_ns, t_start, depth, shared) = items[0]
+                remaining = [m for s, m in self._all_open.items() if s != sid]
             parent_name = None
             best_depth = -1
-            for (rn, _rs, _rm, _rt, rd) in remaining:
+            for (rn, _rs, _rm, _rt, rd, _sh) in remaining:
                 if rd < depth and rd > best_depth:
                     parent_name = rn
                     best_depth = rd
-            self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent=parent_name)
+            self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent_name, shared)
         self._build_report()
 
     def _build_report(self) -> Dict:
@@ -1636,13 +1667,18 @@ class Session:
             record_time_series=self._record_ts,
             extras={"error": report_error} if report_error else None,
         )
+        r = {c.upper(): f"{sum(t.invalid_reason == c for t in invalid)} task(s) excluded from totals: "
+                        f"{sorted({t.name for t in invalid if t.invalid_reason == c})}" for c in sorted({t.invalid_reason for t in invalid})}
+        w: Dict[str, str] = {}
+        sampler = None if self._noop else self._client.get_final_measurements()["sampler"]
+        if sampler:
+            task_checks([t.__dict__ for t in self._tasks], sampler, _measurement_cfg(), r, w)
         report = {
             "meta": meta,
             "tasks": [t.__dict__ for t in self._tasks],
             "totals": totals,
-            "validity": _validity({c.upper(): f"{sum(t.invalid_reason == c for t in invalid)} task(s) excluded from "
-                                   f"totals: {sorted({t.name for t in invalid if t.invalid_reason == c})}"
-                                   for c in sorted({t.invalid_reason for t in invalid})}),
+            "sampler": sampler,
+            "validity": _validity(r, w),
         }
         self._finalized_report = report
         return report

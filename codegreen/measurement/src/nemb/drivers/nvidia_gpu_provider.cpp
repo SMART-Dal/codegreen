@@ -288,8 +288,9 @@ bool NVIDIAGPUProvider::initialize() {
 }
 
 // Session boundaries read the total-energy counter instead of the power integral. A read within one counter update
-// period of the previous one would discard energy, so it is answered with the previous read's value (held).
-EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
+// period of the previous one would discard energy, so it is answered with the previous read's value (held). A shared
+// read (another session open) would discard that session's energy, so it adds the power integral to the last read.
+EnergyReading NVIDIAGPUProvider::get_boundary_reading(bool shared) {
     EnergyReading reading = get_reading();
     if (!counters_ || reading.energy_joules < 0) return reading;
     std::lock_guard<std::mutex> lock(reading_mutex_);
@@ -300,6 +301,11 @@ EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
         std::string dom = "gpu" + std::to_string(i);
         uint64_t t = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
         unsigned long long mj = 0;
+        if (shared && gs.counter.t_ns()) {
+            reading.domain_energy_joules[dom] = gs.counter.joules_at(integrator_.joules(i));
+            reading.energy_joules += reading.domain_energy_joules[dom];
+            continue;
+        }
         if (!gs.counter.due(t)) {
             record_boundary_hold(t - gs.counter.t_ns());
         } else if (nvmlReturn_t r = nvml().DeviceGetTotalEnergyConsumption(gs.device_handle, &mj); r == NVML_SUCCESS) {

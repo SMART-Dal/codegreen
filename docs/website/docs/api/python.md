@@ -192,10 +192,16 @@ So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]
 | `noise` | `Optional[Dict]` | quality summary computed from `timeseries` |
 | `valid` | `bool` | `False` when the task is not a measurement; it is then excluded from `totals` (counted in `totals.invalid_tasks`) |
 | `invalid_reason` | `Optional[str]` | `provider_read_failed` (the backend could not read the providers at start or stop) or `negative_energy` |
+| `shared_boundary` | `bool` | a start or stop read happened while another task was open. A provider with a boundary energy counter (NVIDIA) then answers from its last counter read plus its power integral since, because a counter read discards the open task's energy (about half an update period per read); that task's energy from it is integrated power |
 
-A report also carries `validity` (`{status, reasons, detail, warnings}`, the
-same block as the CLI): `PROVIDER_READ_FAILED` or `NEGATIVE_ENERGY` name the
-excluded tasks. A failed read is never reported as 0 J.
+A report also carries `sampler` (the backend's sampler block, as in the CLI
+output) and `validity` (`{status, reasons, detail, warnings}`, the same block
+as the CLI): `PROVIDER_READ_FAILED` or `NEGATIVE_ENERGY` name the excluded
+tasks, the provider checks of `run` apply (`GPU_IN_TOTAL`, `GPU_READ_HELD`,
+`BOUNDARY_READ_HELD`, `COUNTER_INTEGRAL_DIVERGED`, `PROVIDER_STALLED`), and the
+warnings `TASK_POWER_INTEGRATED` (tasks whose energy integrates sampled power)
+and `TASK_BELOW_RESOLUTION` (tasks shorter than `min_run_updates` provider
+resolutions) name the tasks. A failed read is never reported as 0 J.
 
 See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
 

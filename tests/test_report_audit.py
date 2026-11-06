@@ -2346,7 +2346,8 @@ class TestInvalidReads:
             return len(buf.value)
         lib = types.SimpleNamespace(nemb_start_session=lambda n: next(ids), nemb_stop_session_v2=stop,
                                     nemb_abi_version=lambda: 4)
-        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4))
+        client = types.SimpleNamespace(lib=lib, abi=4, get_final_measurements=lambda: {"sampler": _vsampler()})
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: client)
         s = rt.Session("inv", save_to_file=False, warn_on_concurrent=False).start()
         for name in ("ok", "bad"):
             with s.task(name):
@@ -2357,6 +2358,45 @@ class TestInvalidReads:
         assert rep["totals"]["domains"] == {"package-0": 5.0}
         assert rep["meta"]["measurement_quality"] == "provider_read_failed"
         assert rep["validity"]["reasons"] == ["PROVIDER_READ_FAILED"]
+
+    def test_session_flags_shared_and_short_tasks(self, monkeypatch):
+        """A boundary read while another task is open is shared (the backend adds the power integral to the last
+        counter read instead of reading the counter); the task is TASK_POWER_INTEGRATED for a power-integrating provider.
+        Tasks shorter than min_run_updates resolutions are TASK_BELOW_RESOLUTION."""
+        import types
+        import threading
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+        ids, open_sids, seen = iter(range(1, 10)), set(), []
+
+        def start(n):
+            seen.append((n, bool(open_sids)))
+            sid = next(ids)
+            open_sids.add(sid)
+            return sid
+
+        def stop(sid, e, p, dur, buf, n):
+            open_sids.discard(sid.value)
+            seen.append(("stop", bool(open_sids)))
+            e._obj.value, dur._obj.value, buf.value = 5.0, {1: 2.0, 2: 0.5, 3: 2.0}[sid.value], b'{"gpu0": 5.0}'
+            return len(buf.value)
+        lib = types.SimpleNamespace(nemb_start_session=start, nemb_stop_session_v2=stop, nemb_abi_version=lambda: 4)
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter")
+        client = types.SimpleNamespace(lib=lib, abi=4, get_final_measurements=lambda: {"sampler": _vsampler(providers=[gpu])})
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: client)
+        s = rt.Session("shared", save_to_file=False, warn_on_concurrent=False).start()
+        with s.task("outer"):
+            with s.task("inner"):
+                pass
+        t = threading.Thread(target=lambda: s.task("alone").__enter__())  # opened on another thread, closed at stop
+        t.start()
+        t.join()
+        rep = s.stop()
+        assert seen[:4] == [(b"outer", False), (b"inner", True), ("stop", True), ("stop", False)]
+        assert {t["name"]: t["shared_boundary"] for t in rep["tasks"]} == {"inner": True, "outer": False, "alone": False}
+        w = rep["validity"]["warnings"]
+        assert rep["validity"]["status"] == "valid" and sorted(w) == ["TASK_BELOW_RESOLUTION", "TASK_POWER_INTEGRATED"]
+        assert "'inner'" in w["TASK_BELOW_RESOLUTION"] and "1 task(s)" in w["TASK_POWER_INTEGRATED"]
+        assert rep["sampler"]["providers"] == [gpu]
 
 
 def _java_workload(dest: Path) -> Path:

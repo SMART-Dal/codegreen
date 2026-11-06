@@ -95,6 +95,7 @@ public:
         i_ = integral_j;
     }
     CounterCheck check() const { return {j_ - j0_, i_ - i0_, t_ns_ - t0_, reads_}; }
+    double joules_at(double integral_j) const { return j_ + integral_j - i_; }  // last read plus the integral since
     double joules() const { return j_; }
     uint64_t period_ns() const { return period_ns_; }
     uint64_t t_ns() const { return t_ns_; }  // time of the last counter read; 0 = none yet
@@ -128,7 +129,7 @@ public:
     // EnergyProvider interface implementation
     bool initialize() override;
     EnergyReading get_reading() override;
-    EnergyReading get_boundary_reading() override;
+    EnergyReading get_boundary_reading(bool shared) override;
     std::map<std::string, CounterCheck> counter_checks() const override;
     EnergyProviderSpec get_specification() const override;
     bool self_test() override;

@@ -132,8 +132,10 @@ public:
      * @brief Reading at a session boundary (start/stop); the sampler and one-shot reads use get_reading().
      * A provider whose hardware keeps a cumulative counter that sampling would disturb reads it only here
      * (spec boundary_source); its cumulative values are then comparable only with other boundary readings.
+     * shared: another session is open across this read. A counter read would discard energy of that session, so such a
+     * provider answers from its last counter read plus its power integral since (energy_source over the read).
      */
-    virtual EnergyReading get_boundary_reading() { return get_reading(); }
+    virtual EnergyReading get_boundary_reading(bool shared) { (void)shared; return get_reading(); }
 
     /**
      * @brief Per domain, a provider with both a boundary counter and a power integral reports their energies over the
