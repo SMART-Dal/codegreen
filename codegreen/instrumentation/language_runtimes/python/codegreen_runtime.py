@@ -306,8 +306,9 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
 def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False) -> float:
     """Smallest energy window the run can resolve: the slowest selected provider's update interval and, unless every
     provider is read synchronously at the window boundaries (boundary=True with counter providers), the sampler
-    interval. A non-fatal SAMPLER_GAP widens it to the largest gap (markers read the last polled value)."""
-    ms = [p["update_interval_ms"] for p in sampler["providers"]]
+    interval. A non-fatal SAMPLER_GAP widens it to the largest gap (markers read the last polled value).
+    update_interval_ms 0 means the provider's update period is unknown: the sampler interval stands in."""
+    ms = [p["update_interval_ms"] or sampler["interval_ms_max"] for p in sampler["providers"]]
     if not boundary or any(p["energy_source"] == "integrated_power" for p in sampler["providers"]):
         ms.append(sampler["interval_ms_max"])
     gap = sampler["max_gap_ns"] if validity and "SAMPLER_GAP" in validity["warnings"] else 0

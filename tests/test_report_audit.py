@@ -1933,6 +1933,7 @@ class TestValidity:
         from codegreen.cli.cli import function_quality, resolution_ns, _measurement_cfg
         cfg, res = _measurement_cfg(), resolution_ns(_vsampler())
         assert res == 10e6 and resolution_ns(_vsampler(), boundary=True) == 1e6
+        assert resolution_ns(_vsampler(providers=[_vprov(ms=0)]), boundary=True) == 10e6  # 0: update period unknown
         assert resolution_ns(_vsampler(providers=[_vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)]),
                              boundary=True) == 100e6
         assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": 3}, res, cfg) == "measured"

@@ -3139,6 +3139,7 @@ class _NEMBBackend(_EnergyBackend):
     def _load(self):
         if self._lib is not None:
             return self._lib
+        get_config_path()  # exports CODEGREEN_CONFIG: the library reads the same config file as this CLI
         import ctypes
         pkg_root = Path(__file__).resolve().parent.parent
         search_dirs = [pkg_root / "lib", pkg_root.parent / "lib", pkg_root.parent / "build" / "lib"]
