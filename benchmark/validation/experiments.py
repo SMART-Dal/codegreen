@@ -11,6 +11,7 @@ from benchmark.config import ValidityTolerances
 from benchmark.harness import BenchmarkHarness
 from benchmark.profilers import CodeGreenProfiler, PerfProfiler
 from benchmark.results import StatisticalAnalysis, valid_energies
+from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import _measurement_cfg
 from validation.analysis import AccuracyAnalysis
 
 @dataclass
@@ -233,6 +234,7 @@ class LinearityExperiment(Experiment):
         )
 
 _MEASURE_ARGS = {"coarse": [], "fine": ["-g", "fine"], "rapl": ["--sensors", "rapl"]}
+_VALIDITY_CFG = _measurement_cfg()  # the gap policy codegreen measure judges each run by
 
 
 def _measure_facts(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -251,7 +253,7 @@ def _measure_facts(d: Dict[str, Any]) -> Dict[str, Any]:
 @dataclass
 class ValidityExperiment(Experiment):
     """Exp6: the validity contract of codegreen measure/run on any host. Expectations come from each run's own facts
-    (window in sampler intervals, sampler affinity, dropped checkpoints, GPU providers), never from host constants;
+    (window in sampler intervals, sampler affinity, reading gaps, dropped checkpoints, GPU providers), never from host constants;
     starvation protocols pin the whole measured command to the first one or two CPUs of the inherited affinity;
     accuracy is `codegreen run --sensors rapl` against `perf stat -a` at the same CPU domain set."""
     problems: Sequence[str] = ("nbody", "binarytrees")
@@ -286,13 +288,16 @@ class ValidityExperiment(Experiment):
         k = r["window_s"] * 1e3 / smp["interval_ms"]
         if k < self.tol.min_window_samples - 1:
             req.add("TOTAL_BELOW_RESOLUTION")
-        elif k < self.tol.min_window_samples:
-            opt.add("TOTAL_BELOW_RESOLUTION")
+        elif k < self.tol.min_window_samples + 1:
+            opt.add("TOTAL_BELOW_RESOLUTION")  # one late reading leaves a window of k intervals spanning k - 1 readings
         if smp["dropped_checkpoints"]:
             req.add("CHECKPOINT_CAP")
         if smp["affinity_cpus"] < self.tol.min_affinity_cpus:
             warn.add("AFFINITY_SINGLE_CPU")
             opt.add("SAMPLER_STARVED")
+        pol, iv = _VALIDITY_CFG["gap_policy"][smp["marker_reads"]], smp["interval_ms_max"] * 1e6
+        if smp["max_gap_ns"] > pol["max_gap_factor"] * iv or smp["median_gap_ns"] > _VALIDITY_CFG["median_gap_factor"] * iv:
+            opt.add("SAMPLER_STARVED")  # the run's own reading gaps exceed the gap policy
         if "SAMPLER_STARVED" in opt:
             opt.add("TOTAL_BELOW_RESOLUTION")  # a starved sampler delivers fewer readings than the window length implies
         if "TOTAL_BELOW_RESOLUTION" in req | opt:

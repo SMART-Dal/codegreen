@@ -2411,6 +2411,20 @@ class TestValidityDefects:
         finally:
             suite.cleanup()
 
+    def test_validity_expectations_come_from_the_run_gaps_and_window(self, monkeypatch):
+        """SAMPLER_STARVED was allowed only below two CPUs, and TOTAL_BELOW_RESOLUTION only below min_window_samples
+        intervals, though one late reading leaves a window of 2.2 intervals with one reading span."""
+        monkeypatch.syspath_prepend(str(_CG_REPO / "benchmark"))
+        from validation.experiments import ValidityExperiment
+        exp = ValidityExperiment()
+        def rec(window_s, **kw):
+            return {"mode": "fine", "window_s": window_s, "sampler": _vsampler(**kw)}
+        assert exp.expectation(rec(1.0)) == (set(), set(), set())
+        assert exp.expectation(rec(0.022))[1] == {"TOTAL_BELOW_RESOLUTION", "ZERO_ENERGY"}
+        assert exp.expectation(rec(0.03))[1] == set()
+        assert {"SAMPLER_STARVED", "TOTAL_BELOW_RESOLUTION"} <= exp.expectation(rec(1.0, max_gap_ns=400_000_000))[1]
+        assert "SAMPLER_STARVED" in exp.expectation(rec(1.0, median_gap_ns=16_000_000))[1]
+
 
 class TestRound3:
     """Injected-runtime cleanup order, stdout-closing workloads, and toolchain selection."""

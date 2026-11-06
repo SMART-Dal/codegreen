@@ -80,8 +80,9 @@ PERF_CPU_EVENT_SETS = (("energy-psys",), ("energy-pkg", "energy-ram"))
 class ValidityTolerances:
     """Expectations of benchmark.validation.experiments.ValidityExperiment. Windows are in sampler intervals
     (sampler.interval_ms of the run itself); a window below min_window_samples - 1 intervals must be flagged
-    TOTAL_BELOW_RESOLUTION, one at or above min_window_samples must not, the interval between is either. A sampler
-    allowed on fewer than min_affinity_cpus CPUs must raise the AFFINITY_SINGLE_CPU warning and may be SAMPLER_STARVED.
+    TOTAL_BELOW_RESOLUTION, one at or above min_window_samples + 1 must not, the two intervals between are either (one
+    late reading costs the window a reading). A sampler allowed on fewer than min_affinity_cpus CPUs must raise the
+    AFFINITY_SINGLE_CPU warning and may be SAMPLER_STARVED, as may any run whose reading gaps exceed codegreen's gap policy.
     cv_max_pct maps a minimum window (s) to the largest CV (%) of valid energies across repetitions."""
     min_window_samples: int = 2
     min_affinity_cpus: int = 2
