@@ -174,12 +174,21 @@ def _python_monotonic_vs_t_ns_offset_ns(client=None) -> Optional[int]:
         return None
 
 
+@functools.lru_cache(maxsize=None)
 def _runtime_version() -> str:
-    try:
-        from importlib.metadata import version as _v
-        return _v("codegreen")
-    except Exception:
-        return "unknown"
+    """codegreen.__version__: pyproject.toml [project].version (the single source, also read by CMake) next to the
+    package (_package_file, so a copy injected into a project agrees), where installed metadata can be stale; the
+    installed distribution's metadata for a wheel."""
+    pkg = _package_file("config.json")
+    pyproject = pkg.parent.parent / "pyproject.toml" if pkg and pkg.is_file() else None
+    if pyproject and pyproject.is_file():
+        import re
+        m = re.search(r'^version *= *"([0-9]+\.[0-9]+\.[0-9]+[^"]*)"', pyproject.read_text(encoding="utf-8"), re.M)
+        if not m:
+            raise RuntimeError(f"no [project].version in {pyproject}")
+        return m.group(1)
+    from importlib.metadata import version
+    return version("codegreen")
 
 
 def _package_file(name: str) -> Optional[Path]:
@@ -198,8 +207,11 @@ def _config_path() -> Path:
     CODEGREEN_CONFIG, else the user override ~/.codegreen/config.json, else the bundled package config.json."""
     if os.environ.get("CODEGREEN_CONFIG"):
         return Path(os.environ["CODEGREEN_CONFIG"])
-    user = Path.home() / ".codegreen" / "config.json"
-    return user if user.exists() else _package_file("config.json")
+    return _user_config_path() if _user_config_path().exists() else _package_file("config.json")
+
+
+def _user_config_path() -> Path:
+    return Path.home() / ".codegreen" / "config.json"
 
 
 def _deep_merge(base: Dict, over: Dict) -> Dict:
@@ -404,11 +416,11 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
 
 
 def function_quality(d: Dict[str, Any], res_ns: float, cfg: Dict[str, Any]) -> str:
-    """Per-function verdict shared by `measure` and `project`: measured when every call spans min_window_samples
-    sampler readings (reading indices, when the markers carry them) or else one resolution per call on average;
+    """Per-function verdict shared by `measure` and `project`: measured when the mean call spans measured_min_factor
+    resolutions and every call spans as many sampler readings (reading indices, when the markers carry them);
     aggregate_only when only the summed time spans aggregate_min_factor resolutions; below_resolution otherwise."""
-    per_call = (d["min_window_samples"] >= cfg["min_window_samples"] if "min_window_samples" in d
-                else d["time_ns"] >= res_ns * d["calls"])
+    f = cfg["measured_min_factor"]
+    per_call = d["time_ns"] >= f * res_ns * d["calls"] and ("min_window_samples" not in d or d["min_window_samples"] >= f)
     return ("measured" if per_call else "aggregate_only" if d["time_ns"] >= cfg["aggregate_min_factor"] * res_ns
             else "below_resolution")
 

@@ -4,7 +4,7 @@ Complete reference for the `codegreen` command-line interface.
 
 The CLI is grouped into four panels: **Measurement** (`measure`, `analyze`,
 `run`, `monitor`, `project`, `timeline`), **Setup** (`init`, `config`,
-`init-sensors`), **Diagnostics** (`info`, `doctor`), and **Validation**
+`init-sensors`), **Diagnostics** (`info`, `capabilities`, `doctor`), and **Validation**
 (`benchmark`; `validate`/`validate-accuracy`/`measure-workload` are hidden
 but still functional).
 
@@ -147,9 +147,12 @@ Use `--` before commands that have their own flags; otherwise flags such as
 - 95% confidence interval
 - Min/max range
 - Mean wall time with standard deviation
-- Outlier removal by `measurement.report.outlier_method` (`iqr_<k>` or
-  `none`). Runs are filtered by energy and `duration_s` and `power_w` are
-  summarized over the same runs. `energy_j.raw` is the unfiltered summary;
+- `energy_j`, `duration_s`, `power_w` (mean of per-run energy/time),
+  `domains` (mean joules) and `domains_power_w` (mean of per-run domain
+  joules/time) cover every `ok` run, unfiltered. With
+  `measurement.report.outlier_method` `iqr_<k>` (default `none`), `filtered`
+  adds `method`, `runs` and the same five summaries over the runs whose energy
+  lies inside the Tukey fences; `runs.iqr_outliers_removed` counts the rest.
   `runs.energies_j` lists every run's signed reading (`null` where the read
   failed) and `runs.status` its status (`ok`, `zero_energy`,
   `negative_energy`, `read_failed`). Only `ok` runs enter the statistics.
@@ -294,11 +297,11 @@ caller's environment overrides them. Each function has `quality`.
 
 `measure` and `project` share one verdict per function:
 
-- `measured`: every call spans at least `min_window_samples` sampler readings
-  (when the markers carry reading indices), or else the mean time per call is
-  at least one resolution (`resolution_ns`: the slowest selected provider's
+- `measured`: the mean time per call spans at least `measured_min_factor`
+  resolutions (`resolution_ns`: the slowest selected provider's
   `update_interval_ms` or the sampler interval, widened to the largest gap on
-  `SAMPLER_GAP`).
+  `SAMPLER_GAP`) and, when the markers carry reading indices, every call spans
+  at least `measured_min_factor` sampler readings.
 - `aggregate_only`: the function's summed time spans at least
   `aggregate_min_factor` resolutions. Use the total, not per-call figures.
 - `below_resolution`: below both.
@@ -385,7 +388,7 @@ codegreen analyze python app.py --save-instrumented --output-dir ./instrumented
 
 ### `init`
 
-Comprehensive system initialization: detects the environment and hardware, validates permissions, and generates a configuration tuned to the host.
+Comprehensive system initialization: detects the environment and hardware, validates permissions, and merges the detected providers (`measurement.nemb.providers.<name>.enabled`) and their sensors (`measurement.default_sensors`) into `--config`, else `CODEGREEN_CONFIG`, else `~/.codegreen/config.json`; the bundled config is never written.
 
 ```bash
 codegreen init [OPTIONS]
@@ -426,6 +429,23 @@ codegreen info [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `-d, --detailed` | Show detailed information |
+
+### `capabilities`
+
+Print, as JSON, what the profiling registries can measure on this host (probes
+only, no workload runs).
+
+```bash
+codegreen capabilities [KIND...]
+```
+
+`KIND` is any of `metric` (CPU hardware counters), `gpu_series` (device time
+series, e.g. NVML), `gpu_replay` (per-kernel replay counters, e.g. Nsight
+Compute), `gpu_framework` (framework traces mapped to kernels, e.g. torch) and `language` (event and line samplers per
+language); none prints every registry, an unknown name exits with an error.
+Each registry maps to a list of `{provider, available, reason, device,
+details}`; `details` lists per-event or per-component availability (for
+`hw_counters`: `arch` and each logical event).
 
 ### `doctor`
 

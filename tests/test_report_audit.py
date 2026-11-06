@@ -570,7 +570,7 @@ class TestCLI:
         out, _, _, _ = _cli_run("run", "--json", "-n", "2", "-w", "0", "--", *self.SMALL_WORKLOAD)
         assert isinstance(out["meta"]["argv"], list)
         assert out["meta"]["cwd"]
-        assert out["meta"]["outlier_method"] == "iqr_1.5"
+        assert out["meta"]["outlier_method"] == "none"
         assert out["meta"]["iso_timestamp_format"] == "rfc3339_utc"
 
     def test_budget_exceeded_path_includes_meta(self) -> None:
@@ -1678,7 +1678,7 @@ class TestJavaAggregateFile:
             (dom / name).write_text(text + "\n")
         for _ in range(2):
             r = subprocess.run(["java", f"-Dcodegreen.rapl.root={tmp_path / 'rapl'}", "-Dcodegreen.rapl.zone=intel-rapl:\\d+",
-                                "-Dcodegreen.rapl.domain=package.*", "-Dcodegreen.rapl.poll_us=1000", "-cp", str(tmp_path), "T"],
+                                "-Dcodegreen.rapl.superset=psys", "-Dcodegreen.rapl.disjoint=dram", "-Dcodegreen.rapl.poll_us=1000", "-cp", str(tmp_path), "T"],
                                env=env, capture_output=True, text=True, check=True)
             assert r.stderr == ""
         lines = (tmp_path / "sum").read_text().splitlines()
@@ -1777,6 +1777,31 @@ def test_version_comes_from_the_source_tree_not_stale_metadata():
     version = re.search(r'^version *= *"([^"]+)"', pyproject, re.M).group(1)
     assert codegreen.__version__ == version
     assert version in CliRunner().invoke(cli.app, ["--version"]).output
+    from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+    assert rt._runtime_version() == version  # meta.codegreen_version of every report read stale metadata
+
+
+def test_init_merges_detected_providers_into_the_user_config_on_every_environment(tmp_path, monkeypatch):
+    """init raised KeyError 'accuracy' on container, hpc, shared_server and cicd hosts (it tuned keys no config has
+    and nothing reads) and, without a user config, overwrote the bundled config.json."""
+    from typer.testing import CliRunner
+    import codegreen.cli.cli as cli
+    from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+    bundled = rt._package_file("config.json")
+    before = bundled.read_text()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "detect_hardware_sensors", lambda: {"intel_rapl": {"available": True}})
+    monkeypatch.setattr(cli, "check_energy_permissions", lambda: {})
+    monkeypatch.setattr(cli, "test_configuration", lambda c: {"success": "measurement" in c, "errors": []})
+    for env in ("personal", "container", "hpc", "shared_server", "cicd"):
+        monkeypatch.delenv("CODEGREEN_CONFIG", raising=False)
+        monkeypatch.setattr(cli, "detect_environment", lambda: {"type": env, "platform": "linux", "deployment_mode": ""})
+        r = CliRunner().invoke(cli.app, ["init", "--auto-detect-only", "--force"])
+        assert r.exit_code == 0, r.output
+        assert rt._config_path() == tmp_path / ".codegreen" / "config.json"
+        assert rt.load_config()["initialization"]["environment_type"] == env
+        assert rt.providers_env(None, rt._measurement_cfg()) == "intel_rapl"
+    assert bundled.read_text() == before
 
 
 def test_measure_output_file_is_the_json_report_with_the_verdict(tmp_path, monkeypatch):
@@ -1986,8 +2011,12 @@ class TestValidity:
         assert resolution_ns(_vsampler(providers=[gpu]), boundary=True) == 10e6
         assert resolution_ns(_vsampler(providers=[{**gpu, "boundary_source": "counter"}]), boundary=True) == 1e6
         assert resolution_ns(_vsampler(providers=[{**gpu, "boundary_source": "counter"}])) == 10e6
-        assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": 3}, res, cfg) == "measured"
-        assert function_quality({"calls": 2, "time_ns": 30e6}, res, cfg) == "measured"
+        f = cfg["measured_min_factor"]
+        assert function_quality({"calls": 2, "time_ns": 2 * f * res, "min_window_samples": f}, res, cfg) == "measured"
+        assert function_quality({"calls": 2, "time_ns": 2 * f * res}, res, cfg) == "measured"
+        assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": f}, res, cfg) == "below_resolution"
+        assert function_quality({"calls": 1, "time_ns": 22e6, "min_window_samples": 2}, res, cfg) == "below_resolution"
+        assert function_quality({"calls": 1, "time_ns": f * res, "min_window_samples": f - 1}, res, cfg) == "aggregate_only"
         assert function_quality({"calls": 1000, "time_ns": 100e6}, res, cfg) == "aggregate_only"
         assert function_quality({"calls": 1, "time_ns": 10, "min_window_samples": 0}, res, cfg) == "below_resolution"
 
@@ -2005,7 +2034,7 @@ class TestValidity:
             "x = 1\n", Path("t.py"), "python", "fine")
         f, m = out["per_function_energy"]["f"], out["per_function_energy"]["main"]
         assert f["calls"] == 2 and f["inclusive_j"] == pytest.approx(4.5) and f["quality"] == "below_resolution"
-        assert m["exclusive_j"] == pytest.approx(4.0) and m["quality"] == "measured"
+        assert m["exclusive_j"] == pytest.approx(4.0) and m["quality"] == "below_resolution"  # 40 readings, 50 ns
         assert out["summary"]["exclusive_sum_j"] == pytest.approx(out["summary"]["total_energy_j"]) == 8.0
         assert out["summary"]["energy_by_provider"] == {"intel_rapl": 8.0} and out["validity"] == v
         assert out["summary"]["wall_time_s"] == 50 / 1e9 and out["sampler"]["readings"] == 50
@@ -2073,23 +2102,42 @@ class TestValidity:
         assert (out.get("error") == f"invalid_measurement: {code}") if code else "error" not in out
         assert out["runs"]["energies_j"] == [e for e, _ in pairs] and len(out["runs"]["status"]) == 3
 
-    def test_run_stats_are_paired_and_raw_is_reported(self, monkeypatch):
+    def test_run_stats_are_raw_and_filtering_is_an_opt_in_side_block(self, monkeypatch, tmp_path):
+        """energy_j.mean was IQR-filtered while its min/max and the domains covered every run, and domains_power_w
+        divided all-run domain joules by the filtered mean duration; every field now has one definition."""
         from typer.testing import CliRunner
         import codegreen.cli.cli as cli
-        it = iter([(5.0, 1.0), (5.1, 1.1), (4.9, 0.9), (5.0, 1.0), (50.0, 1.0)])
+        pairs = [(5.0, 1.0), (5.1, 1.1), (4.9, 0.9), (5.0, 1.0), (50.0, 2.0)]
 
         class Fake(cli._EnergyBackend):
             name = "fake"
             def is_available(self): return True
-            def measure(self, command, timeout=None): return next(it)
+            def measure(self, command, timeout=None):
+                self.last = pairs[len(seen)]
+                seen.append(self.last)
+                return self.last
+            def get_last_domain_breakdown(self): return {"package-0": self.last[0]}
 
+        def run(method):
+            (tmp_path / "c.json").write_text(json.dumps({"measurement": {"report": {"outlier_method": method}}}))
+            monkeypatch.setenv("CODEGREEN_CONFIG", str(tmp_path / "c.json"))
+            seen.clear()
+            r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "5", "-w", "0", "--", "true"])
+            return json.loads(r.stdout)
+
+        seen = []
         monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
-        r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "5", "-w", "0", "--", "true"])
-        out = json.loads(r.stdout)
-        assert out["runs"]["iqr_outliers_removed"] == 1 and out["energy_j"]["mean"] == pytest.approx(5.0)
-        assert out["energy_j"]["raw"]["mean"] == pytest.approx(14.0) and out["energy_j"]["raw"]["n"] == 5
-        assert out["duration_s"]["mean"] == pytest.approx(1.0) and out["duration_s"]["outliers_removed"] == 1
-        assert list(out["validity"]["warnings"]) == ["RESOLUTION_UNKNOWN"] and r.exit_code == 0
+        out = run("none")
+        assert "filtered" not in out and out["meta"]["outlier_method"] == "none"
+        assert out["energy_j"]["mean"] == pytest.approx(14.0) == out["domains"]["package-0"]
+        assert out["energy_j"]["max"] == 50.0 and out["duration_s"]["mean"] == pytest.approx(1.2)
+        assert out["power_w"]["mean"] == pytest.approx(sum(e / t for e, t in pairs) / 5, abs=1e-4)
+        assert out["power_w"]["mean"] == out["domains_power_w"]["package-0"]
+        f = run("iqr_1.5")["filtered"]
+        assert f["method"] == "iqr_1.5" and f["runs"] == 4 and f["energy_j"]["max"] == 5.1
+        assert f["energy_j"]["mean"] == pytest.approx(5.0) == f["domains"]["package-0"]
+        assert f["duration_s"]["mean"] == pytest.approx(1.0)
+        assert f["power_w"]["mean"] == f["domains_power_w"]["package-0"]
 
     def test_run_accepts_sensors(self, monkeypatch):
         from typer.testing import CliRunner

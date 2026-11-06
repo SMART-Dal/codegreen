@@ -271,13 +271,14 @@ the measured Python process alike.
 
 | Key | Default | Description |
 |---|---|---|
-| `min_window_samples` | 2 | Fewest sampler readings a root window (and a `measured` function call) must span |
+| `min_window_samples` | 2 | Fewest sampler readings a root window must span |
 | `median_gap_factor` | 1.5 | Median reading gap, in sampler intervals, that counts as a gap |
 | `gap_policy.<marker_reads>.max_gap_factor` | 3.0 | Max reading gap, in sampler intervals, that counts as a gap |
 | `gap_policy.<marker_reads>.severity` | `interpolated`: `fatal`; `last_poll`: `warning` | `fatal` reports `SAMPLER_STARVED`, `warning` reports `SAMPLER_GAP` and widens the per-function resolution to the gap |
 | `gap_policy.<marker_reads>.failed_read_severity` | `interpolated`: `warning`; `last_poll`: `fatal` | Severity of `PROVIDER_READ_FAILED` for `sampler.failed_reads` (interpolated markers skip a failed reading; last-poll markers read a stale counter) |
 | `min_affinity_cpus` | 2 | Fewest CPUs the measured process may run on before the `AFFINITY_SINGLE_CPU` warning |
 | `min_run_updates` | 10 | `run`: fewest resolutions per run before `RUN_BELOW_RESOLUTION` |
+| `measured_min_factor` | 10 | Mean time per call, in resolutions, and sampler readings in every call, for per-function `measured` |
 | `aggregate_min_factor` | 10 | Summed time, in resolutions, for per-function `aggregate_only` |
 | `fail_on_invalid` | true | Exit 3 on an invalid `measure`, `run` or `project` result; `false` only reports |
 
@@ -291,12 +292,33 @@ Other keys:
 | Key | Default | Description |
 |---|---|---|
 | `measurement.report.max_checkpoints` | 2000000 | Markers NEMB stores per process; later ones are dropped and counted (`CHECKPOINT_CAP`) |
-| `measurement.report.outlier_method` | `iqr_1.5` | `run` statistics: `iqr_<k>` (Tukey fences at k IQRs, by energy; time and power use the same runs) or `none` |
+| `measurement.report.outlier_method` | `none` | `run`: `iqr_<k>` adds a `filtered` block over the runs inside Tukey fences at k IQRs of energy (time, power and domains use the same runs); the primary statistics stay unfiltered |
 | `measurement.default_sensors` | `"all"` | Sensors measured without `--sensors`: `"all"` or a list of `sensor_providers` keys |
 | `measurement.sensor_providers` | `rapl`: `[intel_rapl, amd_rapl]`, `amd_cpu`: `[amd_rapl]`, `nvidia`: `[nvidia_gpu]`, `amd_gpu`: `[amd_gpu]` | Sensor name (the `--sensors` choices) to NEMB provider alternatives |
 | `measurement.run_path.sampler_interval_ms` | 1000 | Background sampler period during `codegreen run` sessions (kept at the coordinator interval when a selected provider integrates power) |
 | `measurement.toolchain.c` / `.cpp` | `gcc` / `g++` | Compilers for instrumented C/C++ in `measure`; `CC`/`CXX` override |
 | `measurement.toolchain.prefer_dirs` | `["/usr/bin"]` | Directories searched for the compiler before `PATH`; the compile runs with the compiler's directory first on `PATH` |
+
+### Profiling metrics
+
+Read by `codegreen.analysis` on profiled runs only (never on measured runs);
+`codegreen capabilities` reports what each provider can do on the host.
+
+| Key | Default | Description |
+|---|---|---|
+| `hw_counters.perf` | `perf` | `perf` binary for counter runs and event sampling; event names per architecture live in `codegreen/hw_events/*.json` |
+| `hw_counters.attribution.<event>` | `cache_misses`: 10007 | Logical events sampled with call stacks (one extra unmeasured run each); the value is the events between samples |
+| `gpu_metrics.series_interval_ms` | 50 | Device time-series period |
+| `gpu_metrics.ncu.launch_count` | 200 | Kernels replayed for counters |
+| `gpu_metrics.ncu.metrics` | `dram_pct`, `sm_pct`, `occupancy_pct`, `duration_ns` | Logical name to Nsight Compute metric |
+| `gpu_metrics.roofline.latency_pct` | 30.0 | A kernel whose DRAM and SM speed-of-light shares both stay below it is latency/launch bound |
+| `gpu_metrics.peaks` | `{}` | Per-device datasheet values `{device: {dram_gbps, fp32_tflops, source}}`, declared in the user config; roofline metrics raise without them |
+| `languages.<lang>.line_sampler.rate_hz` | python 97, java 1003 | Line-sample rate |
+| `languages.<lang>.line_sampler.flags` / `.feature_flags` / `.pass_flags` | | Sampler options always on / switched on by feature name / one extra profiled run each (python: `native`; `idle`, `gil`) |
+| `languages.<lang>.line_sampler.frame_re` / `.library_re` / `.irreducible_re` | | One collapsed frame (groups `func`, `file`, `line`), library files, frames a source rewrite cannot remove |
+| `languages.python.line_sampler.binary` / `.record` | `py-spy` / `record --format raw --full-filenames` | py-spy binary and its arguments before `--rate` |
+| `languages.python.line_sampler.interpreter_re` / `.alloc_*` | | Interpreter word of the workload command and the tracemalloc allocation run |
+| `languages.java.line_sampler.async_profiler` | `""` | async-profiler release directory (empty: `$CODEGREEN_ASYNC_PROFILER`); `flags` are JVM options loaded with the agent, `file_replace` maps class separators |
 
 Size `measurement.nemb.coordinator.measurement_buffer_size` for the longest
 run: the buffer holds `measurement_buffer_size` x `measurement_interval_ms`

@@ -43,7 +43,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
-    _config_path, load_config as _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
+    _config_path, _user_config_path, _deep_merge, load_config as _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
     measurement_validity, run_validity, resolution_ns, function_quality, providers_env, _poller_sampler,
     _checkpoint_events, _replay_checkpoint_events, _read_nemb_json,
 )
@@ -550,141 +550,16 @@ def check_energy_permissions() -> Dict[str, Dict[str, Any]]:
     
     return permissions
 
-def detect_performance_settings() -> Dict[str, Any]:
-    """Detect optimal performance settings for the current system."""
-    
-    if psutil:
-        settings = {
-            "cpu_cores": psutil.cpu_count(),
-            "memory_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-            "recommended_settings": {}
-        }
-        
-        # CPU scaling detection
-        cpu_freq = psutil.cpu_freq()
-        if cpu_freq:
-            settings["cpu_freq_mhz"] = {
-                "current": cpu_freq.current,
-                "min": cpu_freq.min,
-                "max": cpu_freq.max
-            }
-            
-            # Recommend frequency scaling settings
-            if cpu_freq.current < cpu_freq.max * 0.9:
-                settings["recommended_settings"]["cpu_scaling"] = "Consider disabling CPU frequency scaling for consistent measurements"
-        
-        # Memory optimization
-        memory = psutil.virtual_memory()
-        if memory.available < memory.total * 0.2:  # Less than 20% free
-            settings["recommended_settings"]["memory"] = "Low memory - consider reducing measurement buffer sizes"
-        
-        # Thread count recommendations
-        logical_cores = psutil.cpu_count()
-        physical_cores = psutil.cpu_count(logical=False)
-        
-        settings["recommended_threads"] = min(physical_cores or logical_cores, 4)
-        settings["recommended_settings"]["threading"] = f"Recommended worker threads: {settings['recommended_threads']}"
-        
-        # I/O and storage
-        try:
-            disk_usage = psutil.disk_usage('/')
-            if disk_usage.free < disk_usage.total * 0.1:
-                settings["recommended_settings"]["storage"] = "Low disk space - enable temp file cleanup"
-        except Exception:
-            pass
-
-    else:
-        # Fallback settings without psutil
-        import multiprocessing
-        cpu_cores = multiprocessing.cpu_count()
-        settings = {
-            "cpu_cores": cpu_cores,
-            "memory_gb": "unknown",
-            "recommended_settings": {},
-            "recommended_threads": min(cpu_cores, 4)
-        }
-        settings["recommended_settings"]["threading"] = f"Recommended worker threads: {settings['recommended_threads']}"
-    
-    return settings
-
-def generate_optimized_config(
-    environment_info: Dict[str, Any], 
-    sensor_info: Dict[str, Any], 
-    permission_info: Dict[str, Any],
-    performance_info: Dict[str, Any],
-    custom_config: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """Generate an optimized configuration based on detected system capabilities."""
-    
-    # Start with base configuration from existing config file
-    base_config_path = get_config_path()
-    if base_config_path and base_config_path.exists():
-        with open(base_config_path, 'r') as f:
-            config = json.load(f)
-    else:
-        config = load_config()  # Default config
-    
-    # Add initialization metadata
-    config["initialization"] = {
-        "completed": True,
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
-        "environment_type": environment_info["type"],
-        "detected_sensors": list(sensor_info.keys()),
-        "version": _VERSION
-    }
-    
-    # Environment-specific optimizations
-    if environment_info["type"] == "container":
-        # Container optimizations
-        config["measurement"]["accuracy"]["minimize_system_noise"] = False
-        config["performance"]["threading"]["max_worker_threads"] = 2
-        config["measurement"]["nemb"]["coordinator"]["auto_restart_failed_providers"] = True
-        
-    elif environment_info["type"] == "hpc":
-        # HPC optimizations
-        config["measurement"]["nemb"]["accuracy_mode"] = "production"
-        config["measurement"]["accuracy"]["priority"] = "maximum"
-        config["performance"]["threading"]["max_worker_threads"] = performance_info.get("recommended_threads", 4)
-        config["measurement"]["accuracy"]["disable_frequency_scaling"] = False  # HPC manages this
-        
-    elif environment_info["type"] == "shared_server":
-        # Shared server optimizations
-        config["measurement"]["accuracy"]["minimize_system_noise"] = True
-        config["performance"]["threading"]["max_worker_threads"] = min(2, performance_info.get("recommended_threads", 2))
-
-    elif environment_info["type"] == "cicd":
-        # CI/CD optimizations
-        config["measurement"]["accuracy"]["priority"] = "balanced"
-        config["measurement"]["nemb"]["accuracy_mode"] = "testing"
-        config["developer"]["debug_mode"] = True
-        config["performance"]["threading"]["max_worker_threads"] = 1
-    
-    # Providers keyed by NEMB registry name: enable the detected ones and select their sensors by default
-    # (a strict selection: every listed sensor must initialize on this host).
-    nemb_providers = config["measurement"]["nemb"]["providers"]
-    for name in nemb_providers:
-        nemb_providers[name]["enabled"] = bool(sensor_info.get(name, {}).get("available"))
-    config["measurement"]["default_sensors"] = [
-        s for s, provs in config["measurement"]["sensor_providers"].items()
-        if any(nemb_providers.get(p, {}).get("enabled") for p in provs)]
-
-    # Performance optimizations based on system capabilities
-    if performance_info["memory_gb"] < 4:
-        config["performance"]["database"]["batch_operations"] = True
-        config["performance"]["database"]["transaction_size"] = 500
-
-    # Apply custom configuration overrides
-    if custom_config:
-        def deep_merge(base_dict, override_dict):
-            for key, value in override_dict.items():
-                if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
-                    deep_merge(base_dict[key], value)
-                else:
-                    base_dict[key] = value
-        
-        deep_merge(config, custom_config)
-    
-    return config
+def generate_optimized_config(environment_info: Dict[str, Any], sensor_info: Dict[str, Any]) -> Dict[str, Any]:
+    """The entries init writes to the active config: the detected NEMB providers enabled and their sensors as
+    measurement.default_sensors (a strict selection: every listed sensor must initialize on this host)."""
+    m = _load_config()["measurement"]
+    providers = {n: {"enabled": bool(sensor_info.get(n, {}).get("available"))} for n in m["nemb"]["providers"]}
+    sensors = [s for s, provs in m["sensor_providers"].items() if any(providers.get(p, {}).get("enabled") for p in provs)]
+    return {"measurement": {"nemb": {"providers": providers}, "default_sensors": sensors},
+            "initialization": {"completed": True, "environment_type": environment_info["type"],
+                               "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+                               "detected_sensors": list(sensor_info), "version": _VERSION}}
 
 def test_configuration(config: Dict[str, Any]) -> Dict[str, Any]:
     """Test the generated configuration for basic functionality."""
@@ -1688,7 +1563,7 @@ def comprehensive_init(
     """
     console.print(Panel.fit("[bold blue]CodeGreen Comprehensive Initialization[/bold blue]"))
     
-    config_file_path = config_path or get_config_path()
+    config_file_path = Path(config_path or os.environ.get("CODEGREEN_CONFIG") or _user_config_path())
     
     # Check if initialization already completed
     if not force and config_file_path and Path(config_file_path).exists():
@@ -1736,10 +1611,6 @@ def comprehensive_init(
                 console.print("[red]Setup script timeout[/red]")
         else:
             console.print("[yellow]Permission setup requested but script not found[/yellow]")
-    
-    # Step 4: Performance Settings Detection
-    console.print("\n[bold]Step 4: Performance Settings Detection[/bold]")
-    performance_info = detect_performance_settings()
     
     # Display detection summary
     console.print("\n" + "="*60)
@@ -1839,36 +1710,22 @@ def comprehensive_init(
         if not proceed:
             console.print("[yellow]Initialization cancelled by user[/yellow]")
             return
-        
-        # Allow configuration customization
-        custom_config = {}
-        if typer.confirm("Customize configuration settings?"):
-            # Environment-specific customizations
-            if environment_info["type"] == "hpc":
-                custom_config["measurement"] = {"nemb": {"accuracy_mode": "production"}}
-            elif environment_info["type"] == "container":
-                custom_config["performance"] = {"minimize_system_noise": False}
-    else:
-        custom_config = {}
-    
-    # Step 5: Generate optimized configuration
-    console.print("\n[bold]Step 5: Generating Configuration[/bold]")
-    config = generate_optimized_config(environment_info, sensor_info, permission_info, performance_info, custom_config)
-    
-    # Step 6: Test configuration
-    console.print("\n[bold]Step 6: Testing Configuration[/bold]")
-    test_results = test_configuration(config)
-    
+
+    # Step 4: entries merged into the active config file (a user config keeps the bundled defaults for other keys)
+    console.print("\n[bold]Step 4: Generating Configuration[/bold]")
+    entries = generate_optimized_config(environment_info, sensor_info)
+
+    def save() -> None:
+        config_file_path.parent.mkdir(parents=True, exist_ok=True)
+        current = json.loads(config_file_path.read_text()) if config_file_path.exists() else {}
+        config_file_path.write_text(json.dumps(_deep_merge(current, entries), indent=2) + "\n")
+
+    console.print("\n[bold]Step 5: Testing Configuration[/bold]")
+    test_results = test_configuration(_deep_merge(_load_config(), entries))
+
     if test_results["success"]:
         console.print("[green]Configuration test successful![/green]")
-        
-        # Save configuration
-        config_dir = Path(config_file_path).parent
-        config_dir.mkdir(parents=True, exist_ok=True)
-        
-        with open(config_file_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        
+        save()
         console.print(f"\n[green]Initialization completed successfully![/green]")
         console.print(f"Configuration saved to: [cyan]{config_file_path}[/cyan]")
         
@@ -1886,8 +1743,7 @@ def comprehensive_init(
         if interactive:
             save_anyway = typer.confirm("Save configuration anyway?")
             if save_anyway:
-                with open(config_file_path, 'w') as f:
-                    json.dump(config, f, indent=2)
+                save()
                 console.print(f"Configuration saved with warnings: [cyan]{config_file_path}[/cyan]")
             else:
                 console.print("[yellow]Configuration not saved[/yellow]")
@@ -2637,6 +2493,7 @@ def run_command(
     - [cyan]codegreen run -- java -cp build MyClass[/cyan]
     """
     import subprocess, time, math
+    from statistics import fmean
     from benchmark.results import StatisticalAnalysis
 
     if repeat < 1:
@@ -2850,17 +2707,15 @@ def run_command(
                       if isinstance(backend, _NEMBBackend) else None)
     measurement_pairs: List[tuple] = []
     warmup_pairs: List[tuple] = []
-    domain_runs: List[Dict[str, float]] = []
+    run_domains: List[Dict[str, float]] = []  # per measured run, aligned with measurement_pairs
 
     def _collect_run(label: str, idx: int, total: int, into: List[tuple]):
         if not json_output:
             console.print(f"[dim]{label} {idx+1}/{total}[/dim]")
         energy_j, elapsed = backend.measure(command, timeout=timeout)
         into.append((energy_j, elapsed))
-        if energy_j is not None and energy_j > 0 and isinstance(backend, _NEMBBackend):
-            d = backend.get_last_domain_breakdown()
-            if d and label == "Run":
-                domain_runs.append(d)
+        if label == "Run":
+            run_domains.append(backend.get_last_domain_breakdown() if energy_j is not None and energy_j > 0 else {})
 
     for i in range(warmup):
         if include_warmup:
@@ -2892,9 +2747,9 @@ def run_command(
     # Per-run status keeps every reading signed; only "ok" runs enter the statistics, the rest are reasons.
     statuses = ["read_failed" if e is None else "negative_energy" if e < 0 else "zero_energy" if e == 0 else "ok"
                 for e, _ in measurement_pairs]
-    energy_valid_pairs = [p for p, st in zip(measurement_pairs, statuses) if st == "ok"]
+    ok_runs = [i for i, st in enumerate(statuses) if st == "ok"]
     zero_energy_dropped = statuses.count("zero_energy")
-    energies = [e for (e, _) in energy_valid_pairs]
+    energies = [measurement_pairs[i][0] for i in ok_runs]
 
     if not energies:
         msg = f"No energy data collected ({backend.name})"
@@ -2923,40 +2778,44 @@ def run_command(
                 console.print(f"[bold]Time:[/bold] {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
         raise typer.Exit(1)
 
-    # measurement.report.outlier_method ("none" | "iqr_<k>") filters runs by energy; time and power are summarized
-    # over the same surviving runs, so the three stay paired. energy_j.raw is the unfiltered summary.
+    # Every statistic covers the ok runs, unfiltered. measurement.report.outlier_method iqr_<k> adds `filtered`: the
+    # same summaries over the ok runs whose energy lies inside the Tukey fences (energy, time, power and domains paired).
     method = vcfg["outlier_method"]
     if method != "none" and not method.startswith("iqr_"):
         raise ValueError(f"measurement.report.outlier_method must be none or iqr_<k>, got {method!r}")
-    iqr_k = float(method.removeprefix("iqr_")) if method != "none" else None
-    e_stats = StatisticalAnalysis.summarize(energies, filter_outliers=iqr_k is not None, iqr_k=iqr_k or 0.0)
-    raw_stats = StatisticalAnalysis.summarize(energies, filter_outliers=False)
-    bounds = StatisticalAnalysis.iqr_bounds(energies, iqr_k) if iqr_k is not None else None
-    kept = [(e, t) for e, t in energy_valid_pairs if bounds is None or bounds[0] <= e <= bounds[1]] or energy_valid_pairs
-    iqr_outliers_removed = len(energy_valid_pairs) - len(kept)
-    t_stats = StatisticalAnalysis.summarize([t for _, t in kept], filter_outliers=False)
+    bounds = StatisticalAnalysis.iqr_bounds(energies, float(method.removeprefix("iqr_"))) if method != "none" else None
+    kept = [i for i in ok_runs if bounds is None or bounds[0] <= measurement_pairs[i][0] <= bounds[1]]
+    iqr_outliers_removed = len(ok_runs) - len(kept)
 
-    avg_domains: Dict[str, float] = {}
-    domain_active_count: Dict[str, int] = {}
-    if domain_runs:
-        all_keys: set = set()
-        for dr in domain_runs: all_keys.update(dr.keys())
-        for d in all_keys:
-            vals = [dr.get(d, 0.0) for dr in domain_runs]
-            avg_domains[d] = sum(vals) / len(domain_runs)
-            domain_active_count[d] = sum(1 for v in vals if v > 0)
+    def _stats(v: List[float], nd: Optional[int] = None) -> Dict[str, float]:
+        x = StatisticalAnalysis.summarize(v, filter_outliers=False)
+        return {k: round(y, nd) if nd else y for k, y in (("mean", x.mean), ("std", x.std), ("min", x.min),
+                ("max", x.max), ("ci95_lower", x.ci95_lower), ("ci95_upper", x.ci95_upper))}
 
-    per_run_power = [e / t for (e, t) in kept if t > 0]
-    p_stats = StatisticalAnalysis.summarize(per_run_power, filter_outliers=False) if per_run_power else None
-    cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0.0
+    def _summary(idx: List[int]) -> Dict[str, Any]:
+        """energy_j, duration_s, power_w (mean of per-run e/t), domains (mean J) and domains_power_w (mean of per-run
+        domain J/t) over the runs idx; a run without a domain breakdown leaves the domain means."""
+        e = _stats([measurement_pairs[i][0] for i in idx])
+        t = _stats([measurement_pairs[i][1] for i in idx])
+        p = _stats([measurement_pairs[i][0] / measurement_pairs[i][1] for i in idx if measurement_pairs[i][1] > 0], 4)
+        dr = [(run_domains[i], measurement_pairs[i][1]) for i in idx if run_domains[i] and measurement_pairs[i][1] > 0]
+        keys = {d for r, _ in dr for d in r}
+        doms = {d: fmean(r.get(d, 0.0) for r, _ in dr) for d in keys}
+        dpow = {d: fmean(r.get(d, 0.0) / t for r, t in dr) for d in keys}
+        return {"runs": len(idx),
+                "energy_j": {**e, "cv_percent_across_runs": round(e["std"] / e["mean"] * 100, 2) if e["mean"] > 0 else 0.0},
+                "duration_s": {k: t[k] for k in ("mean", "std", "min", "max")},
+                "power_w": {**p, "computation": "mean_of_per_run_e_over_t"},
+                "domains": {d: round(j, 6) for d, j in sorted(doms.items(), key=lambda x: -x[1])},
+                "domains_power_w": {d: round(w, 4) for d, w in sorted(dpow.items(), key=lambda x: -x[1])}}
 
-    avg_domains_power: Dict[str, float] = {}
-    if avg_domains and t_stats.mean > 0:
-        avg_domains_power = {d: j / t_stats.mean for d, j in avg_domains.items()}
+    stats = _summary(ok_runs)
+    filtered = {"method": method, **_summary(kept)} if method != "none" else None
+    avg_domains, e_mean, t_mean = stats["domains"], stats["energy_j"]["mean"], stats["duration_s"]["mean"]
 
-    budget_exceeded = budget is not None and e_stats.mean > budget
+    budget_exceeded = budget is not None and e_mean > budget
     sampler = backend.sampler()
-    validity = run_validity([e for e, _ in measurement_pairs], t_stats.mean, sampler, vcfg)
+    validity = run_validity([e for e, _ in measurement_pairs], t_mean, sampler, vcfg)
     validity["checks"] = {"affinity_cpus": _cpuset_size(""),
                           "resolution_ms": resolution_ns(sampler, boundary=True) / 1e6 if sampler else None}
     run_reasons = validity["detail"]
@@ -2997,28 +2856,9 @@ def run_command(
                 "warmup_runs": len(warmup_pairs) if include_warmup else 0,
                 "measurement_runs": repeat,
             },
-            "energy_j": {
-                "mean": e_stats.mean, "std": e_stats.std, "min": e_stats.min, "max": e_stats.max,
-                "ci95_lower": e_stats.ci95_lower, "ci95_upper": e_stats.ci95_upper,
-                "cv_percent_across_runs": round(cv, 2),
-                "outlier_method": method,
-                "raw": {"mean": raw_stats.mean, "std": raw_stats.std, "min": raw_stats.min, "max": raw_stats.max,
-                        "n": raw_stats.n},
-            },
-            "duration_s": {
-                "mean": t_stats.mean, "std": t_stats.std, "min": t_stats.min, "max": t_stats.max,
-                "outliers_removed": iqr_outliers_removed,
-                "paired_with": "energy_j",
-            },
-            "power_w": {
-                "mean": (round(p_stats.mean, 4) if p_stats else 0.0),
-                "std":  (round(p_stats.std, 4) if p_stats else 0.0),
-                "min":  (round(p_stats.min, 4) if p_stats else 0.0),
-                "max":  (round(p_stats.max, 4) if p_stats else 0.0),
-                "ci95_lower": (round(p_stats.ci95_lower, 4) if p_stats else 0.0),
-                "ci95_upper": (round(p_stats.ci95_upper, 4) if p_stats else 0.0),
-                "computation": "mean_of_per_run_e_over_t",
-            },
+            "energy_j": stats["energy_j"],
+            "duration_s": stats["duration_s"],
+            "power_w": stats["power_w"],
             "budget_exceeded": budget_exceeded,
             "validity": validity,
             "sampler": sampler,
@@ -3028,17 +2868,17 @@ def run_command(
         if budget is not None:
             out["budget_j"] = budget
         if avg_domains:
-            out["domains"] = {d: round(j, 6) for d, j in sorted(avg_domains.items(), key=lambda x: -x[1])}
-            out["domains_power_w"] = {d: round(w, 4) for d, w in
-                                      sorted(avg_domains_power.items(), key=lambda x: -x[1])}
+            out.update(domains=avg_domains, domains_power_w=stats["domains_power_w"])
+        if filtered:
+            out["filtered"] = filtered
         print(json.dumps(out, indent=2))
         if run_error and vcfg["fail_on_invalid"]:
             raise typer.Exit(3)
         if budget_exceeded:
             raise typer.Exit(1)
     else:
-        ci_width = e_stats.ci95_upper - e_stats.ci95_lower
-        ci_pct = (ci_width / e_stats.mean * 100) if e_stats.mean > 0 else 0
+        e, t, cv = stats["energy_j"], stats["duration_s"], stats["energy_j"]["cv_percent_across_runs"]
+        ci_pct = ((e["ci95_upper"] - e["ci95_lower"]) / e_mean * 100) if e_mean > 0 else 0
 
         if len(energies) < 3:
             quality, color = "N/A (need 3+ runs)", "dim"
@@ -3051,26 +2891,26 @@ def run_command(
         else:
             quality, color = "high noise", "red"
 
-        console.print(f"\n[bold]Energy:[/bold] {e_stats.mean:.4f} J +/- {e_stats.std:.4f} J")
-        console.print(f"  Range: [{e_stats.min:.4f} .. {e_stats.max:.4f}] J")
-        console.print(f"  CI95:  [{e_stats.ci95_lower:.4f}, {e_stats.ci95_upper:.4f}] J ({ci_pct:.1f}% width)")
+        console.print(f"\n[bold]Energy:[/bold] {e_mean:.4f} J +/- {e['std']:.4f} J")
+        console.print(f"  Range: [{e['min']:.4f} .. {e['max']:.4f}] J")
+        console.print(f"  CI95:  [{e['ci95_lower']:.4f}, {e['ci95_upper']:.4f}] J ({ci_pct:.1f}% width)")
         console.print(f"  CV:    [{color}]{cv:.1f}% ({quality})[/{color}]")
-        console.print(f"[bold]Time:[/bold]   {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
-        console.print(f"[bold]Power:[/bold]  {e_stats.mean / t_stats.mean:.2f} W (avg)")
-        runs_note = f"  Runs: {len(energies)}, Outliers removed: {e_stats.outliers_removed}"
-        if include_warmup and warmup > 0:
-            runs_note += f" (includes {warmup} warmup)"
+        console.print(f"[bold]Time:[/bold]   {t_mean:.4f} s +/- {t['std']:.4f} s")
+        console.print(f"[bold]Power:[/bold]  {stats['power_w']['mean']:.2f} W (mean of per-run E/t)")
+        runs_note = f"  Runs: {len(energies)}" + (f" (includes {warmup} warmup)" if include_warmup and warmup > 0 else "")
         console.print(runs_note)
+        if filtered:
+            console.print(f"  Filtered ({method}): {filtered['energy_j']['mean']:.4f} J over {filtered['runs']} runs, "
+                          f"{iqr_outliers_removed} removed")
 
         if avg_domains:
-            console.print(f"\n[bold]Domain Breakdown (avg of {len(domain_runs)} runs):[/bold]")
-            max_j = max(avg_domains.values()) if avg_domains else 1
-            for domain, joules in sorted(avg_domains.items(), key=lambda x: -x[1]):
+            console.print("\n[bold]Domain Breakdown (mean over runs):[/bold]")
+            max_j = max(avg_domains.values())
+            for domain, joules in avg_domains.items():
                 if joules <= 0: continue
                 bar_len = min(20, int(joules / max_j * 20)) if max_j > 0 else 0
                 bar = "[cyan]" + "=" * bar_len + "[/cyan]" + " " * (20 - bar_len)
-                power = joules / t_stats.mean if t_stats.mean > 0 else 0
-                console.print(f"  {domain:<25} {joules:>8.4f} J  {power:>7.2f} W  {bar}")
+                console.print(f"  {domain:<25} {joules:>8.4f} J  {stats['domains_power_w'][domain]:>7.2f} W  {bar}")
 
         if cv > 20:
             console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
@@ -3081,11 +2921,11 @@ def run_command(
             if vcfg["fail_on_invalid"]:
                 raise typer.Exit(3)
         if budget is not None:
-            if e_stats.mean > budget:
-                console.print(f"[red]BUDGET EXCEEDED: {e_stats.mean:.4f}J > {budget}J[/red]")
+            if budget_exceeded:
+                console.print(f"[red]BUDGET EXCEEDED: {e_mean:.4f}J > {budget}J[/red]")
                 raise typer.Exit(1)
             else:
-                console.print(f"[green]Within budget: {e_stats.mean:.4f}J <= {budget}J[/green]")
+                console.print(f"[green]Within budget: {e_mean:.4f}J <= {budget}J[/green]")
 
 
 class _EnergyBackend:
@@ -3108,6 +2948,9 @@ class _EnergyBackend:
     def sampler(self) -> Optional[Dict[str, Any]]:
         """Provider facts (ABI 4 sampler block) when the backend has them, else None."""
         return None
+    def get_last_domain_breakdown(self) -> Dict[str, float]:
+        """Joules per domain of the last measure(), empty when the backend reports only a total."""
+        return {}
     def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
         """Wrap a shell command for energy + checkpoint capture (project mode)."""
         return f"bash -c '{cmd_str} 2>{checkpoint_file}'"

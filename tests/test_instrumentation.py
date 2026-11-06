@@ -1241,10 +1241,13 @@ def java_rapl_prog(tmp_path_factory):
     return d
 
 
-def _fake_rapl(root, packages):
-    """packages: list of (name, energy_uj, max_range_uj); energy files are fixed-width so in-place rewrites never expose a short read."""
-    for i, (name, energy, rng) in enumerate(packages):
-        dom = root / f"intel-rapl:{i}"
+def _fake_rapl(root, packages, subs=()):
+    """packages: (name, energy_uj, max_range_uj) per zone intel-rapl:i; subs: (zone index, name, energy_uj, max_range_uj)
+    per sub-zone intel-rapl:i:j beside its zone (the /sys/class/powercap layout); energy files are fixed-width so in-place
+    rewrites never expose a short read."""
+    zones = [(f"intel-rapl:{i}", *p) for i, p in enumerate(packages)]
+    for d, name, energy, rng in zones + [(f"intel-rapl:{z}:{j}", n, e, r) for j, (z, n, e, r) in enumerate(subs)]:
+        dom = root / d
         dom.mkdir(parents=True)
         (dom / "name").write_text(name + "\n")
         (dom / "energy_uj").write_text(f"{energy:012d}\n")
@@ -1281,7 +1284,7 @@ def test_java_runtime_rejects_unreadable_package_domain(java_rapl_prog, tmp_path
 
 
 def test_java_runtime_sums_packages_and_handles_counter_wrap(java_rapl_prog, tmp_path):
-    _fake_rapl(tmp_path, [("package-0", 900, 1000), ("package-1", 100, 5000), ("psys", 1, 10)])
+    _fake_rapl(tmp_path, [("package-0", 900, 1000), ("package-1", 100, 5000)], [(0, "core", 1, 10)])
     d0, d1 = (tmp_path / f"intel-rapl:{i}" / "energy_uj" for i in (0, 1))
     r, out = _run_java_rapl(java_rapl_prog, tmp_path, str(d0), f"{100:012d}\n", str(d1), f"{400:012d}\n")
     assert r.returncode == 0, r.stderr
@@ -1294,3 +1297,32 @@ def test_java_runtime_sums_packages_and_handles_counter_wrap(java_rapl_prog, tmp
     row = sums[0].split("|")
     assert row[:3] == ["CG_CP_SUM", row[1], "m"] and row[3] == "1"
     assert int(row[4]) == (100 + 1000 - 900) + (400 - 100)
+
+
+def test_java_runtime_sums_the_domains_nemb_sums(java_rapl_prog, tmp_path):
+    """The poller summed package zones only, while NEMB's intel_rapl provider sums a psys zone alone when present and
+    otherwise every zone plus the dram sub-zones (a counter outside the package), never core."""
+    a, b, rng = tmp_path / "a", tmp_path / "b", 10**9
+    _fake_rapl(a, [("package-0", 0, rng)], [(0, "core", 0, rng), (0, "dram", 0, rng)])
+    _fake_rapl(b, [("package-0", 0, rng), ("psys", 0, rng)], [(0, "dram", 0, rng)])
+    for root, deltas, want in ((a, {"intel-rapl:0": 10, "intel-rapl:0:0": 1000, "intel-rapl:0:1": 3}, 13),
+                               (b, {"intel-rapl:0": 10, "intel-rapl:1": 50, "intel-rapl:0:0": 3}, 50)):
+        r, out = _run_java_rapl(java_rapl_prog, root, *(x for d, v in deltas.items()
+                                                         for x in (str(root / d / "energy_uj"), f"{v:012d}\n")))
+        assert r.returncode == 0, r.stderr
+        assert int(next(ln for ln in out.splitlines() if ln.startswith("CG_CP_SUM|")).split("|")[4]) == want
+
+
+@pytest.mark.needs_energy
+def test_java_poller_provider_facts_match_nemb(java_rapl_prog):
+    """The poller's provider block uses NEMB's vocabulary for the same counters (CLI merges and judges both alike)."""
+    import sys
+    r, out = _run_java_rapl(java_rapl_prog, _java_rapl_env()["CODEGREEN_RAPL_ROOT"])
+    assert r.returncode == 0, r.stderr
+    java = json.loads(next(ln for ln in out.splitlines() if ln.startswith("CG_CP_META|")).split("|", 1)[1])
+    p = subprocess.run([sys.executable, "-m", "codegreen.cli.cli", "run", "--json", "--sensors", "rapl", "-n", "1",
+                        "-w", "0", "--", "sleep", "0.2"], capture_output=True, text=True, timeout=120,
+                       cwd=Path(__file__).parent.parent)
+    nemb = json.loads(p.stdout)["sampler"]["providers"]
+    keys = ("name", "hardware_type", "energy_source", "boundary_source", "counter_group")
+    assert [{k: q[k] for k in keys} for q in java["providers"]] == [{k: q[k] for k in keys} for q in nemb]
