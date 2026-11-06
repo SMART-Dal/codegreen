@@ -55,6 +55,7 @@ public:
         bool auto_restart_failed_providers{true};
         std::chrono::seconds provider_restart_interval{30};
         uint32_t max_consecutive_failures{5};
+        bool real_time_filtering{false};  // EMA power reported next to (never instead of) raw power
     };
 
     struct NEMBConfig {

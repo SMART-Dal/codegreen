@@ -22,7 +22,9 @@ namespace codegreen::nemb {
 struct SynchronizedReading {
     uint64_t common_timestamp_ns{0};                   ///< Aligned timestamp for all readings
     std::vector<EnergyReading> provider_readings;      ///< Individual provider measurements
-    double total_system_power_watts{0.0};             ///< Aggregated system power
+    double total_system_power_watts{0.0};             ///< Aggregated system power (raw, never filtered)
+    double filtered_system_power_watts{0.0};          ///< EMA of total_system_power_watts; set only when power_filtered
+    bool power_filtered{false};                       ///< real-time filtering was on for this reading
     double total_system_energy_joules{0.0};           ///< Aggregated system energy
     double measurement_confidence{0.0};               ///< Overall confidence (0-1)
     
@@ -44,7 +46,7 @@ struct CoordinatorConfig {
     std::chrono::milliseconds measurement_interval{10};  ///< Target measurement interval
     double temporal_alignment_tolerance_ms{1.0};         ///< Time alignment tolerance
     double cross_validation_threshold{0.1};              ///< 10% deviation threshold
-    bool enable_real_time_filtering{true};               ///< Apply noise filtering
+    bool enable_real_time_filtering{false};              ///< Add an EMA power next to the raw power (never replaces it)
     bool enable_outlier_detection{true};                 ///< Remove measurement outliers
     uint32_t measurement_buffer_size{1000};              ///< Circular buffer size
     bool auto_restart_failed_providers{true};            ///< Restart failed providers

@@ -490,13 +490,11 @@ bool MeasurementCoordinator::cross_validate_measurements(SynchronizedReading& re
 
 void MeasurementCoordinator::apply_real_time_filtering(SynchronizedReading& reading) {
     const double alpha = 0.1;
-    if (filter_first_reading_) {
-        filtered_power_ = reading.total_system_power_watts;
-        filter_first_reading_ = false;
-    } else {
-        filtered_power_ = alpha * reading.total_system_power_watts + (1.0 - alpha) * filtered_power_;
-        reading.total_system_power_watts = filtered_power_;
-    }
+    filtered_power_ = filter_first_reading_ ? reading.total_system_power_watts
+                                            : alpha * reading.total_system_power_watts + (1.0 - alpha) * filtered_power_;
+    filter_first_reading_ = false;
+    reading.filtered_system_power_watts = filtered_power_;  // supplementary; the raw total is left untouched
+    reading.power_filtered = true;
 }
 
 void MeasurementCoordinator::buffer_reading(const SynchronizedReading& reading) {

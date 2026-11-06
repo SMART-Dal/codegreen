@@ -32,7 +32,8 @@
         "provider_restart_interval": 5000,
         "cross_validation": true,
         "cross_validation_threshold": 0.05,
-        "max_consecutive_failures": 5
+        "max_consecutive_failures": 5,
+        "real_time_filtering": false
       },
       "timing": {
         "precision": "high",

@@ -152,6 +152,7 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
     coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
     coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
     coordinator_config.max_consecutive_failures = nemb_config.coordinator.max_consecutive_failures;
+    coordinator_config.enable_real_time_filtering = nemb_config.coordinator.real_time_filtering;
     config_path_ = nemb_config.path;
     max_checkpoints_ = nemb_config.max_checkpoints;
     markers_.reserve(10000);
@@ -619,8 +620,9 @@ extern "C" {
     //   {
     //     "t_ns":     CLOCK_MONOTONIC nanoseconds at sample time,
     //     "energy_j": cumulative system-wide joules from session start (sum across providers),
-    //     "power_w":  system-wide instantaneous watts at this sample (sum across domains),
-    //     "domain_j": {<domain>: cumulative joules from session start},
+    //     "power_w":  system-wide instantaneous watts at this sample (sum across domains, raw),
+    //     "power_w_filtered": EMA of power_w, present only when nemb coordinator real_time_filtering is on,
+    //     "domain_j": {<domain>: cumulative joules from session start; signed, a failed domain reads negative},
     //     "domain_w": {<domain>: average watts since previous sample}
     //   }
     // Domains whose provider does not expose per-domain power (e.g. Darwin
@@ -638,8 +640,9 @@ extern "C" {
             if (!first) ss << ",";
             ss << "{\"t_ns\":"     << r.common_timestamp_ns
                << ",\"energy_j\":" << r.total_system_energy_joules
-               << ",\"power_w\":"  << r.total_system_power_watts
-               << ",\"domain_j\":{";
+               << ",\"power_w\":"  << r.total_system_power_watts;
+            if (r.power_filtered) ss << ",\"power_w_filtered\":" << r.filtered_system_power_watts;
+            ss << ",\"domain_j\":{";
             bool dfirst = true;
             for (auto& pr : r.provider_readings) {
                 for (auto& [domain, joules] : pr.domain_energy_joules) {

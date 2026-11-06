@@ -77,6 +77,7 @@ public:
     EnergyReading get_reading() override {
         EnergyReading r; r.provider_id = "fake"; r.timestamp_ns = utils::PrecisionTimer::monotonic_timestamp_ns();
         r.energy_joules = ok_ ? (j_ += 0.5) : -1.0;
+        r.average_power_watts = ok_ ? j_ : 0.0;  // rising power: an EMA lags behind it
         if (hold_) held_readings_++;
         return r;
     }
@@ -144,6 +145,22 @@ static void test_coordinator() {
     CHECK(grow.set_buffer_size(1) && grow.buffer_wrapped());  // a resize that drops readings reports them
     auto kept = grow.get_buffered_readings();
     CHECK(kept.size() == 1 && kept[0].common_timestamp_ns == all.back().common_timestamp_ns);
+    for (const auto& x : all) CHECK(!x.power_filtered);  // filtering is off by default
+
+    CoordinatorConfig fcfg = cfg;
+    fcfg.enable_real_time_filtering = true;
+    MeasurementCoordinator filt(fcfg);
+    CHECK(filt.add_provider(std::make_unique<FakeProvider>(true)));
+    CHECK(filt.start_measurements());
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    filt.stop_measurements();
+    size_t n_filtered = 0;
+    bool lagged = false;
+    for (const auto& x : filt.get_buffered_readings()) {
+        CHECK(x.total_system_power_watts == x.provider_readings[0].average_power_watts);  // primary power stays raw
+        if (x.power_filtered) { ++n_filtered; lagged |= x.filtered_system_power_watts < x.total_system_power_watts; }
+    }
+    CHECK(n_filtered >= 2 && lagged);
 
     MeasurementCoordinator bad(cfg);
     CHECK(bad.add_provider(std::make_unique<FakeProvider>(true)));

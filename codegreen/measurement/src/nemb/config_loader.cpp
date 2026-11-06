@@ -195,6 +195,7 @@ ConfigLoader::NEMBConfig ConfigLoader::parse_json_config(const std::string& json
         uint32_t restart_ms = get_uint("provider_restart_interval", 30000);
         config.coordinator.provider_restart_interval = std::chrono::seconds(restart_ms / 1000);
         config.coordinator.max_consecutive_failures = get_uint("max_consecutive_failures", config.coordinator.max_consecutive_failures);
+        config.coordinator.real_time_filtering = get_bool("real_time_filtering", config.coordinator.real_time_filtering);
     }
     return config;
 }
