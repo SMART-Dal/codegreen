@@ -31,7 +31,8 @@
         "auto_restart_failed_providers": true,
         "provider_restart_interval": 5000,
         "cross_validation": true,
-        "cross_validation_threshold": 0.05
+        "cross_validation_threshold": 0.05,
+        "max_consecutive_failures": 5
       },
       "timing": {
         "precision": "high",

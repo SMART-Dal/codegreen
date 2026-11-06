@@ -54,9 +54,11 @@ public:
         uint32_t measurement_buffer_size{1000};
         bool auto_restart_failed_providers{true};
         std::chrono::seconds provider_restart_interval{30};
+        uint32_t max_consecutive_failures{5};
     };
-    
+
     struct NEMBConfig {
+        std::string path;  // file the values came from; empty = built-in defaults
         bool enabled{true};
         std::string accuracy_mode{"production"};
         AccuracyConfig accuracy;
@@ -68,8 +70,9 @@ public:
     
     /**
      * @brief Load NEMB configuration from file
-     * @param config_path Path to config file (empty for default)
+     * @param config_path Path to config file (empty: find_config_file(), built-in defaults when none)
      * @return Parsed configuration
+     * @throws std::runtime_error naming the path when the file cannot be read or parsed
      */
     static NEMBConfig load_config(const std::string& config_path = "");
     
@@ -85,7 +88,11 @@ public:
      */
     static NEMBConfig get_performance_optimized_config();
     
-    /** @brief Config file the loader resolves (empty when built-in defaults are used). */
+    /**
+     * @brief Config file the loader resolves: $CODEGREEN_CONFIG (must exist, else throws), then the
+     * bundled config.json next to this library (<libdir>/../config.json, <libdir>/../codegreen/config.json);
+     * empty when none exists and built-in defaults are used.
+     */
     static std::string find_config_file();
 
 private:
