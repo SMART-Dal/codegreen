@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -97,3 +98,43 @@ def test_pyalloc_writes_line_hot_spots_read_back_as_line_records(tmp_path):
     assert argv[-3:] == ["--", str(script), "-v"] and argv[argv.index("--top") + 1] == str(ls.settings("python")["alloc_top"])
     with pytest.raises(ValueError, match="needs a Python interpreter"):
         ls.adapter("python").alloc(["./run.sh"], out, {})
+
+
+JAVA = ("java/lang/Thread.run:829;org/rb/Bitmap.add:10;org/rb/Util.low:5 30\n"
+        "java.lang.Thread.run:829;org.rb.Bitmap.add:10;org.rb.Util.low:5 20\n"
+        "java.lang.Thread.run:829;org.rb.Bitmap.add:12 25\n"
+        "java.lang.Thread.run:829;org.rb.Bitmap.add:12;org.rb.Bitmap$Node.lambda$add$0:0 15\n"
+        "java.lang.Thread.run:829;org.rb.Bitmap.add:10;org.rb.Util.low:5;libjvm.so 6\n"
+        "JavaThread::thread_main_inner 4\n")
+
+
+def test_java_lines_come_from_the_config_frame_grammar_as_common_schema_records(tmp_path, monkeypatch):
+    (tmp_path / "ap" / "lib").mkdir(parents=True)
+    (tmp_path / "ap" / "lib" / "libasyncProfiler.so").write_text("")
+    (tmp_path / "ap" / "bin").mkdir()
+    (tmp_path / "ap" / "bin" / "jfrconv").write_text("")
+    root, proj = str(tmp_path / "ap"), str(tmp_path / "proj")
+    argv, env = ls.command("java", ["java", "-cp", "x", "Main"], tmp_path / "o", None, {"async_profiler": root}, env={})
+    assert argv == ["java", "-cp", "x", "Main"] and env["JAVA_TOOL_OPTIONS"].endswith(
+        f"event=cpu,interval=997us,jfr,file={tmp_path}/o/%p.jfr -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints")
+
+    def jfrconv(cmd, **kw):
+        Path(cmd[-1]).write_text(JAVA)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    (tmp_path / "o" / "7.jfr").write_text("")
+    monkeypatch.setattr("subprocess.run", jfrconv)
+    files = ls.read("java", tmp_path / "o", {"async_profiler": root})
+    lp = ls.line_profile("java", files, proj)
+    assert lp["samples"] == 100 and all(isinstance(r, MetricRecord) for r in lp["lines"])
+    assert [(r.detail["file"], r.detail["function"], r.detail["line"], r.value, r.detail["total_samples"]) for r in lp["lines"]] == [
+        ("org.rb.Util", "low", 5, 50, 56), ("org.rb.Bitmap", "add", 12, 25, 40),
+        ("org.rb.Bitmap$Node", "lambda$add$0", None, 15, 15), ("org.rb.Bitmap", "add", 10, 0, 56)]
+    run = {r.metric: r for r in lp["run"]}
+    assert (run["project_leaf_samples"].value, run["library_leaf_samples"].value, run["native_leaf_samples"].value) == (90, 0, 10)
+    assert not run["irreducible_leaf_samples"].available and "no irreducible_re" in run["irreducible_leaf_samples"].reason
+    assert {(c["function"], c["line"], c["callee_function"], c["samples"]) for c in lp["call_sites"]} == {
+        ("add", 10, "low", 56), ("add", 12, "lambda$add$0", 15), ("low", 5, "libjvm.so", 6)}
+    with pytest.raises(FileNotFoundError, match="no JFR recording"):
+        ls.read("java", tmp_path / "empty", {"async_profiler": root})
+    assert ls.capabilities("java", {"async_profiler": root})["available"]
+    assert not ls.capabilities("java", {"async_profiler": str(tmp_path)})["available"]

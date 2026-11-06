@@ -24,6 +24,7 @@ from typing import Callable, Optional
 
 from codegreen.analysis import languages
 from codegreen.analysis.metrics import MetricRecord
+from codegreen.analysis.sampling import async_profiler_lib, java_agent_command, java_agent_option, jfr_to_collapsed
 from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import load_config
 
 PROVIDER = "line_sampler"
@@ -252,6 +253,33 @@ def _pyalloc(argv: list[str], out: Path, options: dict) -> tuple[list[str], dict
 
 
 register(LineAdapter("python", _pyspy_record, _pyspy_read, _pyspy_inspect, _pyalloc))
+
+
+# Java: async-profiler in JFR format (line numbers), converted by jfrconv --lines; JVM options of flags and features
+# go with the agent. async_profiler names the release directory ("" = $CODEGREEN_ASYNC_PROFILER).
+def _jfr_record(argv: list[str], out: Path, rate_hz: int, flags: list[str], s: dict, env: dict) -> tuple[list[str], dict]:
+    agent = java_agent_option(out, round(1e6 / rate_hz), root=os.path.expanduser(s["async_profiler"]), fmt="jfr")
+    return java_agent_command(argv, " ".join([agent, *flags]), env)
+
+
+def _jfr_read(out: Path, s: dict) -> list[Path]:
+    jfrs = sorted(out.glob("*.jfr"))
+    if not jfrs:
+        raise FileNotFoundError(f"{out}: no JFR recording (agent not loaded into the sampled JVM?)")
+    return jfr_to_collapsed(jfrs, out, os.path.expanduser(s["async_profiler"]))
+
+
+def _jfr_inspect(s: dict) -> dict:
+    try:
+        jfrconv = async_profiler_lib(os.path.expanduser(s["async_profiler"])).parents[1] / "bin" / "jfrconv"
+    except (RuntimeError, FileNotFoundError) as e:
+        return {"available": False, "version": "", "flags": {}, "reason": str(e)}
+    if not jfrconv.is_file():
+        return {"available": False, "version": "", "flags": {}, "reason": f"{jfrconv} not found"}
+    return {"available": True, "version": "", "reason": "", "flags": dict.fromkeys({**s["feature_flags"], **s["pass_flags"]}, True)}
+
+
+register(LineAdapter("java", _jfr_record, _jfr_read, _jfr_inspect))
 
 
 if __name__ == "__main__":   # capability probe: python -m codegreen.analysis.line_sampling <language>

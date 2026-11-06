@@ -11,6 +11,8 @@ Java uses async-profiler (AsyncGetCallTrace + perf_events; no
 -jvmArgsAppend so only the measured forks load it (through JAVA_TOOL_OPTIONS
 the fork received it twice, env plus the launcher's own JVM arguments, and the
 second load aborted the fork); any other JVM gets JAVA_TOOL_OPTIONS.
+Source-line samples come from a JFR recording (`java_agent_option(fmt="jfr")`)
+converted by `jfr_to_collapsed`; the Java line sampler (line_sampling) reads them.
 Shares are time-proportional: a method's share of CPU samples, not of energy;
 for a compute-bound pinned workload package power is near constant, so a
 share times the run's measured energy is a time-proportional estimate.
@@ -31,7 +33,9 @@ from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import
 
 ASYNC_PROFILER_ENV = "CODEGREEN_ASYNC_PROFILER"
 TIME_EVENTS = ("cpu", "wall", "itimer")   # async-profiler events whose interval is time; any other is a perf event count
+FORMATS = {"collapsed": "ann,collapsed", "jfr": "jfr"}   # async-profiler output format -> agent options
 _ANNOT = re.compile(r"_\[([jiIk0-9]+)\]$")
+_LINE = re.compile(r":\d+$")
 
 
 def async_profiler_lib(root: str = "") -> Path:
@@ -46,9 +50,13 @@ def async_profiler_lib(root: str = "") -> Path:
     return lib
 
 
-def java_agent_option(out_dir: Path, interval: int, event: str = "cpu", root: str = "") -> str:
-    """-agentpath option sampling `event` into out_dir/<pid>.collapsed; `ann` marks
-    JIT-compiled (_[j]) and inlined (_[i]) frames. `interval` is microseconds for
+def java_agent_option(out_dir: Path, interval: int, event: str = "cpu", root: str = "", fmt: str = "collapsed") -> str:
+    """-agentpath option sampling `event` into out_dir/<pid>.<fmt> (FORMATS).
+    Collapsed output carries no line numbers; `ann` marks JIT-compiled (_[j])
+    and inlined (_[i]) frames. JFR keeps line numbers (read them through
+    `jfr_to_collapsed`) but jfrconv has no `ann`, so the inlined marks are lost;
+    accurate lines inside compiled code also need -XX:+UnlockDiagnosticVMOptions
+    -XX:+DebugNonSafepoints in the sampled JVM. `interval` is microseconds for
     a time event (TIME_EVENTS) and occurrences for a perf event (cache-misses,
     ...), which async-profiler's perf_events mode samples with JIT frames that
     perf alone cannot resolve. Use an interval that is not a multiple of common
@@ -56,10 +64,32 @@ def java_agent_option(out_dir: Path, interval: int, event: str = "cpu", root: st
     The profiled JVM resolves `file=` against its own working directory and does
     not create directories, so the path is made absolute here (a relative one
     silently yields no profile)."""
+    if fmt not in FORMATS:
+        raise ValueError(f"unknown async-profiler output {fmt!r}: use one of {sorted(FORMATS)}")
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     return (f"-agentpath:{async_profiler_lib(root)}=start,event={event},interval={int(interval)}"
-            f"{'us' if event in TIME_EVENTS else ''},ann,collapsed,file={out_dir}/%p.collapsed")
+            f"{'us' if event in TIME_EVENTS else ''},{FORMATS[fmt]},file={out_dir}/%p.{fmt}")
+
+
+def jfr_to_collapsed(jfr_paths: list[Path], out_dir: Path, root: str = "") -> list[Path]:
+    """Convert JFR files to collapsed stacks with line numbers (`jfrconv --cpu --lines -o collapsed
+    in.jfr out.collapsed`, jfrconv from the async-profiler release `root`); one out_dir/<stem>.collapsed per file."""
+    jfrconv = async_profiler_lib(root).parents[1] / "bin" / "jfrconv"
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outs = []
+    for jfr in jfr_paths:
+        out = out_dir / f"{Path(jfr).stem}.collapsed"
+        cmd = [str(jfrconv), "--cpu", "--lines", "-o", "collapsed", str(jfr), str(out)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"{shlex.join(cmd)}: {e}") from e
+        if r.returncode != 0:
+            raise RuntimeError(f"{shlex.join(cmd)} exited {r.returncode}: {r.stderr.strip()}")
+        outs.append(out)
+    return outs
 
 
 def is_jmh_jar(path: str) -> bool:
@@ -83,17 +113,18 @@ def java_agent_command(argv: list[str], agent: str, env: dict) -> tuple[list[str
 
 
 def _frame(raw: str) -> tuple[str, bool]:
-    """('pkg.Class.method', inlined) from a collapsed frame."""
+    """('pkg.Class.method', inlined) from a collapsed frame; a ':LINE' suffix (jfrconv --lines) is dropped."""
     m = _ANNOT.search(raw)
-    name = raw[:m.start()] if m else raw
+    name = _LINE.sub("", raw[:m.start()] if m else raw)
     return name.replace("/", "."), bool(m and m.group(1) == "i")
 
 
-def parse_collapsed(paths: list[Path]) -> dict:
+def parse_collapsed(paths: list[Path], annotated: bool = True) -> dict:
     """Per-method sample shares over every collapsed file:
     {"samples": N, "methods": {name: {"self_pct", "total_pct", "inlined_pct"}}}.
     self = leaf frame; total = anywhere on the stack (counted once per stack);
-    inlined_pct = share of the method's stack appearances where it ran inlined."""
+    inlined_pct = share of the method's stack appearances where it ran inlined,
+    None when the files carry no annotations (annotated=False: jfrconv output)."""
     if not paths:
         raise ValueError("no collapsed profile files: the agent wrote nothing "
                          "(not loaded into the measured JVM, or its file= path was not writable there)")
@@ -117,7 +148,7 @@ def parse_collapsed(paths: list[Path]) -> dict:
         raise ValueError(f"no samples in {[str(p) for p in paths]}")
     return {"samples": samples, "methods": {
         name: {"self_pct": 100.0 * self_n[name] / samples, "total_pct": 100.0 * total_n[name] / samples,
-               "inlined_pct": 100.0 * inlined_n[name] / seen_n[name]}
+               "inlined_pct": 100.0 * inlined_n[name] / seen_n[name] if annotated else None}
         for name in total_n}}
 
 

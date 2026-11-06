@@ -201,7 +201,13 @@
         ".java"
       ],
       "line_sampler": {
-        "_comment": "Java frame grammar of async-profiler collapsed stacks, shared by the event sampler (codegreen.analysis.sampling) and the line sampler: frame_re groups file (the class), func and an optional line (jfrconv --lines), an optional JIT annotation is dropped, a shared object or a C++ frame is native; file_replace turns '/' class separators into '.'.",
+        "_comment": "codegreen.analysis.line_sampling and the Java event sampler (codegreen.analysis.sampling). Line samples: async-profiler JFR at rate_hz converted by jfrconv --lines; async_profiler: release directory (empty: $CODEGREEN_ASYNC_PROFILER); flags: JVM options loaded with the agent (DebugNonSafepoints gives accurate lines inside compiled code). frame_re matches one collapsed frame (groups file = the class, func, optional line; an optional JIT annotation is dropped; a shared object or C++ frame is native), file_replace turns '/' class separators into '.', library_re marks JDK classes. No irreducible_re is declared.",
+        "async_profiler": "",
+        "rate_hz": 1003,
+        "flags": ["-XX:+UnlockDiagnosticVMOptions", "-XX:+DebugNonSafepoints"],
+        "feature_flags": {},
+        "pass_flags": {},
+        "library_re": "^(?:java|javax|jdk|sun|com\\.sun)\\.",
         "frame_re": "(?!.*\\.so(?:\\.\\d+)*$)(?P<file>[\\w$/.<>-]+)\\.(?P<func>[\\w$<>-]+)(?::(?P<line>\\d+))?(?:_\\[[jiIk0-9]+\\])?",
         "file_replace": {"/": "."}
       }
