@@ -1063,18 +1063,26 @@ def _fake_rapl(root, packages):
         (dom / "max_energy_range_uj").write_text(f"{rng}\n")
 
 
-def _run_java_rapl(prog, root, *writes):
+def _java_rapl_env():
+    """The poller settings `codegreen project` exports from java.json project_config.runtime_injection.env."""
+    cfg = json.loads((Path(__file__).parent.parent / "codegreen/instrumentation/configs/java.json").read_text())
+    return cfg["project_config"]["runtime_injection"]["env"]
+
+
+def _run_java_rapl(prog, root, *writes, env=None):
     ck = prog / "cp.txt"
     ck.unlink(missing_ok=True)
     r = subprocess.run(
-        ["java", f"-Dcodegreen.rapl.root={root}", "-cp", str(prog), "Prog", *writes],
-        capture_output=True, text=True, env={**os.environ, "CG_CP_CHECKPOINT_FILE": str(ck)}, timeout=60)
+        ["java", f"-Dcodegreen.rapl.root={root}", "-cp", str(prog), "Prog", *writes], capture_output=True, text=True,
+        env={**os.environ, **(_java_rapl_env() if env is None else env), "CG_CP_CHECKPOINT_FILE": str(ck)}, timeout=60)
     return r, (ck.read_text() if ck.exists() else "")
 
 
 def test_java_runtime_fails_loudly_without_rapl(java_rapl_prog, tmp_path):
     r, out = _run_java_rapl(java_rapl_prog, tmp_path / "missing")
-    assert r.returncode != 0 and "no RAPL package domain" in r.stderr and out == ""
+    assert r.returncode != 0 and "no zone matching" in r.stderr and out == ""
+    r, _ = _run_java_rapl(java_rapl_prog, tmp_path / "missing", env={})
+    assert r.returncode != 0 and "CODEGREEN_RAPL_ZONE" in r.stderr and "is unset" in r.stderr
 
 
 def test_java_runtime_rejects_unreadable_package_domain(java_rapl_prog, tmp_path):
@@ -1092,6 +1100,9 @@ def test_java_runtime_sums_packages_and_handles_counter_wrap(java_rapl_prog, tmp
     meta, sums = [ln for ln in out.splitlines() if ln.startswith("CG_CP_META|")], \
         [ln for ln in out.splitlines() if ln.startswith("CG_CP_SUM|")]
     assert len(meta) == 1 and len(sums) == 1
+    m = json.loads(meta[0].split("|", 1)[1])
+    assert m["marker_reads"] == "last_poll" and m["failed_reads"] == 0 and m["readings"] >= 1
+    assert [p["name"] for p in m["providers"]] == ["intel_rapl"] and m["providers"][0]["energy_source"] == "counter"
     row = sums[0].split("|")
     assert row[:3] == ["CG_CP_SUM", row[1], "m"] and row[3] == "1"
     assert int(row[4]) == (100 + 1000 - 900) + (400 - 100)

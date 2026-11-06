@@ -1676,14 +1676,15 @@ class TestJavaAggregateFile:
         for name, text in (("name", "package-0"), ("energy_uj", "0"), ("max_energy_range_uj", "1000000")):
             (dom / name).write_text(text + "\n")
         for _ in range(2):
-            r = subprocess.run(["java", f"-Dcodegreen.rapl.root={tmp_path / 'rapl'}", "-cp", str(tmp_path), "T"], env=env,
-                               capture_output=True, text=True, check=True)
+            r = subprocess.run(["java", f"-Dcodegreen.rapl.root={tmp_path / 'rapl'}", "-Dcodegreen.rapl.zone=intel-rapl:\\d+",
+                                "-Dcodegreen.rapl.domain=package.*", "-Dcodegreen.rapl.poll_us=1000", "-cp", str(tmp_path), "T"],
+                               env=env, capture_output=True, text=True, check=True)
             assert r.stderr == ""
         lines = (tmp_path / "sum").read_text().splitlines()
         sums = [line for line in lines if line.startswith("CG_CP_SUM|")]
-        metas = [line.split("|") for line in lines if line.startswith("CG_CP_META|")]
+        metas = [json.loads(line.split("|", 1)[1]) for line in lines if line.startswith("CG_CP_META|")]
         assert len(sums) == 2 and all("|T.f|1000|" in line for line in sums) and len(lines) == 4
-        assert len(metas) == 2 and all(len(m) == 6 and int(m[5]) == 1_000_000 for m in metas)
+        assert len(metas) == 2 and all(m["interval_ms"] == 1.0 and m["marker_reads"] == "last_poll" for m in metas)
 
 
 def test_project_restores_sources_after_an_interrupted_run(tmp_path):
@@ -1772,22 +1773,29 @@ def _vcp(cid: str, ts: int, joules: float, ri: int, clamp: str = "none", tid: st
             "clamp": clamp, "provider_j": {"intel_rapl": joules}}
 
 
+def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
+    return {"name": name, "hardware_type": hw, "energy_source": source, "update_interval_ms": ms,
+            "counter_group": "cpu_package" if hw == "cpu" else "", "rejected": 0, "held": 0, **kw}
+
+
 def _vsampler(**kw) -> Dict:
-    return {"interval_ms": 10, "buffer_capacity": 100000, "readings": 50, "wrapped": False, "rejected_readings": 0,
-            "first_ns": 0, "last_ns": 500_000_000, "median_gap_ns": 10_000_000, "max_gap_ns": 12_000_000,
-            "affinity_cpus": 8, "providers": ["intel_rapl"], "config_path": "config.json", "dropped_checkpoints": 0,
-            **kw}
+    """An ABI 4 sampler block (wire contract: providers objects, marker_reads, interval range, failed_reads)."""
+    return {"interval_ms": 10, "interval_ms_min": 10, "interval_ms_max": 10, "buffer_capacity": 100000,
+            "readings": 50, "wrapped": False, "rejected_readings": 0, "failed_reads": 0, "first_ns": 0,
+            "last_ns": 500_000_000, "median_gap_ns": 10_000_000, "max_gap_ns": 12_000_000, "affinity_cpus": 8,
+            "sampler_affinity_cpus": 8, "providers": [_vprov()], "marker_reads": "interpolated",
+            "config_path": "config.json", "dropped_checkpoints": 0, **kw}
 
 
 class TestValidity:
     """measurement_validity reason codes on synthetic NEMB ABI-4 results (no hardware)."""
 
     @staticmethod
-    def _check(cps=None, sampler=None, run=None, explicit=False):
+    def _check(cps=None, sampler=None, run=None, cfg=None):
         from codegreen.cli.cli import measurement_validity, _measurement_cfg
         cps = [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 400_000_000, 9.0, 41)] if cps is None else cps
-        return measurement_validity(cps, _vsampler() if sampler is None else sampler, run or {}, explicit,
-                                    _measurement_cfg())
+        return measurement_validity(cps, _vsampler() if sampler is None else sampler, run or {},
+                                    cfg or _measurement_cfg())
 
     def test_package_under_test_is_this_tree(self):
         assert Path(codegreen.__file__).resolve().parents[1] == _CG_REPO
@@ -1799,16 +1807,80 @@ class TestValidity:
         ({"max_gap_ns": 400_000_000}, "SAMPLER_STARVED"),
         ({"median_gap_ns": 16_000_000}, "SAMPLER_STARVED"),
         ({"wrapped": True}, "BUFFER_WRAPPED"),
-        ({"affinity_cpus": 1}, "AFFINITY_SINGLE_CPU"),
-        ({"providers": ["intel_rapl", "nvidia_gpu"]}, "GPU_IN_TOTAL"),
         ({"dropped_checkpoints": 3}, "CHECKPOINT_CAP"),
+        ({"provider_restarts": 1}, "PROVIDER_READ_FAILED"),
+        ({"marker_reads": "last_poll", "failed_reads": 2}, "PROVIDER_READ_FAILED"),
     ])
     def test_sampler_reasons(self, sampler_kw, code):
         assert self._check(sampler=_vsampler(**sampler_kw))["reasons"] == [code]
 
-    def test_gpu_in_total_needs_implicit_sensors(self):
-        v = self._check(sampler=_vsampler(providers=["intel_rapl", "nvidia_gpu"]), explicit=True)
-        assert v["status"] == "valid"
+    @pytest.mark.parametrize("sampler_kw,code", [
+        ({"affinity_cpus": 1}, "AFFINITY_SINGLE_CPU"),
+        ({"providers": [_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)]}, "GPU_IN_TOTAL"),
+        ({"providers": [_vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, held=3)]}, "GPU_READ_HELD"),
+        ({"rejected_readings": 4}, "READINGS_REJECTED"),
+        ({"failed_reads": 4}, "PROVIDER_READ_FAILED"),
+        ({"marker_reads": "last_poll", "max_gap_ns": 400_000_000}, "SAMPLER_GAP"),
+    ])
+    def test_sampler_warnings(self, sampler_kw, code):
+        v = self._check(sampler=_vsampler(**sampler_kw))
+        assert v["status"] == "valid" and list(v["warnings"]) == [code]
+
+    def test_gap_policy_is_config(self):
+        from codegreen.cli.cli import _measurement_cfg
+        cfg = _measurement_cfg()
+        cfg["gap_policy"] = {**cfg["gap_policy"], "interpolated": {**cfg["gap_policy"]["interpolated"], "severity": "warning"}}
+        v = self._check(sampler=_vsampler(max_gap_ns=400_000_000), cfg=cfg)
+        assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
+        with pytest.raises(KeyError):
+            self._check(sampler=_vsampler(marker_reads="unknown"))
+
+    def test_runtime_embeds_validity_and_cli_adds_process_reasons(self, tmp_path):
+        from codegreen.cli.cli import _run_energy_measurement, Language
+        cps = [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 9, 9.0, 41)]
+        embedded = {"measurements": cps, "sampler": _vsampler(), "validity": {
+            "status": "invalid", "reasons": ["ZERO_ENERGY"], "detail": {"ZERO_ENERGY": "x"}, "warnings": {"W": "y"}}}
+        (tmp_path / "w.py").write_text(f"print('--- CODEGREEN_RESULT_START ---'); print({json.dumps(json.dumps(embedded))}); "
+                                       "print('--- CODEGREEN_RESULT_END ---')\nraise SystemExit(4)\n")
+        v = _run_energy_measurement(tmp_path / "w.py", Language.python, None, False, 30, None, True)["validity"]
+        assert v["reasons"] == ["ZERO_ENERGY", "INCOMPLETE_CRASH"] and v["warnings"] == {"W": "y"}
+
+    def test_atexit_payload_carries_validity(self, tmp_path):
+        rt_dir = Path(codegreen.__file__).parent / "instrumentation" / "language_runtimes" / "python"
+        cps = [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 9, 1.0, 41)]
+        (tmp_path / "w.py").write_text(
+            "import atexit, types\nimport codegreen_runtime as rt\n"
+            f"final = {{'measurements': {cps!r}, 'sampler': {_vsampler()!r}}}\n"
+            "rt._get_nemb_client = lambda: types.SimpleNamespace(lib=None, abi=4, get_final_measurements=lambda: final)\n"
+            "atexit.register(rt._report_at_exit)\n")
+        r = subprocess.run([sys.executable, "w.py"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "PYTHONPATH": str(rt_dir)})
+        from codegreen.cli.cli import _nemb_result_block
+        assert r.returncode == 0, r.stderr
+        assert _nemb_result_block(r.stdout)["validity"]["reasons"] == ["ZERO_ENERGY"]
+
+    def test_config_resolver_merges_and_fails_loud(self, tmp_path, monkeypatch):
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+        user = tmp_path / "c.json"
+        user.write_text(json.dumps({"measurement": {"report": {"validity": {"min_affinity_cpus": 4}}}}))
+        monkeypatch.setenv("CODEGREEN_CONFIG", str(user))
+        cfg = rt._measurement_cfg()
+        assert cfg["min_affinity_cpus"] == 4 and cfg["gap_policy"]["interpolated"]["severity"] == "fatal"
+        user.write_text("{bad")
+        with pytest.raises(RuntimeError, match=str(user)):
+            rt._measurement_cfg()
+
+    def test_sensor_selection_builds_provider_alternatives(self):
+        from codegreen.cli.cli import _measurement_cfg, providers_env
+        cfg = _measurement_cfg()
+        assert providers_env(None, cfg) is None and providers_env(["rapl", "nvidia"], cfg) == "intel_rapl|amd_rapl,nvidia_gpu"
+        cfg["nemb_providers"] = {**cfg["nemb_providers"], "amd_rapl": {"enabled": False}}
+        assert providers_env(["rapl"], {**cfg, "default_sensors": ["rapl"]}) == "intel_rapl"
+        assert providers_env(None, {**cfg, "default_sensors": ["rapl"]}) == "intel_rapl"
+        with pytest.raises(ValueError, match="default_sensors"):
+            providers_env(None, cfg)
+        with pytest.raises(ValueError, match="every provider disabled"):
+            providers_env(["amd_cpu"], cfg)
 
     @pytest.mark.parametrize("cps,code", [
         ([_vcp("enter:main:E", 0, 1.0, 0, "before_first"), _vcp("exit:main:X", 9, 9.0, 41)], "MARKER_CLAMPED"),
@@ -1823,33 +1895,50 @@ class TestValidity:
     def test_stale_library_and_incomplete_runs(self):
         from codegreen.cli.cli import measurement_validity, _measurement_cfg
         cfg, cps = _measurement_cfg(), [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 9, 9.0, 41)]
-        assert measurement_validity(cps, None, {}, False, cfg)["reasons"] == ["STALE_LIBRARY"]
-        assert measurement_validity([], None, {}, False, cfg)["reasons"] == ["INCOMPLETE_NO_CHECKPOINTS"]
+        assert measurement_validity(cps, None, {}, cfg)["reasons"] == ["STALE_LIBRARY"]
+        assert measurement_validity([], None, {}, cfg)["reasons"] == ["INCOMPLETE_NO_CHECKPOINTS"]
         assert self._check(run={"timed_out": True, "timeout_s": 5, "returncode": -15})["reasons"] == [
             "INCOMPLETE_TIMEOUT"]
         assert self._check(run={"returncode": 1, "failure": "boom"})["detail"] == {"INCOMPLETE_CRASH": "exit 1: boom"}
-        v = measurement_validity([], _vsampler(readings=0), {"init_failed": "NEMB init failed: x"}, True, cfg)
-        assert v["reasons"] == ["NEMB_INIT_FAILED", "INCOMPLETE_NO_CHECKPOINTS"]
+        v = measurement_validity([], _vsampler(readings=0), {"init_failed": "NEMB init failed: x"}, cfg)
+        assert v["reasons"] == ["NEMB_INIT_FAILED", "INCOMPLETE_NO_CHECKPOINTS", "TOTAL_BELOW_RESOLUTION"]
 
-    def test_java_meta_lines_become_a_sampler(self, tmp_path):
-        from codegreen.cli.cli import (_stderr_checkpoint_events, _replay_checkpoint_events, _java_meta_sampler,
-                                       measurement_validity, _measurement_cfg, _cpuset_size)
+    def test_java_meta_records_become_one_sampler(self, tmp_path):
+        from codegreen.cli.cli import (_stderr_checkpoint_events, _replay_checkpoint_events, _poller_sampler,
+                                       measurement_validity, _measurement_cfg)
+
+        def meta(readings, last, gap, failed=0, cpus=4, ms=1.0):
+            return {"marker_reads": "last_poll", "interval_ms": 1.0, "readings": readings, "failed_reads": failed,
+                    "first_ns": 0, "last_ns": last, "max_gap_ns": gap, "affinity_cpus": cpus,
+                    "sampler_affinity_cpus": cpus, "providers": [_vprov(ms=ms)]}
         f = tmp_path / "sum"
-        f.write_text("CG_CP_META|1001|0|1100000000|2000000|1000000\nCG_CP_SUM|1|g|4|40|30|400\n"
-                     "CG_CP_META|11|0|10000000|9000000|1000000\n")
-        func, meta = {}, []
-        _replay_checkpoint_events(_stderr_checkpoint_events(str(f), func, meta), func)
-        assert func["g"]["calls"] == 4 and meta == [[1001, 0, 1100000000, 2000000, 1000000],
-                                                    [11, 0, 10000000, 9000000, 1000000]]
-        s = _java_meta_sampler(meta, _cpuset_size("0-3,6"))
-        assert (s["readings"], s["interval_ms"], s["median_gap_ns"], s["affinity_cpus"]) == (1012, 1.0, 1_100_000, 5)
-        v = measurement_validity(None, s, {}, False, _measurement_cfg())
+        f.write_text(f"CG_CP_META|{json.dumps(meta(1001, 1_100_000_000, 2_000_000))}\nCG_CP_SUM|1|g|4|40|30|400\n"
+                     f"CG_CP_META|{json.dumps(meta(11, 10_000_000, 9_000_000, cpus=5, ms=2.0))}\n")
+        func, records = {}, []
+        _replay_checkpoint_events(_stderr_checkpoint_events(str(f), func, records), func)
+        assert func["g"]["calls"] == 4 and len(records) == 2
+        s = _poller_sampler(records)
+        assert (s["readings"], s["interval_ms_max"], s["median_gap_ns"], s["affinity_cpus"], s["processes"]) == \
+            (1012, 1.0, 1_100_000, 4, 2)
+        assert s["providers"][0]["update_interval_ms"] == 2.0
+        v = measurement_validity(None, s, {}, _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
-        s = _java_meta_sampler(meta[:1], 2)
-        assert measurement_validity(None, s, {}, False, _measurement_cfg())["status"] == "valid"
-        assert measurement_validity(None, None, {}, False, _measurement_cfg())["reasons"] == ["STALE_LIBRARY"]
+        v = measurement_validity(None, _poller_sampler([meta(5, 4_000_000, 1_000_000, failed=1)]), {}, _measurement_cfg())
+        assert v["reasons"] == ["PROVIDER_READ_FAILED"]
+        assert measurement_validity(None, None, {}, _measurement_cfg())["reasons"] == ["STALE_LIBRARY"]
         with pytest.raises(ValueError, match="different periods"):
-            _java_meta_sampler([[2, 0, 1, 1, 1000], [2, 0, 1, 1, 2000]], 2)
+            _poller_sampler([meta(2, 1, 1), {**meta(2, 1, 1), "interval_ms": 2.0}])
+
+    def test_function_quality_vocabulary(self):
+        from codegreen.cli.cli import function_quality, resolution_ns, _measurement_cfg
+        cfg, res = _measurement_cfg(), resolution_ns(_vsampler())
+        assert res == 10e6 and resolution_ns(_vsampler(), boundary=True) == 1e6
+        assert resolution_ns(_vsampler(providers=[_vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)]),
+                             boundary=True) == 100e6
+        assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": 3}, res, cfg) == "measured"
+        assert function_quality({"calls": 2, "time_ns": 30e6}, res, cfg) == "measured"
+        assert function_quality({"calls": 1000, "time_ns": 100e6}, res, cfg) == "aggregate_only"
+        assert function_quality({"calls": 1, "time_ns": 10, "min_window_samples": 0}, res, cfg) == "below_resolution"
 
     def test_replay_partitions_the_root_and_reports_quality(self):
         import types
@@ -1864,7 +1953,7 @@ class TestValidity:
             {"success": True, "output": "", "checkpoints": cps, "sampler": _vsampler(), "validity": v},
             "x = 1\n", Path("t.py"), "python", "fine")
         f, m = out["per_function_energy"]["f"], out["per_function_energy"]["main"]
-        assert f["calls"] == 2 and f["inclusive_j"] == pytest.approx(4.5) and f["quality"] == "interpolated"
+        assert f["calls"] == 2 and f["inclusive_j"] == pytest.approx(4.5) and f["quality"] == "below_resolution"
         assert m["exclusive_j"] == pytest.approx(4.0) and m["quality"] == "measured"
         assert out["summary"]["exclusive_sum_j"] == pytest.approx(out["summary"]["total_energy_j"]) == 8.0
         assert out["summary"]["energy_by_provider"] == {"intel_rapl": 8.0} and out["validity"] == v
@@ -1890,7 +1979,7 @@ class TestValidity:
         r = _run_energy_measurement(tmp_path / "w.py", Language.python, [SensorType.rapl], False, timeout, None, True)
         assert code in r["validity"]["reasons"] and "INCOMPLETE_NO_CHECKPOINTS" in r["validity"]["reasons"]
         if code == "NEMB_INIT_FAILED":
-            assert "intel_rapl,amd_rapl" in r["output"]
+            assert "intel_rapl|amd_rapl" in r["output"]
 
     def test_valid_block_passes_and_largest_block_wins(self, tmp_path):
         from codegreen.cli.cli import _run_energy_measurement, Language
@@ -1909,7 +1998,9 @@ class TestValidity:
     @pytest.mark.parametrize("pairs,code,exit_code", [
         ([(5.0, 0.5)] * 3, None, 0),
         ([(5.0, 0.001)] * 3, "RUN_BELOW_RESOLUTION", 3),
-        ([(5.0, 0.5), (None, 0.5), (5.1, 0.5)], "ZERO_ENERGY_RUNS", 3),
+        ([(5.0, 0.5), (0.0, 0.5), (5.1, 0.5)], "ZERO_ENERGY_RUNS", 3),
+        ([(5.0, 0.5), (None, 0.5), (5.1, 0.5)], "PROVIDER_READ_FAILED", 3),
+        ([(5.0, 0.5), (-1.0, 0.5), (5.1, 0.5)], "NEGATIVE_ENERGY_RUNS", 3),
     ])
     def test_run_command_validity(self, monkeypatch, pairs, code, exit_code):
         from typer.testing import CliRunner
@@ -1920,13 +2011,52 @@ class TestValidity:
             name = "fake"
             def is_available(self): return True
             def measure(self, command, timeout=None): return next(it)
+            def sampler(self): return _vsampler()
 
         monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
         r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "3", "-w", "0", "--", "true"])
         out = json.loads(r.stdout)
         assert r.exit_code == exit_code and out["validity"]["reasons"] == ([code] if code else [])
         assert out["validity"]["checks"]["affinity_cpus"] >= 1 and out["energy_j"]["mean"] > 0
+        assert out["validity"]["checks"]["resolution_ms"] == 1.0
         assert (out.get("error") == f"invalid_measurement: {code}") if code else "error" not in out
+        assert out["runs"]["energies_j"] == [e for e, _ in pairs] and len(out["runs"]["status"]) == 3
+
+    def test_run_stats_are_paired_and_raw_is_reported(self, monkeypatch):
+        from typer.testing import CliRunner
+        import codegreen.cli.cli as cli
+        it = iter([(5.0, 1.0), (5.1, 1.1), (4.9, 0.9), (5.0, 1.0), (50.0, 1.0)])
+
+        class Fake(cli._EnergyBackend):
+            name = "fake"
+            def is_available(self): return True
+            def measure(self, command, timeout=None): return next(it)
+
+        monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
+        r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "5", "-w", "0", "--", "true"])
+        out = json.loads(r.stdout)
+        assert out["runs"]["iqr_outliers_removed"] == 1 and out["energy_j"]["mean"] == pytest.approx(5.0)
+        assert out["energy_j"]["raw"]["mean"] == pytest.approx(14.0) and out["energy_j"]["raw"]["n"] == 5
+        assert out["duration_s"]["mean"] == pytest.approx(1.0) and out["duration_s"]["outliers_removed"] == 1
+        assert list(out["validity"]["warnings"]) == ["RESOLUTION_UNKNOWN"] and r.exit_code == 0
+
+    def test_run_accepts_sensors(self, monkeypatch):
+        from typer.testing import CliRunner
+        import codegreen.cli.cli as cli
+        monkeypatch.setenv("CODEGREEN_PROVIDERS", "inherited")
+        seen = []
+
+        class Fake(cli._EnergyBackend):
+            name = "fake"
+            def is_available(self): return True
+            def measure(self, command, timeout=None):
+                seen.append(os.environ.get("CODEGREEN_PROVIDERS"))
+                return 5.0, 1.0
+
+        monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
+        r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "1", "-w", "0", "--sensors", "rapl",
+                                         "--", "true"])
+        assert r.exit_code == 0 and seen == ["intel_rapl|amd_rapl"]
 
 
 class TestValidityDefects:
@@ -1942,7 +2072,7 @@ class TestValidityDefects:
         assert func["p"]["exclusive_uj"] == 60 and func["p"]["inclusive_uj"] == 50
         cps = [_vcp("enter:p:a", 0, 0.0, 1), _vcp("enter:f:a", 5, 1e-4, 9), _vcp("exit:f:b", 9, 9e-5, 20),
                _vcp("exit:p:b", 20, 5e-5, 41)]
-        assert "NEGATIVE_ENERGY" in measurement_validity(cps, _vsampler(), {}, True, _measurement_cfg())["reasons"]
+        assert "NEGATIVE_ENERGY" in measurement_validity(cps, _vsampler(), {}, _measurement_cfg())["reasons"]
 
     def test_coarse_keeps_c_main_return(self):
         from codegreen.cli.cli import _filter_main_entry_points
@@ -1991,18 +2121,30 @@ class TestValidityDefects:
                                         "x = 1\n", Path("t.py"), "java", "fine")
         assert out["summary"]["overlapping_threads"] == 3 and out["summary"]["exclusive_sum_ratio"] > 1
 
-    @pytest.mark.parametrize("domains,expected", [({}, 1000), ({"package": 1.0}, 1000),
-                                                  ({"package": 1.0, "gpu0": 0.5}, None), ({"amd_gpu0": 0.5}, None)])
-    def test_run_path_slows_the_sampler_unless_gpu_is_integrated(self, monkeypatch, domains, expected):
+    @pytest.mark.parametrize("providers,expected", [
+        ([_vprov()], 1000), ([_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0)], None)])
+    def test_run_path_slows_the_sampler_unless_power_is_integrated(self, monkeypatch, providers, expected):
         import types
         import codegreen.cli.cli as cli
         calls = []
         lib = types.SimpleNamespace(nemb_set_measurement_interval_ms=lambda ms: calls.append(ms) or 1)
         b = cli._NEMBBackend()
-        monkeypatch.setattr(b, "_load", lambda: lib)
-        monkeypatch.setattr(b, "measure", lambda cmd, timeout=None: (1.0, 0.01))
-        monkeypatch.setattr(b, "get_last_domain_breakdown", lambda: domains)
+        monkeypatch.setattr(b, "_init", lambda: lib)
+        monkeypatch.setattr(b, "sampler", lambda: _vsampler(providers=providers))
         assert b.slow_sampler(1000) == expected and calls == ([1000] if expected else [])
+
+    def test_coarse_filter_reads_entry_points_and_boundaries(self, monkeypatch):
+        import types
+        import codegreen.cli.cli as cli
+        pts = [types.SimpleNamespace(name=n, type=t) for n, t in
+               (("a", "function_enter"), ("a", "function_exit"), ("run", "function_enter"), ("run", "function_return"),
+                ("b", "loop_start"), ("b", "function_exit"))]
+        assert [(p.name, p.type) for p in cli._filter_main_entry_points(pts, "c")] == [("a", "function_enter"),
+                                                                                       ("b", "function_exit")]
+        real = cli._load_language_config
+        monkeypatch.setattr(cli, "_load_language_config", lambda lang: {
+            **real(lang), "instrumentation_config": {**real(lang)["instrumentation_config"], "entry_points": ["run"]}})
+        assert [p.type for p in cli._filter_main_entry_points(pts, "c")] == ["function_enter", "function_return"]
 
 
 class TestRound3:
@@ -2030,13 +2172,13 @@ class TestRound3:
             "import atexit, os, sys, types\nimport codegreen_runtime as rt\n"
             "rt._get_nemb_client = lambda: types.SimpleNamespace(lib=None, abi=4, get_final_measurements=lambda: "
             "{'measurements': [{'checkpoint_id': 'enter:m:x#inv_1_t1', 'timestamp': 1, 'joules': 0.0, 'watts': 0.0}], "
-            "'sampler': {'readings': 0}})\n"
+            f"'sampler': {_vsampler(readings=0)!r}}})\n"
             "atexit.register(rt._report_at_exit)\nprint('payload')\nsys.stdout.close()\nos.close(1)\n")
         r = subprocess.run([sys.executable, "w.py"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
                            env={**os.environ, "PYTHONPATH": str(rt_dir)})
         from codegreen.cli.cli import _nemb_result_block
         assert r.returncode == 0, r.stderr
-        assert r.stdout.startswith("payload\n") and _nemb_result_block(r.stdout)["sampler"] == {"readings": 0}
+        assert r.stdout.startswith("payload\n") and _nemb_result_block(r.stdout)["sampler"]["readings"] == 0
 
     def test_toolchain_prefers_configured_dirs_and_runs_with_its_own_binutils(self, tmp_path, monkeypatch):
         import codegreen.cli.cli as cli
@@ -2131,9 +2273,9 @@ class TestValidityReplication:
         p = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, timeout=300)
         return p.returncode, json.loads(p.stdout)
 
-    def test_single_cpu_affinity_is_invalid(self, tmp_path):
+    def test_single_cpu_affinity_is_flagged(self, tmp_path):
         rc, out = self._measure(tmp_path, "--sensors", "rapl", "5000000", pin="2")
-        assert rc == 3 and "AFFINITY_SINGLE_CPU" in out["validity"]["reasons"]
+        assert "AFFINITY_SINGLE_CPU" in out["validity"]["warnings"]
         rc, out = self._measure(tmp_path, "--sensors", "rapl", "5000000", pin="2,3")
         assert rc == 0 and out["validity"]["status"] == "valid" and out["sampler"]["affinity_cpus"] == 2
 

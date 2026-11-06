@@ -231,19 +231,42 @@ def _report_config() -> Dict:
 # the CLI imports the same functions for runtimes that only report facts (NEMB's C/C++/Java blocks).
 
 def _measurement_cfg() -> Dict[str, Any]:
-    """measurement.report.validity plus sensor_providers, run_path and toolchain of the merged config."""
+    """measurement.report.validity plus the measurement keys the CLI resolves sensors and toolchains from."""
     m = _load_config()["measurement"]
-    cfg = {**m["report"]["validity"], "sensor_providers": m["sensor_providers"],
-           "run_sampler_interval_ms": m["run_path"]["sampler_interval_ms"], "toolchain": m["toolchain"]}
-    if cfg["gpu_in_total"] not in ("invalid", "allow"):
-        raise ValueError(f"measurement.report.validity.gpu_in_total must be invalid or allow, got {cfg['gpu_in_total']!r}")
-    return cfg
+    return {**m["report"]["validity"], "sensor_providers": m["sensor_providers"],
+            "default_sensors": m["default_sensors"], "run_sampler_interval_ms": m["run_path"]["sampler_interval_ms"],
+            "toolchain": m["toolchain"], "outlier_method": m["report"]["outlier_method"],
+            "nemb_providers": m["nemb"]["providers"]}
+
+
+def providers_env(sensors: Optional[List[str]], cfg: Dict[str, Any]) -> Optional[str]:
+    """CODEGREEN_PROVIDERS for a sensor selection (None: measurement.default_sensors), or None for \"all\" (every
+    provider that initializes). Each sensor becomes one strict group of its enabled providers written as
+    alternatives (intel_rapl|amd_rapl: the first that initializes)."""
+    sel = sensors or cfg["default_sensors"]
+    known = dict.fromkeys(p for provs in cfg["sensor_providers"].values() for p in provs)
+    enabled = [p for p in known if cfg["nemb_providers"][p]["enabled"]]
+    if sel == "all":
+        if len(enabled) < len(known):
+            raise ValueError("measurement.nemb.providers disables a provider while measurement.default_sensors is "
+                             "\"all\"; list the sensors to measure in measurement.default_sensors")
+        return None
+    groups = ["|".join(p for p in cfg["sensor_providers"][s] if p in enabled) for s in sel]
+    if not all(groups):
+        raise ValueError(f"sensors {sel}: a sensor has every provider disabled in measurement.nemb.providers")
+    return ",".join(dict.fromkeys(groups))
 
 
 def _validity(reasons: Dict[str, str], warnings: Optional[Dict[str, str]] = None, **extra) -> Dict[str, Any]:
     """reasons are fatal; warnings are non-fatal facts a consumer must see (code -> text)."""
     return {"status": "invalid" if reasons else "valid", "reasons": list(reasons), "detail": reasons,
             "warnings": warnings or {}, **extra}
+
+
+def _merge_validity(*blocks: Dict[str, Any]) -> Dict[str, Any]:
+    """One verdict from several (runtime-embedded facts plus process-level outcomes, or every run of a project)."""
+    return _validity({k: v for b in blocks for k, v in b["detail"].items()},
+                     {k: v for b in blocks for k, v in b["warnings"].items()})
 
 
 def _thread_overlap(cps: List[Dict]) -> int:
@@ -258,55 +281,81 @@ def _thread_overlap(cps: List[Dict]) -> int:
     return peak
 
 
-def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Dict], run: Dict[str, Any],
-                         sensors_explicit: bool, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Validity of one checkpointed run: {status, reasons, detail, warnings}. Every reason is fatal; warnings
-    (SAMPLER_GAP, OVERLAPPING_THREADS) are not.
-    checkpoints: the NEMB result block's measurements, or None when the runtime aggregated in-process (Java
-    standalone; marker checks do not apply). run: timed_out, timeout_s, returncode, failure, init_failed.
-    sampler None with checkpoints present means the library predates ABI 4 (STALE_LIBRARY)."""
-    r: Dict[str, str] = {}
-    w: Dict[str, str] = {}
-    if run.get("init_failed"):
-        r["NEMB_INIT_FAILED"] = run["init_failed"]
+def _run_reasons(run: Dict[str, Any]) -> Dict[str, str]:
+    """Process-level outcome of a measured run (known to the launcher, not to the measured process)."""
+    r = {"NEMB_INIT_FAILED": run["init_failed"]} if run.get("init_failed") else {}
     if run.get("timed_out"):
         r["INCOMPLETE_TIMEOUT"] = f"killed after {run['timeout_s']} s"
     elif run.get("returncode"):
         r["INCOMPLETE_CRASH"] = f"exit {run['returncode']}: {run.get('failure', '')}"
+    return r
+
+
+def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
+    """Scope labels from the providers' hardware facts (sampler.providers[].hardware_type, .held)."""
+    names = [p["name"] for p in sampler["providers"]]
+    gpu = [p["name"] for p in sampler["providers"] if p["hardware_type"] == "gpu"]
+    if gpu and len(gpu) < len(names):
+        w["GPU_IN_TOTAL"] = (f"total sums GPU provider(s) {gpu} with {sorted(set(names) - set(gpu))}; select providers "
+                             "with --sensors or measurement.default_sensors")
+    held = {p["name"]: p["held"] for p in sampler["providers"] if p["held"]}
+    if held:
+        w["GPU_READ_HELD"] = f"failed reads replaced by the last good power value: {held}"
+
+
+def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False) -> float:
+    """Smallest energy window the run can resolve: the slowest selected provider's update interval and, unless every
+    provider is read synchronously at the window boundaries (boundary=True with counter providers), the sampler
+    interval. A non-fatal SAMPLER_GAP widens it to the largest gap (markers read the last polled value)."""
+    ms = [p["update_interval_ms"] for p in sampler["providers"]]
+    if not boundary or any(p["energy_source"] == "integrated_power" for p in sampler["providers"]):
+        ms.append(sampler["interval_ms_max"])
+    gap = sampler["max_gap_ns"] if validity and "SAMPLER_GAP" in validity["warnings"] else 0
+    return max(max(ms) * 1e6, gap)
+
+
+def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Dict], run: Dict[str, Any],
+                         cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Validity of one checkpointed run: {status, reasons (fatal), detail, warnings}.
+    checkpoints: the result block's markers, or None when the runtime aggregated frames in-process (no markers to
+    check). sampler: the ABI 4 sampler block; its marker_reads selects measurement.report.validity.gap_policy.
+    run: the launcher's facts (_run_reasons); empty inside the measured process."""
+    r, w = _run_reasons(run), {}
     if checkpoints is not None and len(checkpoints) < 2:
         r["INCOMPLETE_NO_CHECKPOINTS"] = f"{len(checkpoints)} checkpoint(s) in the result block"
     if sampler is None:
         if checkpoints != []:
             r["STALE_LIBRARY"] = "no sampler statistics in the result (libcodegreen-nemb ABI < 4 or stale runtime)"
         return _validity(r)
-    iv = sampler["interval_ms"] * 1e6
+    pol, iv = cfg["gap_policy"][sampler["marker_reads"]], sampler["interval_ms_max"] * 1e6
+    sev = {"fatal": r, "warning": w}
     if sampler["affinity_cpus"] < cfg["min_affinity_cpus"]:
-        r["AFFINITY_SINGLE_CPU"] = (f"measured process allowed on {sampler['affinity_cpus']} CPU(s) "
+        w["AFFINITY_SINGLE_CPU"] = (f"measured process allowed on {sampler['affinity_cpus']} CPU(s) "
                                     f"(< {cfg['min_affinity_cpus']}); the sampler competes with the workload")
-    gap_factor = cfg["java_max_gap_factor"] if checkpoints is None else cfg["max_gap_factor"]
-    if sampler["readings"] >= 2 and (sampler["max_gap_ns"] > gap_factor * iv
+    if sampler["readings"] >= 2 and (sampler["max_gap_ns"] > pol["max_gap_factor"] * iv
                                      or sampler["median_gap_ns"] > cfg["median_gap_factor"] * iv):
-        # Java standalone markers read the poller's last published cumulative counter, so a gap (GC safepoint) bounds
-        # marker staleness, not window energy: a warning plus a resolution downgrade; NEMB interpolates across it.
-        (w if checkpoints is None else r)["SAMPLER_GAP" if checkpoints is None else "SAMPLER_STARVED"] = (
+        sev[pol["severity"]]["SAMPLER_STARVED" if pol["severity"] == "fatal" else "SAMPLER_GAP"] = (
             f"reading gaps median {sampler['median_gap_ns'] / 1e6:.3f} ms, max "
-            f"{sampler['max_gap_ns'] / 1e6:.3f} ms vs interval {sampler['interval_ms']} ms")
+            f"{sampler['max_gap_ns'] / 1e6:.3f} ms vs interval {sampler['interval_ms_max']} ms ({sampler['marker_reads']})")
+    if sampler["failed_reads"]:
+        sev[pol["failed_read_severity"]]["PROVIDER_READ_FAILED"] = (
+            f"{sampler['failed_reads']} provider read(s) failed ({sampler['marker_reads']} markers)")
+    if sampler.get("provider_restarts"):
+        r["PROVIDER_READ_FAILED"] = f"{sampler['provider_restarts']} provider restart(s): cumulative counter discontinuity"
+    if sampler["rejected_readings"]:
+        w["READINGS_REJECTED"] = f"{sampler['rejected_readings']} reading(s) rejected; markers interpolate across them"
+    _provider_warnings(sampler, w)
     if sampler["dropped_checkpoints"]:
         r["CHECKPOINT_CAP"] = (f"{sampler['dropped_checkpoints']} checkpoint(s) dropped at "
                                "measurement.report.max_checkpoints")
     if sampler["wrapped"]:
         r["BUFFER_WRAPPED"] = f"ring buffer of {sampler['buffer_capacity']} readings overwrote the start of the run"
-    gpu = sorted(set(sampler["providers"]) & set(cfg["gpu_providers"]))
-    if gpu and not sensors_explicit and cfg["gpu_in_total"] == "invalid":
-        r["GPU_IN_TOTAL"] = f"{gpu} summed into the total; choose providers with --sensors"
-    if checkpoints is None:
-        if sampler["readings"] < cfg["min_window_samples"]:
-            r["TOTAL_BELOW_RESOLUTION"] = f"{sampler['readings']} reading(s) < {cfg['min_window_samples']}"
-        return _validity(r, w)
-    clamped = [m["checkpoint_id"] for m in checkpoints if m["clamp"] != "none"]
+    if sampler["readings"] < cfg["min_window_samples"]:
+        r["TOTAL_BELOW_RESOLUTION"] = f"{sampler['readings']} reading(s) < {cfg['min_window_samples']}"
+    clamped = [m["checkpoint_id"] for m in checkpoints or [] if m["clamp"] != "none"]
     if clamped:
         r["MARKER_CLAMPED"] = f"{len(clamped)} marker(s) outside the sampled range (first {clamped[0]})"
-    if len(checkpoints) >= 2:
+    if checkpoints and len(checkpoints) >= 2:
         cps = sorted(checkpoints, key=lambda m: m["timestamp"])
         span = cps[-1]["ri"] - cps[0]["ri"]
         if span < cfg["min_window_samples"]:
@@ -320,6 +369,70 @@ def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Di
             w["OVERLAPPING_THREADS"] = (f"up to {peak} threads inside instrumented frames at once; each frame is "
                                         "charged the whole package energy, so concurrent exclusive energies overlap")
     return _validity(r, w)
+
+
+def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Optional[Dict],
+                 cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Validity of boundary-read runs (`codegreen run`, measure-workload): energies are the signed per-run readings,
+    None where the read failed; the minimum mean duration is min_run_updates resolutions (resolution_ns)."""
+    n, r, w = len(energies), {}, {}
+    for code, k, what in (("PROVIDER_READ_FAILED", sum(e is None for e in energies), "failed to read energy"),
+                          ("NEGATIVE_ENERGY_RUNS", sum(e is not None and e < 0 for e in energies), "read negative energy"),
+                          ("ZERO_ENERGY_RUNS", sum(e == 0 for e in energies), "read no energy")):
+        if k:
+            r[code] = f"{k} of {n} runs {what}"
+    if sampler is None:
+        w["RESOLUTION_UNKNOWN"] = "the backend reports no provider update interval; RUN_BELOW_RESOLUTION not checked"
+        return _validity(r, w)
+    _provider_warnings(sampler, w)
+    floor_s = cfg["min_run_updates"] * resolution_ns(sampler, boundary=True) / 1e9
+    if mean_s < floor_s:
+        r["RUN_BELOW_RESOLUTION"] = f"mean duration {mean_s:.6f} s < {cfg['min_run_updates']} resolutions ({floor_s} s)"
+    return _validity(r, w)
+
+
+def function_quality(d: Dict[str, Any], res_ns: float, cfg: Dict[str, Any]) -> str:
+    """Per-function verdict shared by `measure` and `project`: measured when every call spans min_window_samples
+    sampler readings (reading indices, when the markers carry them) or else one resolution per call on average;
+    aggregate_only when only the summed time spans aggregate_min_factor resolutions; below_resolution otherwise."""
+    per_call = (d["min_window_samples"] >= cfg["min_window_samples"] if "min_window_samples" in d
+                else d["time_ns"] >= res_ns * d["calls"])
+    return ("measured" if per_call else "aggregate_only" if d["time_ns"] >= cfg["aggregate_min_factor"] * res_ns
+            else "below_resolution")
+
+
+def _merge_samplers(samplers: List[Dict]) -> Optional[Dict]:
+    """One sampler block for a run of several measured processes (JVM forks): counts add, gaps and intervals take the
+    worst, providers merge by name. Processes of one run must share the marker read mode."""
+    if not samplers:
+        return None
+    if len({s["marker_reads"] for s in samplers}) != 1:
+        raise ValueError(f"processes of one run read markers differently: {[s['marker_reads'] for s in samplers]}")
+    out, prov = dict(samplers[0]), {}
+    for k in ("readings", "rejected_readings", "failed_reads", "dropped_checkpoints"):
+        out[k] = sum(s[k] for s in samplers)
+    for k in ("max_gap_ns", "median_gap_ns", "interval_ms_max", "last_ns"):
+        out[k] = max(s[k] for s in samplers)
+    for k in ("interval_ms_min", "first_ns", "affinity_cpus", "sampler_affinity_cpus"):
+        out[k] = min(s[k] for s in samplers)
+    for p in (p for s in samplers for p in s["providers"]):
+        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0})
+        q.update(rejected=q["rejected"] + p["rejected"], held=q["held"] + p["held"],
+                 update_interval_ms=max(q["update_interval_ms"], p["update_interval_ms"]))
+    out.update(wrapped=any(s["wrapped"] for s in samplers), providers=list(prov.values()), processes=len(samplers))
+    return out
+
+
+def _poller_sampler(records: List[Dict]) -> Optional[Dict]:
+    """Sampler block of a run from in-process pollers' `CG_CP_META|<json>` records (one per JVM of the Java standalone
+    runtime). A poller keeps no ring buffer, no gap distribution and no rejected readings, so those keys take what it
+    does know: the configured interval for interval_ms_min/max, the mean gap for median_gap_ns (gap_statistic mean)."""
+    if len({r["interval_ms"] for r in records}) > 1:
+        raise ValueError(f"processes of one run polled at different periods: {sorted({r['interval_ms'] for r in records})} ms")
+    return _merge_samplers([{"interval_ms_min": r["interval_ms"], "interval_ms_max": r["interval_ms"],
+                             "median_gap_ns": (r["last_ns"] - r["first_ns"]) / (r["readings"] - 1) if r["readings"] > 1 else 0,
+                             "gap_statistic": "mean", "rejected_readings": 0, "wrapped": False, "buffer_capacity": None,
+                             "dropped_checkpoints": 0, **r} for r in records])
 
 
 def _checkpoint_events(measurements: List[Dict], known_ids) -> list:
@@ -553,7 +666,12 @@ class NEMBClient:
         if not lib_path:
             self.lib = None
             return
-
+        # The native library reads both at initialization: the same config file, and the provider selection of
+        # measurement.default_sensors when the launcher (CLI --sensors) did not choose one.
+        os.environ.setdefault("CODEGREEN_CONFIG", str(_config_path()))
+        selection = providers_env(None, _measurement_cfg())
+        if selection:
+            os.environ.setdefault("CODEGREEN_PROVIDERS", selection)
         try:
             self.lib = ctypes.CDLL(lib_path)
             self.lib.nemb_initialize.argtypes = []
@@ -699,8 +817,6 @@ def _report_at_exit():
         payload = dict(sess._finalized_report)
         payload["measurements"] = measurements
     else:
-        if not measurements:
-            return
         try:
             import socket as _sk, uuid as _u
             host = _sk.gethostname()
@@ -723,7 +839,11 @@ def _report_at_exit():
             "measurements": measurements,
         }
 
+    # The verdict from in-process facts; the launcher (CLI) adds only process-level outcomes (exit, timeout, init).
     payload["sampler"] = final["sampler"]
+    marker_v = (measurement_validity(measurements, final["sampler"], {}, _measurement_cfg())
+                if measurements or sess is None else None)
+    payload["validity"] = _merge_validity(*[v for v in (payload.get("validity"), marker_v) if v])
     if _SYNC_DEVICE:
         payload["device_sync"] = {"mode": _SYNC_DEVICE, "syncs": _device_syncs}
     if not sys.stdout.closed:

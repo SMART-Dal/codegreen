@@ -23,6 +23,7 @@ import shutil
 import itertools
 import json
 import tempfile
+import ctypes
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Annotated, Union
 from enum import Enum
@@ -42,8 +43,9 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
-    _config_path, _load_config, _measurement_cfg, _validity, _thread_overlap, measurement_validity,
-    _checkpoint_events, _replay_checkpoint_events,
+    _config_path, _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
+    measurement_validity, run_validity, resolution_ns, function_quality, providers_env, _poller_sampler,
+    _checkpoint_events, _replay_checkpoint_events, _read_nemb_json,
 )
 
 console = Console()
@@ -67,12 +69,8 @@ class Language(str, Enum):
     c = "c"
     javascript = "javascript"  # analysis works; instrumented measurement needs JS runtime (WIP)
 
-class SensorType(str, Enum):
-    """Available NEMB sensor types."""
-    rapl = "rapl"              # Intel RAPL (CPU package + cores)
-    nvidia = "nvidia"          # NVIDIA GPU sensors
-    amd_gpu = "amd_gpu"        # AMD GPU sensors
-    amd_cpu = "amd_cpu"        # AMD CPU RAPL-like interface
+# --sensors choices: the keys of measurement.sensor_providers (single source of truth for sensor -> providers).
+SensorType = Enum("SensorType", {s: s for s in _measurement_cfg()["sensor_providers"]}, type=str)
 
 class LogLevel(str, Enum):
     """Logging levels."""
@@ -405,7 +403,7 @@ def detect_hardware_sensors() -> Dict[str, Dict[str, Any]]:
             amd_rapl_info = {"available": True, "details": f"AMD energy monitoring at {path}"}
             break
     
-    sensors["amd_cpu"] = amd_rapl_info
+    sensors["amd_rapl"] = amd_rapl_info
     
     # NVIDIA GPU Detection
     nvidia_info = {"available": False, "details": "Not detected"}
@@ -661,29 +659,15 @@ def generate_optimized_config(
         config["developer"]["debug_mode"] = True
         config["performance"]["threading"]["max_worker_threads"] = 1
     
-    # Sensor-specific optimizations
+    # Providers keyed by NEMB registry name: enable the detected ones and select their sensors by default
+    # (a strict selection: every listed sensor must initialize on this host).
     nemb_providers = config["measurement"]["nemb"]["providers"]
-    
-    # Configure Intel RAPL
-    if sensor_info.get("intel_rapl", {}).get("available", False):
-        nemb_providers["intel_rapl"]["enabled"] = True
-        nemb_providers["intel_rapl"]["validation_enabled"] = True
-    else:
-        nemb_providers["intel_rapl"]["enabled"] = False
-    
-    # Configure NVIDIA GPU
-    if sensor_info.get("nvidia_gpu", {}).get("available", False):
-        nemb_providers["nvidia_gpu"]["enabled"] = True
-        nemb_providers["nvidia_gpu"]["validation_enabled"] = True
-    else:
-        nemb_providers["nvidia_gpu"]["enabled"] = False
-    
-    # Configure AMD CPU
-    if sensor_info.get("amd_cpu", {}).get("available", False):
-        nemb_providers["amd_cpu"]["enabled"] = True
-    else:
-        nemb_providers["amd_cpu"]["enabled"] = False
-    
+    for name in nemb_providers:
+        nemb_providers[name]["enabled"] = bool(sensor_info.get(name, {}).get("available"))
+    config["measurement"]["default_sensors"] = [
+        s for s, provs in config["measurement"]["sensor_providers"].items()
+        if any(nemb_providers.get(p, {}).get("enabled") for p in provs)]
+
     # Performance optimizations based on system capabilities
     if performance_info["memory_gb"] < 4:
         config["performance"]["database"]["batch_operations"] = True
@@ -987,9 +971,7 @@ def measure_energy(
             _ns = result.metadata.get('normalised_source', source_code)
             instrumented_code = engine.instrument_code(_ns, points, language.value, pre_normalised_source=_ns)
 
-            # Determine correct output extension
-            ext_map = {'python': '.py', 'c': '.c', 'cpp': '.cpp', 'java': '.java', 'javascript': '.js'}
-            ext = ext_map.get(language.value, script.suffix)
+            ext = _load_language_config(language.value)["extensions"][0]
             if language == Language.java:
                 # Java requires filename to match public class name
                 import tempfile
@@ -1049,10 +1031,7 @@ def measure_energy(
                         result.instrumentation_points, language.value)
                     if coarse_points:
                         _ns = result.metadata.get('normalised_source', source_code)
-                        c_ext = {'python': '.py', 'c': '.c', 'cpp': '.cpp',
-                                 'java': '.java', 'javascript': '.js'}.get(
-                                     language.value, script.suffix)
-                        c_path = script.with_name(f'{script.stem}_coarse{c_ext}')
+                        c_path = script.with_name(f'{script.stem}_coarse{ext}')
                         c_path.write_text(
                             engine.instrument_code(_ns, coarse_points, language.value,
                                                    pre_normalised_source=_ns),
@@ -1136,28 +1115,15 @@ def measure_energy(
 
 
 def _filter_main_entry_points(points: List, language: str) -> List:
-    """Filter instrumentation points to keep only main entry/exit (coarse-grained).
-
-    Main detection per language:
-    - Python: function named 'main', or top-level module enter/exit
-    - C/C++: function named 'main'
-    - Java: method named 'main'
-    Falls back to first+last function enter/exit if no 'main' found.
-    """
-    main_names = {"main", "__main__"}
-    main_points = [p for p in points if p.name in main_names
-                   and p.type in ("function_enter", "function_exit", "function_return")]
-    if main_points:
-        return main_points
-    # Fallback: keep only the first function_enter and last function_exit
-    enters = [p for p in points if p.type == "function_enter"]
-    exits = [p for p in points if p.type == "function_exit"]
-    fallback = []
-    if enters:
-        fallback.append(enters[0])
-    if exits:
-        fallback.append(exits[-1])
-    return fallback
+    """Coarse granularity: the frame points of the language's entry functions (instrumentation_config.entry_points),
+    else the first frame-opening and the last frame-closing point. A point opens or closes a frame by its insertion
+    rule's boundary property (ast_config.insertion_rules.<type>.boundary: enter | exit)."""
+    cfg = _load_language_config(language)
+    rules = cfg["ast_config"]["insertion_rules"]
+    frame = [p for p in points if rules.get(p.type, {}).get("boundary")]
+    entry = [p for p in frame if p.name in cfg["instrumentation_config"]["entry_points"]]
+    return entry or ([p for p in frame if rules[p.type]["boundary"] == "enter"][:1]
+                     + [p for p in frame if rules[p.type]["boundary"] == "exit"][-1:])
 
 
 def _output_has_error(output: str) -> bool:
@@ -1204,6 +1170,16 @@ def _extract_failure_reason(output: str) -> str:
     return lines[-1].strip()
 
 
+def _select_providers(env: Dict[str, str], sensors: Optional[List["SensorType"]], vcfg: Dict[str, Any]) -> None:
+    """CODEGREEN_PROVIDERS for a measured child or this process: --sensors, else measurement.default_sensors; an
+    inherited CODEGREEN_PROVIDERS is kept unless --sensors overrides it. Must run before the library initializes."""
+    selection = providers_env([s.value for s in sensors] if sensors else None, vcfg)
+    if sensors:
+        env["CODEGREEN_PROVIDERS"] = selection
+    elif selection:
+        env.setdefault("CODEGREEN_PROVIDERS", selection)
+
+
 def _build_comprehensive_json(
     analysis_result, measurement_result, source_code: str,
     script: Path, language: str, granularity: str, sensors: Optional[List["SensorType"]] = None
@@ -1223,7 +1199,8 @@ def _build_comprehensive_json(
         }
     mr = measurement_result or {}
     checkpoints, sampler = mr.get('checkpoints') or [], mr.get('sampler')
-    min_samples = _measurement_cfg()["min_window_samples"]
+    vcfg = _measurement_cfg()
+    res_ns = resolution_ns(sampler, mr.get("validity")) if sampler else None
     func_data: Dict[str, dict] = {}
     _replay_checkpoint_events(_checkpoint_events(checkpoints, set(points_map)), func_data)
     func_energy = {}
@@ -1236,7 +1213,7 @@ def _build_comprehensive_json(
             "wall_time_s": round(wall_s, 9),
             "avg_power_w": round(inc / wall_s, 2) if wall_s > 0 else 0.0,
             "calls": d["calls"],
-            "quality": "measured" if d.get("min_window_samples", -1) >= min_samples else "interpolated",
+            "quality": function_quality(d, res_ns, vcfg) if res_ns else None,
         }
     system = {"kernel": platform.release(), "cpu_model": "", "governor": ""}
     try:
@@ -1268,7 +1245,7 @@ def _build_comprehensive_json(
                     "avg_power_w": total_energy / wall_time if wall_time > 0 else 0.0,
                     "checkpoint_count": len(checkpoints),
                     "energy_by_provider": by_provider,
-                    "providers": sampler["providers"] if sampler is not None else [],
+                    "providers": [p["name"] for p in sampler["providers"]] if sampler is not None else [],
                     "sensors_requested": [s.value for s in sensors] if sensors else None,
                     "exclusive_sum_j": round(exclusive_sum, 6),
                     "exclusive_sum_ratio": round(exclusive_sum / total_energy, 4) if total_energy else None,
@@ -1379,9 +1356,8 @@ def _run_energy_measurement(
             console.print(f"[red]{code}: {detail}[/red]")
         return {'success': False, 'error': code, 'output': detail, 'checkpoints': [], 'sampler': None,
                 'validity': _validity({code: detail})}
-    if sensors:
-        env["CODEGREEN_PROVIDERS"] = ",".join(dict.fromkeys(p for s in sensors for p in vcfg["sensor_providers"][s.value]))
-    sensors_explicit = "CODEGREEN_PROVIDERS" in env
+    _select_providers(env, sensors, vcfg)
+    env.setdefault("CODEGREEN_CONFIG", str(get_config_path()))
 
     if runtime_path:
         pythonpath = str(runtime_path)
@@ -1455,11 +1431,11 @@ def _run_energy_measurement(
         block = _nemb_result_block(output)
         measurements, sampler = block.get("measurements", []), block.get("sampler")
         init_failed = next((ln.strip() for ln in output.splitlines() if "NEMB init failed" in ln), None)
-        validity = measurement_validity(
-            measurements, sampler,
-            {"timed_out": timed_out, "timeout_s": timeout_s, "returncode": returncode,
-             "failure": _extract_failure_reason(output) if returncode else "", "init_failed": init_failed},
-            sensors_explicit, vcfg)
+        run = {"timed_out": timed_out, "timeout_s": timeout_s, "returncode": returncode,
+               "failure": _extract_failure_reason(output) if returncode else "", "init_failed": init_failed}
+        # The Python runtime embeds its verdict; NEMB's own block (C/C++/Java) carries facts only.
+        validity = (_merge_validity(block["validity"], _validity(_run_reasons(run))) if "validity" in block
+                    else measurement_validity(measurements, sampler, run, vcfg))
         success = _NEMB_RESULT_END in output
         if not success and not json_output:
             console.print("[yellow]Warning: Measurement may be incomplete[/yellow]")
@@ -2269,7 +2245,8 @@ def config_management(
     - [cyan]measurement_interval_ms[/cyan]: RAPL polling rate (default: 1ms)
     - [cyan]measurement_buffer_size[/cyan]: ring buffer capacity (default: 100000)
     - [cyan]cross_validation_threshold[/cyan]: provider agreement threshold (default: 0.05)
-    - Provider enable/disable: [cyan]intel_rapl[/cyan], [cyan]nvidia_nvml[/cyan], [cyan]amd_rocm[/cyan]
+    - Provider enable/disable: measurement.nemb.providers.<name>.enabled ([cyan]intel_rapl[/cyan], [cyan]amd_rapl[/cyan], [cyan]nvidia_gpu[/cyan], [cyan]amd_gpu[/cyan])
+    - [cyan]measurement.default_sensors[/cyan]: sensors summed when --sensors is not given (default: all)
 
     [bold]Examples:[/bold]
     - [cyan]codegreen config[/cyan]         - Show active settings summary
@@ -2493,6 +2470,7 @@ def run_measure_workload(
     console.print(f"[blue]Duration:[/blue] {duration} seconds")
     console.print(f"[blue]Workload:[/blue] {workload}")
     
+    _select_providers(os.environ, None, _measurement_cfg())
     backend = _get_energy_backend()
     if isinstance(backend, _TimeOnlyBackend):
         console.print("[red]No energy measurement backend available[/red]")
@@ -2508,15 +2486,19 @@ def run_measure_workload(
 
     try:
         energy_j, elapsed = backend.measure(cmd, timeout=duration + 30)
-        if energy_j and energy_j > 0:
-            console.print("[green]Workload measurement completed successfully[/green]")
+        vcfg = _measurement_cfg()
+        validity = run_validity([energy_j], elapsed, backend.sampler(), vcfg)
+        if energy_j is not None:
             console.print(f"Energy: {energy_j:.4f} J")
             console.print(f"Power:  {energy_j/elapsed:.2f} W")
-            console.print(f"Duration: {elapsed:.2f} s")
-        else:
-            console.print("[red]Workload measurement failed: backend returned no energy[/red]")
-            raise typer.Exit(1)
-            
+        console.print(f"Duration: {elapsed:.2f} s")
+        for code, text in {**validity["detail"], **validity["warnings"]}.items():
+            console.print(f"[{'red' if code in validity['detail'] else 'yellow'}]{code}: {text}[/]")
+        if validity["status"] != "valid":
+            raise typer.Exit(3 if vcfg["fail_on_invalid"] else 0)
+        console.print("[green]Workload measurement completed successfully[/green]")
+    except typer.Exit:
+        raise
     except subprocess.TimeoutExpired:
         console.print("[red]Workload measurement timed out[/red]")
         raise typer.Exit(1)
@@ -2640,6 +2622,7 @@ def run_command(
     validate: Annotated[bool, typer.Option("--validate/--no-validate", help="Execute the command once, unmeasured, before measuring (a failing command is also caught by the first measured run)")] = True,
     validate_timeout: Annotated[int, typer.Option("--validate-timeout", help="Seconds allowed for the validation run")] = 300,
     timeout: Annotated[Optional[int], typer.Option("--timeout", help="Per-run limit in seconds (default: none; the caller bounds the call)")] = None,
+    sensors: Annotated[Optional[List[SensorType]], typer.Option("--sensors", "-s", help="Sensors summed into the energy (default: measurement.default_sensors)")] = None,
 ):
     """[bold]Measure energy[/bold] of any shell command with hardware-level precision.
 
@@ -2689,6 +2672,8 @@ def run_command(
         hint = " (try 'python3' on macOS)" if exe == "python" else ""
         _run_error(f"Command not found: {exe}{hint}")
 
+    vcfg = _measurement_cfg()
+    _select_providers(os.environ, sensors, vcfg)  # the in-process backend reads it when it initializes
     backend = _get_energy_backend()
 
     # Refuse to run without real energy data -- no silent fallbacks
@@ -2861,7 +2846,7 @@ def run_command(
         payload.update(extra)
         return json.dumps(payload, indent=2)
 
-    run_sampler_ms = (backend.slow_sampler(_measurement_cfg()["run_sampler_interval_ms"])
+    run_sampler_ms = (backend.slow_sampler(vcfg["run_sampler_interval_ms"])
                       if isinstance(backend, _NEMBBackend) else None)
     measurement_pairs: List[tuple] = []
     warmup_pairs: List[tuple] = []
@@ -2871,14 +2856,11 @@ def run_command(
         if not json_output:
             console.print(f"[dim]{label} {idx+1}/{total}[/dim]")
         energy_j, elapsed = backend.measure(command, timeout=timeout)
-        if energy_j is not None and energy_j > 0:
-            into.append((energy_j, elapsed))
-            if isinstance(backend, _NEMBBackend):
-                d = backend.get_last_domain_breakdown()
-                if d and label == "Run":
-                    domain_runs.append(d)
-        else:
-            into.append((None, elapsed))
+        into.append((energy_j, elapsed))
+        if energy_j is not None and energy_j > 0 and isinstance(backend, _NEMBBackend):
+            d = backend.get_last_domain_breakdown()
+            if d and label == "Run":
+                domain_runs.append(d)
 
     for i in range(warmup):
         if include_warmup:
@@ -2907,10 +2889,12 @@ def run_command(
             else: console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
 
-    energy_valid_pairs = [(e, t) for (e, t) in measurement_pairs if e is not None]
-    zero_energy_dropped = len(measurement_pairs) - len(energy_valid_pairs)
+    # Per-run status keeps every reading signed; only "ok" runs enter the statistics, the rest are reasons.
+    statuses = ["read_failed" if e is None else "negative_energy" if e < 0 else "zero_energy" if e == 0 else "ok"
+                for e, _ in measurement_pairs]
+    energy_valid_pairs = [p for p, st in zip(measurement_pairs, statuses) if st == "ok"]
+    zero_energy_dropped = statuses.count("zero_energy")
     energies = [e for (e, _) in energy_valid_pairs]
-    times = [t for (_, t) in energy_valid_pairs]
 
     if not energies:
         msg = f"No energy data collected ({backend.name})"
@@ -2939,12 +2923,18 @@ def run_command(
                 console.print(f"[bold]Time:[/bold] {t_stats.mean:.4f} s +/- {t_stats.std:.4f} s")
         raise typer.Exit(1)
 
-    e_stats = StatisticalAnalysis.summarize(energies)
-    pre_iqr_n = len(energies)
-    surviving = set(range(pre_iqr_n))
-    iqr_outliers_removed = e_stats.outliers_removed
-    times_paired = times
-    t_stats = StatisticalAnalysis.summarize(times_paired)
+    # measurement.report.outlier_method ("none" | "iqr_<k>") filters runs by energy; time and power are summarized
+    # over the same surviving runs, so the three stay paired. energy_j.raw is the unfiltered summary.
+    method = vcfg["outlier_method"]
+    if method != "none" and not method.startswith("iqr_"):
+        raise ValueError(f"measurement.report.outlier_method must be none or iqr_<k>, got {method!r}")
+    iqr_k = float(method.removeprefix("iqr_")) if method != "none" else None
+    e_stats = StatisticalAnalysis.summarize(energies, filter_outliers=iqr_k is not None, iqr_k=iqr_k or 0.0)
+    raw_stats = StatisticalAnalysis.summarize(energies, filter_outliers=False)
+    bounds = StatisticalAnalysis.iqr_bounds(energies, iqr_k) if iqr_k is not None else None
+    kept = [(e, t) for e, t in energy_valid_pairs if bounds is None or bounds[0] <= e <= bounds[1]] or energy_valid_pairs
+    iqr_outliers_removed = len(energy_valid_pairs) - len(kept)
+    t_stats = StatisticalAnalysis.summarize([t for _, t in kept], filter_outliers=False)
 
     avg_domains: Dict[str, float] = {}
     domain_active_count: Dict[str, int] = {}
@@ -2956,25 +2946,20 @@ def run_command(
             avg_domains[d] = sum(vals) / len(domain_runs)
             domain_active_count[d] = sum(1 for v in vals if v > 0)
 
-    per_run_power = [e / t for (e, t) in energy_valid_pairs if t > 0]
-    p_stats = StatisticalAnalysis.summarize(per_run_power) if per_run_power else None
+    per_run_power = [e / t for (e, t) in kept if t > 0]
+    p_stats = StatisticalAnalysis.summarize(per_run_power, filter_outliers=False) if per_run_power else None
     cv = (e_stats.std / e_stats.mean * 100) if e_stats.mean > 0 else 0.0
-    avg_power = p_stats.mean if p_stats else 0.0
 
     avg_domains_power: Dict[str, float] = {}
     if avg_domains and t_stats.mean > 0:
         avg_domains_power = {d: j / t_stats.mean for d, j in avg_domains.items()}
 
     budget_exceeded = budget is not None and e_stats.mean > budget
-    vcfg = _measurement_cfg()
-    floor_s = vcfg["min_run_updates"] * vcfg["rapl_update_ms"] / 1e3
-    run_reasons: Dict[str, str] = {}
-    if t_stats.mean < floor_s:
-        run_reasons["RUN_BELOW_RESOLUTION"] = (f"mean duration {t_stats.mean:.6f} s < {vcfg['min_run_updates']} "
-                                               f"RAPL updates ({floor_s} s)")
-    if zero_energy_dropped:
-        run_reasons["ZERO_ENERGY_RUNS"] = f"{zero_energy_dropped} of {len(measurement_pairs)} runs read no energy"
-    run_validity = _validity(run_reasons, checks={"affinity_cpus": _cpuset_size("")})
+    sampler = backend.sampler()
+    validity = run_validity([e for e, _ in measurement_pairs], t_stats.mean, sampler, vcfg)
+    validity["checks"] = {"affinity_cpus": _cpuset_size(""),
+                          "resolution_ms": resolution_ns(sampler, boundary=True) / 1e6 if sampler else None}
+    run_reasons = validity["detail"]
     run_error = f"invalid_measurement: {','.join(run_reasons)}" if run_reasons else ""
 
     if json_output:
@@ -3005,6 +2990,9 @@ def run_command(
                 "energy_valid": len(energies),
                 "iqr_outliers_removed": iqr_outliers_removed,
                 "zero_energy_dropped": zero_energy_dropped,
+                "excluded": len(measurement_pairs) - len(energies),
+                "energies_j": [e for e, _ in measurement_pairs],
+                "status": statuses,
                 "warmup_included_in_stats": bool(include_warmup),
                 "warmup_runs": len(warmup_pairs) if include_warmup else 0,
                 "measurement_runs": repeat,
@@ -3013,10 +3001,14 @@ def run_command(
                 "mean": e_stats.mean, "std": e_stats.std, "min": e_stats.min, "max": e_stats.max,
                 "ci95_lower": e_stats.ci95_lower, "ci95_upper": e_stats.ci95_upper,
                 "cv_percent_across_runs": round(cv, 2),
+                "outlier_method": method,
+                "raw": {"mean": raw_stats.mean, "std": raw_stats.std, "min": raw_stats.min, "max": raw_stats.max,
+                        "n": raw_stats.n},
             },
             "duration_s": {
                 "mean": t_stats.mean, "std": t_stats.std, "min": t_stats.min, "max": t_stats.max,
-                "outliers_removed": t_stats.outliers_removed,
+                "outliers_removed": iqr_outliers_removed,
+                "paired_with": "energy_j",
             },
             "power_w": {
                 "mean": (round(p_stats.mean, 4) if p_stats else 0.0),
@@ -3028,7 +3020,8 @@ def run_command(
                 "computation": "mean_of_per_run_e_over_t",
             },
             "budget_exceeded": budget_exceeded,
-            "validity": run_validity,
+            "validity": validity,
+            "sampler": sampler,
         }
         if run_error:
             out.update(success=False, error=run_error)
@@ -3110,8 +3103,11 @@ class _EnergyBackend:
         return self._stdin_fh
     def is_available(self) -> bool: return False
     def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
-        """Returns (energy_joules or None, elapsed_seconds)."""
+        """Returns (signed energy_joules, or None when the energy read failed; elapsed_seconds)."""
         raise NotImplementedError
+    def sampler(self) -> Optional[Dict[str, Any]]:
+        """Provider facts (ABI 4 sampler block) when the backend has them, else None."""
+        return None
     def wrap_command(self, cmd_str: str, energy_file: str, checkpoint_file: str) -> str:
         """Wrap a shell command for energy + checkpoint capture (project mode)."""
         return f"bash -c '{cmd_str} 2>{checkpoint_file}'"
@@ -3160,19 +3156,30 @@ class _NEMBBackend(_EnergyBackend):
         return False
 
     def is_available(self) -> bool:
+        """Providers initialize. nemb_probe checks that without starting the background sampler, which would
+        otherwise keep polling (system-wide RAPL, NVML) in this process while a measured child runs."""
         lib = self._load()
         if not lib:
             return False
-        import ctypes
-        try:
-            lib.nemb_initialize.restype = ctypes.c_int
-            return lib.nemb_initialize() == 1
-        except Exception:
-            return False
+        probe = lib.nemb_probe if hasattr(lib, "nemb_probe") else lib.nemb_initialize
+        probe.restype = ctypes.c_int
+        return probe() == 1
+
+    def _init(self):
+        lib = self._load()
+        lib.nemb_initialize.restype = ctypes.c_int
+        if lib.nemb_initialize() != 1:
+            raise RuntimeError("NEMB failed to initialize its providers (see stderr)")
+        return lib
+
+    def sampler(self) -> Optional[Dict[str, Any]]:
+        lib = self._init()
+        lib.nemb_get_checkpoints_json.restype = ctypes.c_int
+        lib.nemb_get_checkpoints_json.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        return json.loads(_read_nemb_json(lib.nemb_get_checkpoints_json, 1 << 16))["sampler"]
 
     def measure(self, command: list, timeout: Optional[int] = None) -> tuple:
-        import ctypes, subprocess, time
-        lib = self._load()
+        lib = self._init()
         lib.nemb_start_session.restype = ctypes.c_uint64
         lib.nemb_start_session.argtypes = [ctypes.c_char_p]
         lib.nemb_stop_session.restype = ctypes.c_int
@@ -3207,17 +3214,15 @@ class _NEMBBackend(_EnergyBackend):
                 self._last_domains = json.loads(buf.value.decode())
         except Exception:
             pass
-        return (energy.value if ok and energy.value > 0 else None, elapsed)
+        return (energy.value if ok else None, elapsed)
 
     def slow_sampler(self, interval_ms: int) -> Optional[int]:
         """Run path: sessions are synchronous boundary reads, so the background sampler only adds wakeups and NVML
-        polls to the measured energy (about 5 W at idle). Probe one session and widen the sampler period unless a GPU
-        domain reports: GPU energy is power-integrated from the samples. Returns the period set, or None."""
-        import ctypes
-        self.measure(["true"])
-        if any("gpu" in d for d in self.get_last_domain_breakdown()):
+        polls to the measured energy (about 5 W at idle). Widen the sampler period unless a selected provider
+        integrates power from the samples (provider fact energy_source). Returns the period set, or None."""
+        if any(p["energy_source"] == "integrated_power" for p in self.sampler()["providers"]):
             return None
-        lib = self._load()
+        lib = self._init()
         lib.nemb_set_measurement_interval_ms.argtypes = [ctypes.c_int]
         lib.nemb_set_measurement_interval_ms.restype = ctypes.c_int
         if lib.nemb_set_measurement_interval_ms(interval_ms) != 1:
@@ -3230,8 +3235,7 @@ class _NEMBBackend(_EnergyBackend):
     def run_project(self, cmd_str: str, cwd: str, checkpoint_file: str, env: dict) -> tuple:
         # Whole-run energy from an in-process NEMB session spanning the child,
         # the same path `codegreen run` uses; there is no energy file to parse.
-        import ctypes
-        lib = self._load()
+        lib = self._init()
         lib.nemb_start_session.restype = ctypes.c_uint64
         lib.nemb_start_session.argtypes = [ctypes.c_char_p]
         lib.nemb_stop_session.restype = ctypes.c_int
@@ -3451,13 +3455,13 @@ _NEMB_RESULT_END = "--- CODEGREEN_RESULT_END ---"
 def _stderr_checkpoint_events(path: str, func_data: dict, meta: Optional[list] = None):
     """Yield `CG_CP|type|name|id|ts|energy_uj|tid` events from a checkpoint file.
     Pre-aggregated `CG_CP_SUM|tid|name|calls|incl_uj|excl_uj|time_ns` records
-    (Java standalone runtime) are folded straight into func_data; its poller's
-    `CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns` lines go to meta."""
+    (Java standalone runtime) are folded straight into func_data; each process's
+    `CG_CP_META|<sampler json>` poller record goes to meta (see _poller_sampler)."""
     with open(path) as cf:
         for line in cf:
             parts = line.rstrip("\n").split("|")
             if parts[0] == "CG_CP_META" and meta is not None:
-                meta.append([int(x) for x in parts[1:6]])
+                meta.append(json.loads(line.split("|", 1)[1]))
             elif parts[0] == "CG_CP_SUM" and len(parts) >= 7:
                 d = func_data.setdefault(parts[2], {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
                 d["calls"] += int(parts[3])
@@ -3472,25 +3476,7 @@ def _nemb_result_block(stdout: str) -> Dict[str, Any]:
     """The NEMB result block on stdout ({} when there is none). The language runtime and NEMB's own atexit may
     both print the same data, so the block with the most measurements is used, never a sum. Malformed JSON raises."""
     blocks = [json.loads(chunk.split(_NEMB_RESULT_END, 1)[0]) for chunk in stdout.split(_NEMB_RESULT_START)[1:]]
-    return max(blocks, key=lambda b: len(b.get("measurements", [])), default={})
-
-
-def _java_meta_sampler(meta: List[List[int]], cpus: int) -> Optional[Dict[str, Any]]:
-    """Sampler statistics in the NEMB contract shape from the Java standalone poller's
-    `CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns` lines (one per JVM). The poller keeps no gap
-    distribution, so median_gap_ns carries the worst JVM's mean gap (gap_statistic: mean)."""
-    if not meta:
-        return None
-    poll_ns = {m[4] for m in meta}
-    if len(poll_ns) != 1:
-        raise ValueError(f"JVMs of one run polled RAPL at different periods: {sorted(poll_ns)} ns")
-    return {"interval_ms": poll_ns.pop() / 1e6, "buffer_capacity": None, "readings": sum(m[0] for m in meta),
-            "wrapped": False, "rejected_readings": 0, "first_ns": min(m[1] for m in meta),
-            "last_ns": max(m[2] for m in meta),
-            "median_gap_ns": max(((m[2] - m[1]) / (m[0] - 1) for m in meta if m[0] > 1), default=0),
-            "max_gap_ns": max(m[3] for m in meta), "affinity_cpus": cpus, "providers": ["java_rapl_poller"],
-            "dropped_checkpoints": 0,
-            "config_path": None, "jvms": len(meta), "gap_statistic": "mean"}
+    return max(blocks, key=lambda b: (len(b.get("measurements", [])), "validity" in b), default={})
 
 
 def _cpuset_size(cores: str) -> int:
@@ -3756,6 +3742,8 @@ def project_energy(
         console.print(f"[red]Project directory not found: {project_dir}[/red]")
         raise typer.Exit(1)
 
+    vcfg = _measurement_cfg()
+    _select_providers(os.environ, None, vcfg)  # measurement.default_sensors, for the run session and the children
     # Load project config from language JSON config (config-driven, not hardcoded)
     _lang_config = _load_language_config(language.value)
     proj_cfg = _lang_config.get("project_config", {})
@@ -4043,8 +4031,10 @@ def project_energy(
         # Runtimes copied into the project cannot locate the NEMB library or the
         # package config relative to themselves; point them at the install.
         _, nemb_lib_dir = _get_c_runtime_paths()
-        run_env = dict(os.environ)
+        # runtime_injection.env (language config) holds the injected runtime's settings; the caller's env overrides.
+        run_env = {**proj_cfg.get("runtime_injection", {}).get("env", {}), **os.environ}
         run_env.setdefault("CODEGREEN_INSTALL_DIR", str(Path(__file__).resolve().parents[2]))
+        run_env.setdefault("CODEGREEN_CONFIG", str(get_config_path()))
         run_env.setdefault("CODEGREEN_LIB_PATH", str(nemb_lib_dir))
         run_env.pop("CODEGREEN_SYNC_DEVICE", None)
         if sync_device:
@@ -4083,7 +4073,7 @@ def project_energy(
                     _stderr_checkpoint_events(checkpoint_file, func_data, java_meta),
                     _stderr_checkpoint_events(sum_file, func_data, java_meta)), func_data)
                 if func_data:
-                    sampler = _java_meta_sampler(java_meta, _cpuset_size(cores))
+                    sampler = _poller_sampler(java_meta) if java_meta else None
                 else:
                     block = _nemb_result_block(run_result.stdout)
                     nemb_cps, sampler = block.get("measurements", []), block.get("sampler")
@@ -4108,15 +4098,12 @@ def project_energy(
                               f"(the workload never initialised {sync_device}); attribution would be unsynchronised.[/red]")
                 raise typer.Exit(1)
 
-            # Project totals include accelerators by design (--sync-device attributes device work to frames),
-            # so GPU_IN_TOTAL does not apply; every other reason is the measure-path rule.
-            vcfg = _measurement_cfg()
-            validity = measurement_validity(
-                nemb_cps, sampler, {"returncode": run_result.returncode,
-                                    "failure": _extract_failure_reason(stderr_tail) if run_result.returncode else ""},
-                False, {**vcfg, "gpu_in_total": "allow"})
-            res_ns = max(vcfg["rapl_update_ms"] * 1e6, sampler["interval_ms"] * 1e6 if sampler else 0,
-                         sampler["max_gap_ns"] if "SAMPLER_GAP" in validity["warnings"] else 0)
+            run = {"returncode": run_result.returncode,
+                   "failure": _extract_failure_reason(stderr_tail) if run_result.returncode else ""}
+            block_v = _nemb_result_block(run_result.stdout).get("validity") if nemb_cps is not None else None
+            validity = (_merge_validity(block_v, _validity(_run_reasons(run))) if block_v
+                        else measurement_validity(nemb_cps, sampler, run, vcfg))
+            res_ns = resolution_ns(sampler, validity) if sampler else None
 
             # Compute per-function metrics (inclusive + exclusive)
             func_energy = {}
@@ -4155,8 +4142,7 @@ def project_energy(
                     "avg_power_w": round(inc_j / time_s, 2) if time_s > 0 else 0,
                     "calls": calls,
                     "energy_per_call_uj": round(data["inclusive_uj"] / calls, 2) if calls > 0 else 0,
-                    "resolution": ("measured" if calls and data["time_ns"] / calls >= res_ns else "aggregate_only"
-                                   if data["time_ns"] >= vcfg["aggregate_min_factor"] * res_ns else "invalid"),
+                    "quality": function_quality(data, res_ns, vcfg) if res_ns and calls else None,
                 }
 
             attribution_pct = round(total_exclusive / 1e6 / total_energy_j * 100, 1) if total_energy_j > 0 else 0
@@ -4197,7 +4183,10 @@ def project_energy(
         # OUTPUT RESULTS
         # ==========================================
 
-        # Aggregate across runs (use last run for function list, average energy)
+        # Aggregate across runs (use last run for function list, average energy); validity covers every run.
+        def _tag(r: Dict, key: str) -> Dict[str, str]:
+            return {k: f"run {r['run_idx']}: {t}" for k, t in r["validity"][key].items()}
+        validity = _merge_validity(*({"detail": _tag(r, "detail"), "warnings": _tag(r, "warnings")} for r in all_runs))
         if all_runs:
             avg_energy = sum(r["total_energy_j"] for r in all_runs) / len(all_runs)
             last_funcs = all_runs[-1]["functions"]
@@ -4209,7 +4198,9 @@ def project_energy(
 
             if json_output:
                 result = {
-                    "success": True,
+                    "success": validity["status"] == "valid",
+                    **({} if validity["status"] == "valid" else
+                       {"error": f"invalid_measurement: {','.join(validity['reasons'])}"}),
                     "project": str(project_dir),
                     "language": language.value,
                     "source_files": len(source_files),
@@ -4219,7 +4210,7 @@ def project_energy(
                     "sync_device": sync_device,
                     "attribution_pct": all_runs[-1]["attribution_pct"],
                     "attribution_warning": all_runs[-1]["attribution_warning"],
-                    "validity": all_runs[-1]["validity"],
+                    "validity": validity,
                     "runs": all_runs,
                     "hotspots": [{"rank": i+1, "function": name, **data}
                                  for i, (name, data) in enumerate(hotspots[:20])],
@@ -4231,8 +4222,10 @@ def project_energy(
                 console.print(f"  Functions profiled: {len(last_funcs)}")
                 if all_runs[-1]["attribution_warning"]:
                     console.print(f"  [yellow]WARNING {all_runs[-1]['attribution_warning']['message']}[/yellow]")
-                for code, text in all_runs[-1]["validity"]["detail"].items():
+                for code, text in validity["detail"].items():
                     console.print(f"  [red]INVALID {code}: {text}[/red]")
+                for code, text in validity["warnings"].items():
+                    console.print(f"  [yellow]WARNING {code}: {text}[/yellow]")
                 console.print(f"\n[bold]Top hotspots by exclusive energy:[/bold]")
                 console.print(f"  {'Rank':<5} {'Function':<35} {'Excl%':>7} {'Incl%':>7} {'Self':>6} "
                               f"{'Verdict':>8} {'Calls':>8} {'uJ/call':>10}")
@@ -4245,11 +4238,13 @@ def project_energy(
 
             if output_dir:
                 with open(output_dir / "project_results.json", "w") as f:
-                    json.dump({"runs": all_runs, "hotspots": [
+                    json.dump({"validity": validity, "runs": all_runs, "hotspots": [
                         {"rank": i+1, "function": name, **data}
                         for i, (name, data) in enumerate(hotspots)]}, f, indent=2)
                 if not json_output:
                     console.print(f"\n  Results saved to: {output_dir / 'project_results.json'}")
+            if validity["status"] != "valid" and vcfg["fail_on_invalid"]:
+                raise typer.Exit(3)
 
     finally:
         for _s, _h in _prev_handlers.items():

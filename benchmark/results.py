@@ -34,28 +34,27 @@ class Stats:
 
 class StatisticalAnalysis:
     @staticmethod
-    def _iqr_filter(values: List[float]) -> tuple:
+    def iqr_bounds(values: List[float], k: float = 1.5):
+        """(lower, upper) Tukey fences at k IQRs, or None below 4 values."""
         if len(values) < 4:
-            return values, 0
-        sorted_v = sorted(values)
-        n = len(sorted_v)
-        q1 = sorted_v[n // 4]
-        q3 = sorted_v[3 * n // 4]
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        filtered = [v for v in values if lower <= v <= upper]
-        if not filtered:
-            return values, 0
-        return filtered, len(values) - len(filtered)
+            return None
+        s = sorted(values)
+        q1, q3 = s[len(s) // 4], s[3 * len(s) // 4]
+        return q1 - k * (q3 - q1), q3 + k * (q3 - q1)
 
     @staticmethod
-    def summarize(values: List[float], filter_outliers: bool = True) -> Stats:
+    def _iqr_filter(values: List[float], k: float = 1.5) -> tuple:
+        b = StatisticalAnalysis.iqr_bounds(values, k)
+        filtered = [v for v in values if b is None or b[0] <= v <= b[1]]
+        return (filtered, len(values) - len(filtered)) if filtered else (values, 0)
+
+    @staticmethod
+    def summarize(values: List[float], filter_outliers: bool = True, iqr_k: float = 1.5) -> Stats:
         n = len(values)
         if n == 0:
             return Stats(0, 0, 0, 0, 0, 0, 0, 0)
         raw_min, raw_max = min(values), max(values)
-        filtered, outliers_removed = StatisticalAnalysis._iqr_filter(values) if filter_outliers else (values, 0)
+        filtered, outliers_removed = StatisticalAnalysis._iqr_filter(values, iqr_k) if filter_outliers else (values, 0)
         fn = len(filtered)
         sorted_vals = sorted(filtered)
         mean = sum(filtered) / fn

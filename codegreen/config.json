@@ -38,25 +38,10 @@
         "clock_source": "auto"
       },
       "providers": {
-        "intel_rapl": {
-          "enabled": true,
-          "domains": [
-            "package",
-            "pp0",
-            "dram"
-          ],
-          "validation_enabled": true
-        },
-        "nvidia_nvml": {
-          "enabled": true,
-          "device_indices": [
-            0
-          ],
-          "validation_enabled": true
-        },
-        "amd_rocm": {
-          "enabled": false
-        }
+        "intel_rapl": {"enabled": true},
+        "amd_rapl": {"enabled": true},
+        "nvidia_gpu": {"enabled": true},
+        "amd_gpu": {"enabled": true}
       },
       "accuracy": {
         "target_uncertainty_percent": 1.0,
@@ -82,18 +67,17 @@
         "quality_moderate_below_cv_pct": 10.0
       },
       "validity": {
-        "_comment": "Measurement validity gate (codegreen.cli.cli.measurement_validity). Windows and gaps are in sampler intervals (sampler.interval_ms) or RAPL updates (rapl_update_ms). gpu_in_total: invalid = a GPU provider summed into the total without --sensors is a fatal reason; allow = accepted. java_max_gap_factor: the Java standalone poller gap that raises the non-fatal SAMPLER_GAP warning and widens per-function resolution to the max gap (its markers read the last polled counter). Per-function resolution in `project`: per-call time below one resolution is aggregate_only when the function's total time spans aggregate_min_factor resolutions, invalid below that.",
+        "_comment": "Measurement validity policy (codegreen_runtime.measurement_validity / run_validity). Windows are counted in sampler readings; a resolution is the slowest selected provider's update_interval_ms (a provider fact) or the sampler interval. gap_policy is keyed by sampler.marker_reads: interpolated (NEMB markers interpolate between readings, so a starved sampler is fatal SAMPLER_STARVED) and last_poll (the Java standalone poller's markers read the last polled counter, so a gap is the warning SAMPLER_GAP and widens per-function resolution, while a failed read leaves a stale counter: fatal PROVIDER_READ_FAILED). severity values: fatal or warning. Per-function quality: measured, aggregate_only (summed time spans aggregate_min_factor resolutions), below_resolution. min_run_updates: a `codegreen run` mean duration below this many resolutions is RUN_BELOW_RESOLUTION. fail_on_invalid: exit 3 on any fatal reason (measure, run, project).",
         "min_window_samples": 2,
-        "max_gap_factor": 3.0,
-        "java_max_gap_factor": 3.0,
         "median_gap_factor": 1.5,
+        "gap_policy": {
+          "interpolated": {"max_gap_factor": 3.0, "severity": "fatal", "failed_read_severity": "warning"},
+          "last_poll": {"max_gap_factor": 3.0, "severity": "warning", "failed_read_severity": "fatal"}
+        },
         "min_affinity_cpus": 2,
-        "rapl_update_ms": 1,
         "min_run_updates": 10,
         "aggregate_min_factor": 10,
-        "fail_on_invalid": true,
-        "gpu_in_total": "invalid",
-        "gpu_providers": ["nvidia_gpu", "amd_gpu"]
+        "fail_on_invalid": true
       }
     },
     "run_path": {
@@ -106,6 +90,8 @@
       "cpp": "g++",
       "prefer_dirs": ["/usr/bin"]
     },
+    "_default_sensors_comment": "--sensors and default_sensors names -> NEMB registry providers. A sensor is satisfied by the first of its providers that initializes (CODEGREEN_PROVIDERS alternatives a|b); default_sensors \"all\" sums every provider that initializes, or a list of sensor names selects them strictly. nemb.providers.<name>.enabled false removes a provider from every selection.",
+    "default_sensors": "all",
     "sensor_providers": {
       "rapl": ["intel_rapl", "amd_rapl"],
       "amd_cpu": ["amd_rapl"],
