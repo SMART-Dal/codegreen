@@ -54,7 +54,7 @@ Each result carries a `validity` verdict computed from the sampler statistics: C
 - Do not pin the measured process to one CPU: the sampler thread runs in it and would compete with the workload (`AFFINITY_SINGLE_CPU`).
 - A measured window must span several sampling intervals. Shorter windows are `TOTAL_BELOW_RESOLUTION`; repeat short commands with `codegreen run --repeat N --warmup M`.
 - Select sensors with `--sensors` on hosts with a GPU; otherwise GPU energy is summed into the total (`GPU_IN_TOTAL`).
-- Use `codegreen project` for exclusive per-function attribution and read each function's `resolution`.
+- Use `codegreen project` for exclusive per-function attribution and read each function's `quality`.
 
 ## Granularity Modes
 

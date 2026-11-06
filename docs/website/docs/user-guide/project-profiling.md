@@ -84,8 +84,9 @@ schema as `codegreen measure -g fine`. Top fields:
 - `meta` - command, language, build/run commands, host info
 
 With `--json`, each run reports `sampler`, `validity` and `resolution_ns`, and
-each function a `resolution` of `measured`, `aggregate_only` or `invalid`. The
-command does not exit 3 on an invalid run; check `validity.status`. Pass
+each function a `quality` of `measured`, `aggregate_only` or
+`below_resolution`. The top-level `validity` merges every run; an invalid
+result exits 3. Pass
 `--cores` with at least two CPUs. See
 [Exit codes and measurement validity](cli-reference.md#exit-codes-and-measurement-validity).
 

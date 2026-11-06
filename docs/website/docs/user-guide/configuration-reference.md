@@ -85,19 +85,10 @@ cp config/codegreen.json ~/.codegreen/codegreen.json
       },
 
       "providers": {
-        "intel_rapl": {
-          "enabled": true,
-          "domains": ["package", "pp0", "dram"],
-          "validation_enabled": true
-        },
-        "nvidia_nvml": {
-          "enabled": true,
-          "device_indices": [0],
-          "validation_enabled": true
-        },
-        "amd_rocm": {
-          "enabled": false
-        }
+        "intel_rapl": {"enabled": true},
+        "amd_rapl": {"enabled": true},
+        "nvidia_gpu": {"enabled": true},
+        "amd_gpu": {"enabled": true}
       },
 
       "accuracy": {
@@ -237,48 +228,43 @@ cp config/codegreen.json ~/.codegreen/codegreen.json
 
 ### Provider Settings
 
-**Intel RAPL:**
+`measurement.nemb.providers` is keyed by NEMB registry name (`intel_rapl`,
+`amd_rapl`, `nvidia_gpu`, `amd_gpu`):
+
 ```json
-"intel_rapl": {
-  "enabled": true,
-  "domains": ["package", "pp0", "dram"],
-  "validation_enabled": true
+"providers": {
+  "intel_rapl": {"enabled": true},
+  "amd_rapl": {"enabled": true},
+  "nvidia_gpu": {"enabled": true},
+  "amd_gpu": {"enabled": true}
 }
 ```
 
-**Available domains:**
-- `package`: Total CPU package energy
-- `pp0`: Core energy (all cores)
-- `pp1`: Uncore/GPU energy (integrated GPU)
-- `dram`: Memory subsystem energy
-- `psys`: Platform energy (Skylake+)
+`enabled: false` removes a provider from every sensor selection. Selection
+itself is `measurement.default_sensors` (or `--sensors`): `"all"` (default)
+sums every provider that initializes, a list of sensor names (keys of
+`measurement.sensor_providers`) selects them strictly. The CLI and the Python
+runtime turn a selection into `CODEGREEN_PROVIDERS`, one group per sensor with
+its enabled providers as alternatives (`intel_rapl|amd_rapl`). Disabling a
+provider while `default_sensors` is `"all"` is rejected (a strict list is
+needed to exclude it). `codegreen init` enables the detected providers and
+lists their sensors in `default_sensors`. RAPL domains (`package`, `pp0`,
+`pp1`, `dram`, `psys`) are reported per task and per run.
 
-**NVIDIA NVML:**
-```json
-"nvidia_nvml": {
-  "enabled": true,
-  "device_indices": [0],
-  "validation_enabled": true
-}
-```
+### Config file resolution
 
-**AMD ROCm:**
-```json
-"amd_rocm": {
-  "enabled": false
-}
-```
-
-The `enabled` flags do not select providers at run time. NEMB uses every
-provider that initializes (`amd_rapl` only when `intel_rapl` does not, since
-both read the same package counter). To measure a subset, pass `--sensors` to
-`codegreen measure` or set `CODEGREEN_PROVIDERS`.
+The CLI, the Python runtime and the native library read one file:
+`CODEGREEN_CONFIG` if set, else `~/.codegreen/config.json`, else the bundled
+`codegreen/config.json`. The CLI and the runtime export the resolved path as
+`CODEGREEN_CONFIG` to measured processes and to the library. Python merges
+the bundled defaults with the active file key by key, so an older user config
+cannot drop a key. A file that does not parse raises an error naming it.
 
 ### Measurement Validity
 
-Keys under `measurement` in `codegreen/config.json`. The CLI merges the
-bundled defaults with the active config key by key, so an older
-`~/.codegreen/config.json` cannot drop one.
+Keys under `measurement` in `codegreen/config.json`, read by
+`codegreen_runtime.measurement_validity` and `run_validity` in the CLI and in
+the measured Python process alike.
 
 `measurement.report.validity` (thresholds of the
 [validity gate](cli-reference.md#exit-codes-and-measurement-validity)):
@@ -286,24 +272,29 @@ bundled defaults with the active config key by key, so an older
 | Key | Default | Description |
 |---|---|---|
 | `min_window_samples` | 2 | Fewest sampler readings a root window (and a `measured` function call) must span |
-| `max_gap_factor` | 3.0 | Max reading gap, in sampler intervals, before `SAMPLER_STARVED` |
-| `median_gap_factor` | 1.5 | Median reading gap, in sampler intervals, before `SAMPLER_STARVED` |
-| `java_max_gap_factor` | 3.0 | Java poller gap, in poll periods, that raises the `SAMPLER_GAP` warning |
-| `min_affinity_cpus` | 2 | Fewest CPUs the measured process may run on |
-| `rapl_update_ms` | 1 | RAPL counter update period; floor of the per-function resolution |
-| `min_run_updates` | 10 | `run`: fewest RAPL updates per run before `RUN_BELOW_RESOLUTION` |
-| `aggregate_min_factor` | 10 | `project`: total time, in resolutions, for `aggregate_only` |
-| `fail_on_invalid` | true | Exit 3 on an invalid `measure` or `run` result; `false` only reports |
-| `gpu_in_total` | `invalid` | `invalid`: a GPU summed into the total without `--sensors` is `GPU_IN_TOTAL`; `allow`: accepted |
-| `gpu_providers` | `["nvidia_gpu", "amd_gpu"]` | Providers counted as GPU for `GPU_IN_TOTAL` |
+| `median_gap_factor` | 1.5 | Median reading gap, in sampler intervals, that counts as a gap |
+| `gap_policy.<marker_reads>.max_gap_factor` | 3.0 | Max reading gap, in sampler intervals, that counts as a gap |
+| `gap_policy.<marker_reads>.severity` | `interpolated`: `fatal`; `last_poll`: `warning` | `fatal` reports `SAMPLER_STARVED`, `warning` reports `SAMPLER_GAP` and widens the per-function resolution to the gap |
+| `gap_policy.<marker_reads>.failed_read_severity` | `interpolated`: `warning`; `last_poll`: `fatal` | Severity of `PROVIDER_READ_FAILED` for `sampler.failed_reads` (interpolated markers skip a failed reading; last-poll markers read a stale counter) |
+| `min_affinity_cpus` | 2 | Fewest CPUs the measured process may run on before the `AFFINITY_SINGLE_CPU` warning |
+| `min_run_updates` | 10 | `run`: fewest resolutions per run before `RUN_BELOW_RESOLUTION` |
+| `aggregate_min_factor` | 10 | Summed time, in resolutions, for per-function `aggregate_only` |
+| `fail_on_invalid` | true | Exit 3 on an invalid `measure`, `run` or `project` result; `false` only reports |
+
+`gap_policy` is keyed by `sampler.marker_reads`; a sampler whose read mode has
+no policy raises. Resolutions come from provider facts
+(`sampler.providers[].update_interval_ms`, 0 = unknown, then the sampler
+interval) and the sampler interval; there is no RAPL constant.
 
 Other keys:
 
 | Key | Default | Description |
 |---|---|---|
 | `measurement.report.max_checkpoints` | 2000000 | Markers NEMB stores per process; later ones are dropped and counted (`CHECKPOINT_CAP`) |
-| `measurement.sensor_providers` | `rapl`: `[intel_rapl, amd_rapl]`, `amd_cpu`: `[amd_rapl]`, `nvidia`: `[nvidia_gpu]`, `amd_gpu`: `[amd_gpu]` | `--sensors` value to NEMB provider names |
-| `measurement.run_path.sampler_interval_ms` | 1000 | Background sampler period during `codegreen run` sessions (kept at the coordinator interval when a GPU domain reports) |
+| `measurement.report.outlier_method` | `iqr_1.5` | `run` statistics: `iqr_<k>` (Tukey fences at k IQRs, by energy; time and power use the same runs) or `none` |
+| `measurement.default_sensors` | `"all"` | Sensors measured without `--sensors`: `"all"` or a list of `sensor_providers` keys |
+| `measurement.sensor_providers` | `rapl`: `[intel_rapl, amd_rapl]`, `amd_cpu`: `[amd_rapl]`, `nvidia`: `[nvidia_gpu]`, `amd_gpu`: `[amd_gpu]` | Sensor name (the `--sensors` choices) to NEMB provider alternatives |
+| `measurement.run_path.sampler_interval_ms` | 1000 | Background sampler period during `codegreen run` sessions (kept at the coordinator interval when a selected provider integrates power) |
 | `measurement.toolchain.c` / `.cpp` | `gcc` / `g++` | Compilers for instrumented C/C++ in `measure`; `CC`/`CXX` override |
 | `measurement.toolchain.prefer_dirs` | `["/usr/bin"]` | Directories searched for the compiler before `PATH`; the compile runs with the compiler's directory first on `PATH` |
 
@@ -418,11 +409,11 @@ codegreen measure-workload --duration 3
 
 **Error: Provider name mismatch**
 ```json
-// WRONG
-"nvidia_gpu": { "enabled": true }
-
-// CORRECT
+// WRONG (pre-0.5 names, ignored)
 "nvidia_nvml": { "enabled": true }
+
+// CORRECT (NEMB registry names)
+"nvidia_gpu": { "enabled": true }
 ```
 
 **Error: Missing required fields**
@@ -467,7 +458,7 @@ codegreen measure-workload --duration 3
       },
       "providers": {
         "intel_rapl": { "enabled": true },
-        "nvidia_nvml": { "enabled": true }
+        "nvidia_gpu": { "enabled": true }
       }
     }
   }

@@ -143,7 +143,7 @@ Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric fi
 | `cpu_model`, `kernel` | hardware/OS reproducibility metadata |
 | `cwd`, `argv` | working directory & argv at measurement time |
 | `codegreen_env` | snapshot of all `CODEGREEN_*` environment variables |
-| `measurement_quality` | `ok` \| `no_tasks` \| `no_backend` \| `energy_zero` \| `failed` \| `checkpoints_only` |
+| `measurement_quality` | `ok` \| `no_tasks` \| `no_backend` \| `provider_read_failed` \| `negative_energy` \| `energy_zero` \| `failed` \| `checkpoints_only` |
 | `domain_support` | `full` (per-domain breakdown) \| `scalar_only` (overall energy only) \| `none` (no backend) |
 | `outlier_method` | which outlier filter was applied to multi-run statistics (default `"iqr_1.5"`) |
 | `iso_timestamp_format` | format contract for `started_at`/`ended_at`; pin in case future versions change it |
@@ -190,6 +190,12 @@ So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]
 | `domains_power_w` | `Dict[str, float]` | per-domain average power (W) = `domains[d] / duration_s`. Same time-base as `avg_power_w`. |
 | `timeseries` | `Optional[List[Dict]]` | sorted, deduplicated samples within `[started_at_mono_ns, ended_at_mono_ns]`. `None` when `record_time_series=False`; empty list when enabled but the task was shorter than one sample interval. Inclusive of children (a parent's timeseries contains its children's samples — see `meta.timeseries.inclusive_of_children`). |
 | `noise` | `Optional[Dict]` | quality summary computed from `timeseries` |
+| `valid` | `bool` | `False` when the task is not a measurement; it is then excluded from `totals` (counted in `totals.invalid_tasks`) |
+| `invalid_reason` | `Optional[str]` | `provider_read_failed` (the backend could not read the providers at start or stop) or `negative_energy` |
+
+A report also carries `validity` (`{status, reasons, detail, warnings}`, the
+same block as the CLI): `PROVIDER_READ_FAILED` or `NEGATIVE_ENERGY` name the
+excluded tasks. A failed read is never reported as 0 J.
 
 See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
 
@@ -311,6 +317,7 @@ Each sample (also one JSON-line in `output_path`):
 | Key | Type | Notes |
 |---|---|---|
 | `t` | `float` | seconds since `start()` |
+| `valid` | `bool` | `false` when the backend read failed: such a sample carries only `type`, `t` and `valid`, is written to `output_path` but not kept in memory, attributed to annotations or sent to exporters. The next valid sample's `joules_delta` spans the gap |
 | `joules_total` | `float` | cumulative system Joules since `start()` |
 | `joules_delta` | `float` | delta since previous sample |
 | `watts` | `float` | instantaneous watts from the backend |
@@ -331,6 +338,8 @@ Each sample (also one JSON-line in `output_path`):
   "mean_watts": 4.21,
   "samples_captured": 150,
   "terminated_reason": null,        # or "pid 1234 exited", "duration", "ctrl-c"
+  "invalid_samples": 0,             # failed sample reads (skipped, never zero-filled)
+  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}},
   "attribution_backend": "cgroup_v2",
   "per_label": {                    # only populated when listen_socket_path is set
     "GET /search": {"count": 412, "total_joules": 8.31,
@@ -342,6 +351,9 @@ Each sample (also one JSON-line in `output_path`):
 ### Caveats
 
 - One Monitor per process (raises `RuntimeError` on second `start()`).
+- A failed first read raises `RuntimeError` (no baseline). A failed final read
+  is `PROVIDER_READ_FAILED` (`total_joules` ends at the last valid sample);
+  failed sample reads are the warning `SAMPLES_INVALID`.
 - RAPL is system-wide: overlapping Monitors double-count.
 - Sub-50 ms intervals raise `ValueError`.
 - PID death is caught only on `psutil.NoSuchProcess`; other exceptions
@@ -425,7 +437,11 @@ object is returned by `nemb_get_checkpoints_json`):
  "sampler": {"interval_ms": 10, "buffer_capacity": 100000, "readings": 42, "wrapped": false,
              "rejected_readings": 0, "dropped_checkpoints": 0, "first_ns": 13973..., "last_ns": 13973...,
              "median_gap_ns": 10061234, "max_gap_ns": 10411021, "affinity_cpus": 8,
-             "providers": ["intel_rapl"], "config_path": "/.../codegreen/config.json"}}
+             "sampler_affinity_cpus": 8, "interval_ms_min": 10, "interval_ms_max": 10, "failed_reads": 0,
+             "marker_reads": "interpolated", "config_path": "/.../codegreen/config.json",
+             "providers": [{"name": "intel_rapl", "hardware_type": "cpu", "energy_source": "counter",
+                            "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0}]},
+ "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}}
 --- CODEGREEN_RESULT_END ---
 ```
 
@@ -438,7 +454,10 @@ object is returned by `nemb_get_checkpoints_json`):
 | `provider_j` | Interpolated cumulative joules per NEMB provider |
 | `sampler` | Background sampler statistics for the process (emitted even with no readings); see [Exit codes and measurement validity](../user-guide/cli-reference.md#exit-codes-and-measurement-validity) |
 
-The CLI parses this block and derives the `validity` verdict from it. A block
+The Python runtime embeds `validity` from in-process facts (the block is
+emitted at exit even with no markers); the CLI adds only process-level
+reasons. NEMB's own block (C, C++, Java) carries no `validity`, and the CLI
+computes it with the same `codegreen_runtime.measurement_validity`. A block
 without `sampler` comes from an older library and is reported as
 `STALE_LIBRARY`.
 

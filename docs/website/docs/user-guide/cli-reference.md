@@ -39,7 +39,7 @@ codegreen measure [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} SCRIPT [ARGS
 | Option | Description |
 |--------|-------------|
 | `-o, --output PATH` | Output file for results |
-| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | NEMB providers to measure (repeatable). Default: every provider that initializes |
+| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors to measure (repeatable; the keys of `measurement.sensor_providers`). Default: `measurement.default_sensors` |
 | `-p, --precision [low\|medium\|high]` | Measurement precision (default: high) |
 | `-g, --granularity [coarse\|fine]` | Instrumentation level (default: coarse) |
 | `--export-plot PATH` | Export energy timeline (HTML default, or PNG/PDF) |
@@ -51,7 +51,7 @@ codegreen measure [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} SCRIPT [ARGS
 
 **Granularity:**
 
-- **coarse** (default): Instruments only main entry/exit. Minimal overhead, gives total program energy.
+- **coarse** (default): Instruments only the entry function's frame (`instrumentation_config.entry_points` in the language config, else the first frame-opening and last frame-closing point). Minimal overhead, gives total program energy.
 - **fine**: Instruments all functions per language config. Per-function energy breakdown.
 
 With `--json`, the output carries an `instrumentation_audit` block
@@ -62,13 +62,16 @@ coarse granularity so the report keeps whole-program energy; `granularity` in
 the output then reads `coarse`. A failed or checkpoint-less run sets `error`.
 Pass script arguments after the script (`codegreen measure cpp main.cpp 5000`).
 
-**Sensors.** `--sensors` maps each sensor to NEMB registry names through
-`measurement.sensor_providers` (`rapl` -> `intel_rapl,amd_rapl`, `amd_cpu` ->
-`amd_rapl`, `nvidia` -> `nvidia_gpu`, `amd_gpu` -> `amd_gpu`) and passes them to
-the measured process as `CODEGREEN_PROVIDERS`. Only those providers are summed.
-A requested provider that is unknown or fails to initialize makes the run
-invalid (`NEMB_INIT_FAILED`). Without `--sensors`, a GPU provider summed into
-the total is `GPU_IN_TOTAL`; use `--sensors rapl` for CPU-only energy.
+**Sensors.** `--sensors` (or, without it, `measurement.default_sensors`) maps
+each sensor to NEMB registry names through `measurement.sensor_providers` and
+passes them to the measured process as `CODEGREEN_PROVIDERS`, one group per
+sensor written as alternatives (`rapl` -> `intel_rapl|amd_rapl`: the first that
+initializes). Only those providers are summed. A requested sensor whose
+providers all fail to initialize makes the run invalid (`NEMB_INIT_FAILED`).
+With the default `"all"`, every provider that initializes is summed; a total
+that mixes GPU and CPU providers carries the warning `GPU_IN_TOTAL`. Use
+`--sensors rapl` for CPU-only energy. The same option exists on `run`, and
+`project` uses `measurement.default_sensors`.
 
 **JSON output.** Besides `instrumentation_audit` and `error`:
 
@@ -77,9 +80,8 @@ the total is `GPU_IN_TOTAL`; use `--sensors rapl` for CPU-only energy.
   `exclusive_sum_j`, `exclusive_sum_ratio`, `overlapping_threads`.
 - `per_function_energy`: per function `inclusive_j`, `exclusive_j`,
   `energy_j` (= inclusive), `wall_time_s`, `avg_power_w`, `calls`, `quality`.
-  Every call on every thread is replayed. `quality` is `measured`, or
-  `interpolated` when a call spans fewer than `min_window_samples` sampler
-  readings.
+  Every call on every thread is replayed. `quality` is the per-function
+  verdict shared with `project` (see [Per-function quality](#per-function-quality)).
 - `checkpoints`: the NEMB result block (`checkpoint_id`, `timestamp`,
   `joules`, `watts`, `ri`, `clamp`, `provider_j`).
 - `sampler` and `validity`: see
@@ -137,6 +139,7 @@ Use `--` before commands that have their own flags; otherwise flags such as
 | `--validate / --no-validate` | Execute the command once, unmeasured, before measuring (default: validate). A failing command is also caught by the first measured run |
 | `--validate-timeout INTEGER` | Seconds allowed for the validation run (default: 300) |
 | `--timeout INTEGER` | Per-run limit in seconds (default: none) |
+| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors summed into the energy (default: `measurement.default_sensors`) |
 
 **Output includes:**
 
@@ -144,19 +147,28 @@ Use `--` before commands that have their own flags; otherwise flags such as
 - 95% confidence interval
 - Min/max range
 - Mean wall time with standard deviation
-- Outlier detection and removal
-- A `validity` block (`--json`) with `checks.affinity_cpus`. Fatal reasons:
-  `RUN_BELOW_RESOLUTION` (mean run shorter than `min_run_updates` x
-  `rapl_update_ms`, default 10 ms) and `ZERO_ENERGY_RUNS` (a run read no
-  energy). An invalid result exits 3 with `success: false` and
-  `error: "invalid_measurement: ..."`, before the `--budget` check.
+- Outlier removal by `measurement.report.outlier_method` (`iqr_<k>` or
+  `none`). Runs are filtered by energy and `duration_s` and `power_w` are
+  summarized over the same runs. `energy_j.raw` is the unfiltered summary;
+  `runs.energies_j` lists every run's signed reading (`null` where the read
+  failed) and `runs.status` its status (`ok`, `zero_energy`,
+  `negative_energy`, `read_failed`). Only `ok` runs enter the statistics.
+- A `validity` block (`--json`) with `checks.affinity_cpus` and
+  `checks.resolution_ms`. Fatal reasons: `RUN_BELOW_RESOLUTION` (mean run
+  shorter than `min_run_updates` resolutions; the resolution is the slowest
+  selected provider's update interval, plus the sampler interval when a
+  provider integrates power), `ZERO_ENERGY_RUNS`, `NEGATIVE_ENERGY_RUNS` and
+  `PROVIDER_READ_FAILED`. A backend without provider facts (perf,
+  powermetrics) gets the warning `RESOLUTION_UNKNOWN`. An invalid result exits
+  3 with `success: false` and `error: "invalid_measurement: ..."`, before the
+  `--budget` check. `sampler` carries the provider facts.
 
 Energy is read synchronously at each run boundary. During the runs the NEMB
 background sampler is slowed to `measurement.run_path.sampler_interval_ms`
 (reported as `meta.run_sampler_interval_ms`; `null` when unchanged, which
-happens when a GPU domain reports because GPU energy is integrated from the
-samples). For short commands use `--repeat` and `--warmup` rather than one
-long-tailed run, and keep each run well above 10 ms.
+happens when a selected provider has `energy_source: integrated_power`, since
+its energy is integrated from the samples). For short commands use `--repeat`
+and `--warmup` rather than one long-tailed run.
 
 **Examples:**
 ```bash
@@ -271,21 +283,29 @@ checkpoint records are captured, the command exits 1. JSON output includes
 `constexpr`/`consteval` and some C functions are not instrumented).
 
 Each entry of `runs` carries `sampler`, `validity`, `resolution_ns` and
-`overlapping_threads`; the top-level `validity` is the last run's. `project`
-does not exit 3 on an invalid run, so check `validity.status`. `GPU_IN_TOTAL`
-does not apply here: project totals include accelerators by design. Each
-function has `resolution`:
+`overlapping_threads`. The top-level `validity` merges every run (each text is
+prefixed `run N:`), and an invalid result exits 3 with `success: false` like
+`measure`. Java standalone runs build `sampler` from each JVM's
+`CG_CP_META|<json>` record (`marker_reads: "last_poll"`); the poller settings
+come from `project_config.runtime_injection.env` in `java.json`, and the
+caller's environment overrides them. Each function has `quality`.
 
-- `measured`: mean time per call is at least one resolution
-  (`resolution_ns`, the larger of the sampler interval and `rapl_update_ms`,
-  widened to the largest Java poller gap on `SAMPLER_GAP`).
-- `aggregate_only`: per-call time is below one resolution but the function's
-  total time spans at least `aggregate_min_factor` resolutions. Use the
-  total, not per-call figures.
-- `invalid`: below both.
+#### Per-function quality
+
+`measure` and `project` share one verdict per function:
+
+- `measured`: every call spans at least `min_window_samples` sampler readings
+  (when the markers carry reading indices), or else the mean time per call is
+  at least one resolution (`resolution_ns`: the slowest selected provider's
+  `update_interval_ms` or the sampler interval, widened to the largest gap on
+  `SAMPLER_GAP`).
+- `aggregate_only`: the function's summed time spans at least
+  `aggregate_min_factor` resolutions. Use the total, not per-call figures.
+- `below_resolution`: below both.
 
 `project` is the command for exclusive per-function attribution. Pass
-`--cores` with at least two CPUs; a one-CPU set is `AFFINITY_SINGLE_CPU`.
+`--cores` with at least two CPUs; a one-CPU set carries the warning
+`AFFINITY_SINGLE_CPU`.
 
 **Examples:**
 ```bash
@@ -526,9 +546,9 @@ codegreen config [OPTIONS]
 
 | Exit code | Meaning |
 |---|---|
-| 0 | Success (for `project`, read `validity.status`) |
+| 0 | Success |
 | 1 | Error: bad arguments, build or run failure, `--budget` exceeded |
-| 3 | `measure` or `run`: invalid measurement (`measurement.report.validity.fail_on_invalid`, default `true`) |
+| 3 | `measure`, `run` or `project`: invalid measurement (`measurement.report.validity.fail_on_invalid`, default `true`) |
 
 The `validity` block is `{"status": "valid"|"invalid", "reasons": [...],
 "detail": {code: text}, "warnings": {code: text}}`. Every reason is fatal;
@@ -542,38 +562,57 @@ warnings are not.
 | `INCOMPLETE_CRASH` | measure, project | Non-zero exit or launch failure |
 | `INCOMPLETE_NO_CHECKPOINTS` | measure, project | Fewer than two markers in the result block |
 | `COMPILE_FAILED` | measure | C, C++ or Java compile error (compiler output in `detail`) |
-| `AFFINITY_SINGLE_CPU` | measure, project | Measured process allowed on fewer than `min_affinity_cpus` CPUs; the sampler competes with the workload |
-| `SAMPLER_STARVED` | measure, project | Max reading gap above `max_gap_factor` x interval, or median gap above `median_gap_factor` x interval |
+| `SAMPLER_STARVED` | measure, project | Max reading gap above `gap_policy.<marker_reads>.max_gap_factor` x interval, or median gap above `median_gap_factor` x interval, where that policy's `severity` is `fatal` (NEMB `interpolated` markers) |
+| `PROVIDER_READ_FAILED` | all | A provider read failed where the result depends on it: `last_poll` markers (`failed_reads`), a provider restart (counter discontinuity), a failed `run` session read, a failed `Session` task or a failed final `Monitor` read |
 | `CHECKPOINT_CAP` | measure, project | Markers dropped at `measurement.report.max_checkpoints` |
 | `BUFFER_WRAPPED` | measure, project | Ring buffer overwrote the start of the run |
 | `MARKER_CLAMPED` | measure, project | A marker lies outside the sampled range |
-| `TOTAL_BELOW_RESOLUTION` | measure, project | Root window spans fewer than `min_window_samples` readings |
+| `TOTAL_BELOW_RESOLUTION` | measure, project | Root window (or the whole run, for aggregating runtimes) spans fewer than `min_window_samples` readings |
 | `ZERO_ENERGY` | measure, project | Root window measured 0 J |
-| `NEGATIVE_ENERGY` | measure, project | Cumulative energy decreases between markers |
-| `GPU_IN_TOTAL` | measure | GPU provider summed into the total without `--sensors` (`gpu_in_total: invalid`) |
-| `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` RAPL updates |
-| `ZERO_ENERGY_RUNS` | run | At least one run read no energy |
-| `SAMPLER_GAP` (warning) | project | Java poller gap above `java_max_gap_factor` x poll period; resolution widened |
+| `NEGATIVE_ENERGY` | measure, project, Session | Cumulative energy decreases between markers, or a task's energy is negative |
+| `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` resolutions |
+| `ZERO_ENERGY_RUNS` | run | At least one run read 0 J |
+| `NEGATIVE_ENERGY_RUNS` | run | At least one run read negative energy |
+| `AFFINITY_SINGLE_CPU` (warning) | measure, project | Measured process allowed on fewer than `min_affinity_cpus` CPUs; `SAMPLER_STARVED` is the fatal symptom |
+| `SAMPLER_GAP` (warning) | measure, project | A reading gap where the policy's `severity` is `warning` (`last_poll` markers); per-function resolution widened to the gap |
+| `PROVIDER_READ_FAILED` (warning) | measure, project | `failed_reads` where `failed_read_severity` is `warning` (`interpolated` markers skip the failed reading) |
+| `READINGS_REJECTED` (warning) | measure, project | Readings rejected by the sampler; markers interpolate across them |
+| `GPU_IN_TOTAL` (warning) | measure, run, project | The total sums GPU and non-GPU providers (scope label; choose with `--sensors` or `default_sensors`) |
+| `GPU_READ_HELD` (warning) | measure, run, project | A GPU power read failed and the last good value was held (`providers[].held`) |
 | `OVERLAPPING_THREADS` (warning) | measure, project | Several threads inside instrumented frames at once; each is charged the whole package energy |
+| `RESOLUTION_UNKNOWN` (warning) | run | The backend reports no provider facts, so `RUN_BELOW_RESOLUTION` is not checked |
+| `SAMPLES_INVALID` (warning) | Monitor | Sample reads failed; the next valid sample's delta spans each gap |
 
-`sampler` (`measure`, and each `project` run) describes the NEMB background
-sampler for that run: `interval_ms`, `buffer_capacity`, `readings`, `wrapped`,
-`rejected_readings` (readings dropped because a provider failed),
+The Python runtime embeds `validity` in its result block from in-process facts;
+the CLI adds only process-level reasons (`INCOMPLETE_*`, `NEMB_INIT_FAILED`,
+`COMPILE_FAILED`). For C, C++ and Java the CLI computes it from the block with
+the same functions (`codegreen_runtime.measurement_validity`).
+
+`sampler` (`measure`, `run`, and each `project` run) describes the sampler for
+that run: `interval_ms` (configured), `interval_ms_min`, `interval_ms_max`,
+`buffer_capacity`, `readings`, `wrapped`, `rejected_readings`, `failed_reads`,
 `dropped_checkpoints`, `first_ns`, `last_ns`, `median_gap_ns`, `max_gap_ns`,
-`affinity_cpus` (CPUs the measured process may run on), `providers` and
-`config_path`. Java standalone runs report `providers: ["java_rapl_poller"]`,
-`jvms` and `gap_statistic: "mean"`.
+`affinity_cpus` (CPUs the measured process may run on),
+`sampler_affinity_cpus`, `marker_reads` (`interpolated` for NEMB, `last_poll`
+for the Java standalone poller), `config_path` and `providers`: one object per
+provider with `name`, `hardware_type`, `energy_source` (`counter` or
+`integrated_power`), `update_interval_ms`, `counter_group`, `rejected` and
+`held`. Runs of several processes (JVM forks) merge their records (counts add,
+gaps take the worst, `processes` counts them; `gap_statistic: "mean"` marks a
+poller that keeps only the mean gap).
 
 Guidance for valid results:
 
 - Do not pin the measured process (or `codegreen` around it) to one CPU.
-  The sampler thread runs inside the measured process.
+  The sampler thread runs inside the measured process
+  (`AFFINITY_SINGLE_CPU`, and usually `SAMPLER_STARVED`).
 - Keep measured windows several sampling intervals long. Below
   `min_window_samples` readings the result is `TOTAL_BELOW_RESOLUTION`; for
   short commands use `run --repeat N --warmup M`.
-- Choose providers with `--sensors` when a GPU is present.
+- Choose providers with `--sensors` or `measurement.default_sensors` when a
+  GPU is present.
 - Use `project` for exclusive per-function attribution across a code base,
-  and read each function's `resolution`.
+  and read each function's `quality`.
 
 Thresholds live in `measurement.report.validity`; see the
 [Configuration Reference](configuration-reference.md#measurement-validity).
