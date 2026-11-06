@@ -21,6 +21,14 @@ extern "C" {
 int nemb_initialize();
 
 /**
+ * Check energy measurement without starting it: loads the config and detects, initializes and
+ * self-tests providers (honoring CODEGREEN_PROVIDERS) exactly as nemb_initialize does, then
+ * releases them. Starts no sampler thread, records no markers, writes no exit report.
+ * Returns the number of usable providers; 0 when none or on error (reason on stderr).
+ */
+int nemb_probe();
+
+/**
  * Mark a checkpoint in the energy measurement stream.
  * @param name The name of the checkpoint (e.g. "function_entry:main")
  */

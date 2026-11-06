@@ -238,40 +238,6 @@ namespace {
     }();
 }
 
-void GPUEnergyIntegrator::add_power_sample(double power_watts, uint64_t timestamp_ns) {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    if (!power_samples_.empty() && last_integration_time_ > 0) {
-        double time_diff_seconds = (timestamp_ns - last_integration_time_) / 1e9;
-        double avg_power = (power_samples_.back().power_watts + power_watts) / 2.0;
-        accumulated_energy_joules_ += avg_power * time_diff_seconds;
-    }
-    power_samples_.push_back({power_watts, timestamp_ns});
-    last_integration_time_ = timestamp_ns;
-    if (power_samples_.size() > 10000) {
-        power_samples_.erase(power_samples_.begin(), power_samples_.begin() + 5000);
-    }
-}
-
-double GPUEnergyIntegrator::get_accumulated_energy() const {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    return accumulated_energy_joules_;
-}
-
-void GPUEnergyIntegrator::reset_accumulation() {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    accumulated_energy_joules_ = 0.0;
-    power_samples_.clear();
-    last_integration_time_ = 0;
-}
-
-double GPUEnergyIntegrator::get_average_power() const {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    if (power_samples_.empty()) return 0.0;
-    double total = 0.0;
-    for (const auto& s : power_samples_) total += s.power_watts;
-    return total / power_samples_.size();
-}
-
 NVIDIAGPUProvider::NVIDIAGPUProvider() = default;
 
 NVIDIAGPUProvider::~NVIDIAGPUProvider() {
@@ -298,49 +264,32 @@ EnergyReading NVIDIAGPUProvider::get_reading() {
     if (!initialized_) return EnergyReading{};
     std::lock_guard<std::mutex> lock(reading_mutex_);
 
-    auto now = std::chrono::steady_clock::now();
+    EnergyReading reading;
+    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
     double total_energy = 0.0, total_power = 0.0;
-    uint32_t active_gpus = 0;
-    std::map<std::string, double> domain_energy, domain_power;
+    uint32_t active_gpus = 0, lost_before = integrator_.lost_devices();
 
     for (uint32_t i = 0; i < gpu_count_; ++i) {
         auto& gs = gpu_states_[i];
         if (!gs.available || !gs.monitoring_enabled) continue;
-
-        double gpu_power = get_gpu_power(i);
-        if (gpu_power > 0) {
-            uint64_t ts = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                now.time_since_epoch()).count();
-            gs.energy_integrator->add_power_sample(gpu_power, ts);
-            double gpu_energy = gs.energy_integrator->get_accumulated_energy();
-            total_energy += gpu_energy;
-            total_power += gpu_power;
-            active_gpus++;
-            std::string dom = "gpu" + std::to_string(i);
-            domain_energy[dom] = gpu_energy;
-            domain_power[dom] = gpu_power;
-            gs.consecutive_failures = 0;
+        double w = get_gpu_power(i);  // >= 0 exactly when NVML returned NVML_SUCCESS (0 W is a valid reading)
+        std::string dom = "gpu" + std::to_string(i);
+        if (integrator_.add(i, w >= 0 ? std::optional<double>(w) : std::nullopt, reading.timestamp_ns, max_consecutive_failures())) {
+            held_readings_++;
         } else {
-            // Transient miss: keep the GPU's cumulative value; the next sample integrates across the gap.
-            double held_j = gs.energy_integrator->get_accumulated_energy();
-            total_energy += held_j;
-            domain_energy["gpu" + std::to_string(i)] = held_j;
-            gs.consecutive_failures++;
-            if (gs.consecutive_failures > max_consecutive_failures_) {
-                gs.available = false;
-                lost_gpus_++;
-                std::cerr << "GPU " << i << " marked unavailable after " << max_consecutive_failures_ << " failures" << std::endl;
-            }
+            reading.domain_power_watts[dom] = w;
+            total_power += w;
+            active_gpus++;
         }
-        gs.last_reading_time = now;
+        reading.domain_energy_joules[dom] = integrator_.joules(i);
+        total_energy += integrator_.joules(i);
+        gs.last_reading_time = std::chrono::steady_clock::now();
     }
+    if (integrator_.lost_devices() > lost_before)
+        std::cerr << "NVIDIA GPU lost after " << max_consecutive_failures() << " consecutive failed power reads; readings are invalid" << std::endl;
 
-    EnergyReading reading;
-    reading.energy_joules = lost_gpus_ ? -1.0 : total_energy;
+    reading.energy_joules = integrator_.lost_devices() ? -1.0 : total_energy;
     reading.average_power_watts = total_power;
-    reading.domain_energy_joules = std::move(domain_energy);
-    reading.domain_power_watts = std::move(domain_power);
-    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
     reading.provider_id = "nvidia_gpu";
     reading.confidence = (active_gpus > 0) ? 0.98 : 0.0;
     reading.uncertainty_percent = (active_gpus > 0) ? 2.0 : 100.0;
@@ -357,8 +306,9 @@ EnergyProviderSpec NVIDIAGPUProvider::get_specification() const {
         spec.measurement_domains.push_back("gpu" + std::to_string(i));
     spec.energy_resolution_joules = 1e-3;
     spec.power_resolution_watts = 1e-3;
-    spec.update_interval = std::chrono::microseconds(100000);
+    spec.update_interval = std::chrono::microseconds(100000);  // nominal NVML power sample period
     spec.counter_bits = 32;
+    spec.energy_source = "integrated_power";
     return spec;
 }
 
@@ -382,8 +332,10 @@ bool NVIDIAGPUProvider::is_available() const {
 
 void NVIDIAGPUProvider::shutdown() {
     if (initialized_) {
-        for (auto& gs : gpu_states_)
-            if (gs.energy_integrator) gs.energy_integrator->reset_accumulation();
+        {
+            std::lock_guard<std::mutex> lock(reading_mutex_);
+            integrator_.reset();
+        }
         shutdown_nvml();
         initialized_ = false;
     }
@@ -426,6 +378,7 @@ bool NVIDIAGPUProvider::detect_gpus() {
 
     gpu_states_.resize(gpu_count_);
     gpu_info_.resize(gpu_count_);
+    integrator_ = PowerIntegrator(gpu_count_);
 
     for (uint32_t i = 0; i < gpu_count_; ++i) {
         auto& gs = gpu_states_[i];
@@ -467,7 +420,6 @@ bool NVIDIAGPUProvider::detect_gpus() {
         gi.supports_energy_monitoring = false;
         gs.info = gi;
         gs.available = true;
-        gs.energy_integrator = std::make_unique<GPUEnergyIntegrator>();
     }
     return true;
 }
@@ -545,11 +497,11 @@ std::map<std::string, std::string> get_nvidia_version_info() {
 }
 
 std::map<uint32_t, double> NVIDIAGPUProvider::get_per_gpu_energy_breakdown() {
+    std::lock_guard<std::mutex> lock(reading_mutex_);
     std::map<uint32_t, double> breakdown;
     for (uint32_t i = 0; i < gpu_count_; ++i) {
         auto& gs = gpu_states_[i];
-        if (gs.available && gs.monitoring_enabled && gs.energy_integrator)
-            breakdown[i] = gs.energy_integrator->get_accumulated_energy();
+        if (gs.available && gs.monitoring_enabled) breakdown[i] = integrator_.joules(i);
     }
     return breakdown;
 }

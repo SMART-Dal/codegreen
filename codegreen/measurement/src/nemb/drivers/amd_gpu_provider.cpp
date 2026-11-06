@@ -63,53 +63,6 @@ namespace {
     }();
 }
 
-// AMDGPUEnergyIntegrator implementation
-void AMDGPUEnergyIntegrator::add_power_sample(double power_watts, uint64_t timestamp_ns) {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    
-    if (!power_samples_.empty() && last_integration_time_ > 0) {
-        // Calculate energy increment using trapezoidal rule
-        double time_diff_seconds = (timestamp_ns - last_integration_time_) / 1e9;
-        double avg_power = (power_samples_.back().power_watts + power_watts) / 2.0;
-        accumulated_energy_joules_ += avg_power * time_diff_seconds;
-    }
-    
-    power_samples_.push_back({power_watts, timestamp_ns});
-    last_integration_time_ = timestamp_ns;
-    
-    // Keep only recent samples to prevent memory growth
-    if (power_samples_.size() > 10000) {
-        power_samples_.erase(power_samples_.begin(), power_samples_.begin() + 5000);
-    }
-}
-
-double AMDGPUEnergyIntegrator::get_accumulated_energy() const {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    return accumulated_energy_joules_;
-}
-
-void AMDGPUEnergyIntegrator::reset_accumulation() {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    accumulated_energy_joules_ = 0.0;
-    power_samples_.clear();
-    last_integration_time_ = 0;
-}
-
-double AMDGPUEnergyIntegrator::get_average_power() const {
-    std::lock_guard<std::mutex> lock(integration_mutex_);
-    
-    if (power_samples_.empty()) {
-        return 0.0;
-    }
-    
-    double total_power = 0.0;
-    for (const auto& sample : power_samples_) {
-        total_power += sample.power_watts;
-    }
-    
-    return total_power / power_samples_.size();
-}
-
 // AMDGPUProvider implementation
 AMDGPUProvider::AMDGPUProvider() = default;
 
@@ -148,60 +101,33 @@ EnergyReading AMDGPUProvider::get_reading() {
     }
     
     std::lock_guard<std::mutex> lock(reading_mutex_);
-    
-    auto now = std::chrono::steady_clock::now();
-    double total_energy = 0.0;
-    double total_power = 0.0;
-    uint32_t active_gpus = 0;
-    
-    std::map<std::string, double> domain_energy;
-    std::map<std::string, double> domain_power;
-    
+
+    EnergyReading reading;
+    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
+    double total_energy = 0.0, total_power = 0.0;
+    uint32_t active_gpus = 0, lost_before = integrator_.lost_devices();
+
     for (uint32_t i = 0; i < gpu_count_; ++i) {
         auto& gpu_state = gpu_states_[i];
-        
-        if (!gpu_state.available || !gpu_state.monitoring_enabled) {
-            continue;
-        }
-        
-        // Get current power reading
-        double gpu_power = get_gpu_power(i);
-        if (gpu_power > 0) {
-            // Add power sample to integrator
-            uint64_t timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                now.time_since_epoch()).count();
-            gpu_state.energy_integrator->add_power_sample(gpu_power, timestamp_ns);
-            
-            // Get accumulated energy
-            double gpu_energy = gpu_state.energy_integrator->get_accumulated_energy();
-            
-            total_energy += gpu_energy;
-            total_power += gpu_power;
-            active_gpus++;
-            
-            // Add to domain breakdown
-            std::string gpu_domain = "amd_gpu" + std::to_string(i);
-            domain_energy[gpu_domain] = gpu_energy;
-            domain_power[gpu_domain] = gpu_power;
-            
-            gpu_state.consecutive_failures = 0;
+        if (!gpu_state.available || !gpu_state.monitoring_enabled) continue;
+        double w = get_gpu_power(i);  // >= 0 exactly when ROCm SMI returned RSMI_STATUS_SUCCESS
+        std::string dom = "amd_gpu" + std::to_string(i);
+        if (integrator_.add(i, w >= 0 ? std::optional<double>(w) : std::nullopt, reading.timestamp_ns, max_consecutive_failures())) {
+            held_readings_++;
         } else {
-            gpu_state.consecutive_failures++;
-            if (gpu_state.consecutive_failures > max_consecutive_failures_) {
-                gpu_state.available = false;
-                std::cerr << "AMD GPU " << i << " marked as unavailable due to consecutive failures" << std::endl;
-            }
+            reading.domain_power_watts[dom] = w;
+            total_power += w;
+            active_gpus++;
         }
-        
-        gpu_state.last_reading_time = now;
+        reading.domain_energy_joules[dom] = integrator_.joules(i);
+        total_energy += integrator_.joules(i);
+        gpu_state.last_reading_time = std::chrono::steady_clock::now();
     }
-    
-    EnergyReading reading;
-    reading.energy_joules = total_energy;
+    if (integrator_.lost_devices() > lost_before)
+        std::cerr << "AMD GPU lost after " << max_consecutive_failures() << " consecutive failed power reads; readings are invalid" << std::endl;
+
+    reading.energy_joules = integrator_.lost_devices() ? -1.0 : total_energy;
     reading.average_power_watts = total_power;
-    reading.domain_energy_joules = std::move(domain_energy);
-    reading.domain_power_watts = std::move(domain_power);
-    reading.timestamp_ns = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
     reading.provider_id = "amd_gpu";
     reading.confidence = (active_gpus > 0) ? 0.97 : 0.0; // 97% confidence for ROCm SMI
     reading.uncertainty_percent = (active_gpus > 0) ? 3.0 : 100.0; // 3% uncertainty for ROCm SMI
@@ -225,7 +151,8 @@ EnergyProviderSpec AMDGPUProvider::get_specification() const {
     spec.power_resolution_watts = 1e-3; // Milliwatt precision
     spec.update_interval = std::chrono::microseconds(100000); // 100ms update interval
     spec.counter_bits = 32; // ROCm SMI power counters are 32-bit
-    
+    spec.energy_source = "integrated_power";
+
     return spec;
 }
 
@@ -257,13 +184,11 @@ bool AMDGPUProvider::is_available() const {
 
 void AMDGPUProvider::shutdown() {
     if (initialized_) {
-        // Reset all energy integrators
-        for (auto& gpu_state : gpu_states_) {
-            if (gpu_state.energy_integrator) {
-                gpu_state.energy_integrator->reset_accumulation();
-            }
+        {
+            std::lock_guard<std::mutex> lock(reading_mutex_);
+            integrator_.reset();
         }
-        
+
         shutdown_rsmi();
         initialized_ = false;
     }
@@ -310,6 +235,7 @@ bool AMDGPUProvider::detect_amd_gpus() {
     // Initialize GPU states
     gpu_states_.resize(gpu_count_);
     gpu_info_.resize(gpu_count_);
+    integrator_ = PowerIntegrator(gpu_count_);
     
     for (uint32_t i = 0; i < gpu_count_; ++i) {
         auto& gpu_state = gpu_states_[i];
@@ -340,9 +266,6 @@ bool AMDGPUProvider::detect_amd_gpus() {
         gpu_info.supports_energy_monitoring = false; // ROCm SMI doesn't directly support energy
         gpu_state.info = gpu_info;
         gpu_state.available = true;
-        
-        // Create energy integrator
-        gpu_state.energy_integrator = std::make_unique<AMDGPUEnergyIntegrator>();
     }
     
     return true;
@@ -386,6 +309,7 @@ bool AMDGPUProvider::detect_amd_gpus_fallback() {
         if (gpu_count_ > 0) {
             gpu_states_.resize(gpu_count_);
             gpu_info_.resize(gpu_count_);
+            integrator_ = PowerIntegrator(gpu_count_);
             
             // Initialize basic info for fallback mode
             for (uint32_t i = 0; i < gpu_count_; ++i) {
@@ -399,7 +323,6 @@ bool AMDGPUProvider::detect_amd_gpus_fallback() {
                 
                 gpu_state.info = gpu_info;
                 gpu_state.available = false; // Not available for energy monitoring
-                gpu_state.energy_integrator = std::make_unique<AMDGPUEnergyIntegrator>();
             }
             
             std::cerr << "AMD GPU fallback detection found " << gpu_count_ << " GPUs (no power monitoring)" << std::endl;
@@ -464,13 +387,11 @@ void AMDGPUProvider::handle_rsmi_error(const std::string& operation, int rsmi_re
 
 // Additional method implementations
 std::map<uint32_t, double> AMDGPUProvider::get_per_gpu_energy_breakdown() {
+    std::lock_guard<std::mutex> lock(reading_mutex_);
     std::map<uint32_t, double> breakdown;
-    
     for (uint32_t i = 0; i < gpu_count_; ++i) {
         auto& gpu_state = gpu_states_[i];
-        if (gpu_state.available && gpu_state.monitoring_enabled && gpu_state.energy_integrator) {
-            breakdown[i] = gpu_state.energy_integrator->get_accumulated_energy();
-        }
+        if (gpu_state.available && gpu_state.monitoring_enabled) breakdown[i] = integrator_.joules(i);
     }
     
     return breakdown;

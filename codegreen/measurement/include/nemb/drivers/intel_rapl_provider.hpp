@@ -56,7 +56,8 @@ struct IntelCPUInfo {
  */
 class IntelRAPLProvider : public EnergyProvider {
 public:
-    IntelRAPLProvider();
+    /** @param powercap_root Directory holding the intel-rapl:* zones (tests pass a fake tree). */
+    explicit IntelRAPLProvider(std::string powercap_root = "/sys/class/powercap");
     ~IntelRAPLProvider() override;
     
     // EnergyProvider interface implementation
@@ -126,6 +127,7 @@ private:
     void log_domain_status() const;
     
     // Member variables
+    std::string root_;
     IntelCPUInfo cpu_info_;
     std::map<std::string, RAPLDomain> rapl_domains_;
     std::unique_ptr<hal::CounterManager> counter_manager_;

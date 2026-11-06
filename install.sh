@@ -138,6 +138,7 @@ LIB_DIR="$PROJECT_ROOT/lib"
 
 if [ -w /usr/local/lib ]; then
     cp "$LIB_DIR/libcodegreen-nemb.so" /usr/local/lib/
+    mkdir -p /usr/local/share/codegreen && cp "$PROJECT_ROOT/codegreen/config.json" /usr/local/share/codegreen/  # NEMB reads <libdir>/../share/codegreen/config.json
     ldconfig 2>/dev/null || true
     echo "[ok] Library installed to /usr/local/lib"
 else

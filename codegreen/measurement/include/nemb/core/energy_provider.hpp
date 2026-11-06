@@ -8,6 +8,7 @@
 #include <map>
 #include <functional>
 #include <optional>
+#include <cstdint>
 
 namespace codegreen::nemb {
 
@@ -74,9 +75,11 @@ struct EnergyProviderSpec {
     // Measurement capabilities - CRITICAL: preserve domain information
     std::vector<std::string> measurement_domains;      ///< Available measurement domains (package, core, dram, etc.)
     double energy_resolution_joules{0.0};             ///< Minimum measurable energy (queried from hardware)
-    double power_resolution_watts{0.0};               ///< Minimum measurable power (queried from hardware)  
-    std::chrono::microseconds update_interval{1000};   ///< Hardware update frequency
+    double power_resolution_watts{0.0};               ///< Minimum measurable power (queried from hardware)
+    std::chrono::microseconds update_interval{0};      ///< Hardware update period of the energy value; 0 = unknown
     uint32_t counter_bits{32};                        ///< Counter width for wraparound handling
+    std::string energy_source{"counter"};             ///< "counter" (hardware cumulative energy) | "integrated_power" (power samples integrated in software)
+    std::string counter_group;                        ///< Providers reading the same physical counter share a group; detection keeps one per group
     
     // Advanced capabilities
     bool supports_temperature{false};                  ///< Temperature monitoring available
@@ -153,6 +156,11 @@ public:
         uint64_t total = total_measurements_.load();
         return (total > 0) ? (1.0 - static_cast<double>(failed_measurements_.load()) / total) : 0.0;
     }
+    /** @brief Device reads for which the provider kept a held value instead of a fresh hardware value. */
+    uint64_t get_held_readings() const { return held_readings_.load(); }
+    /** @brief Consecutive failed reads after which a provider or one of its devices is treated as lost. */
+    void set_max_consecutive_failures(uint32_t n) { max_consecutive_failures_.store(n); }
+    uint32_t max_consecutive_failures() const { return max_consecutive_failures_.load(); }
 
     // Factory registration
     using ProviderFactory = std::function<std::unique_ptr<EnergyProvider>()>;
@@ -165,7 +173,9 @@ protected:
     // Statistics tracking
     mutable std::atomic<uint64_t> total_measurements_{0};
     mutable std::atomic<uint64_t> failed_measurements_{0};
-    
+    std::atomic<uint64_t> held_readings_{0};
+    std::atomic<uint32_t> max_consecutive_failures_{5};
+
     // Helper method for derived classes to update statistics
     void record_measurement_attempt(bool success) {
         total_measurements_.fetch_add(1);
@@ -183,10 +193,44 @@ protected:
 std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provider_type);
 
 /**
- * @brief Create and initialize energy providers, keyed by registry name.
- * CODEGREEN_PROVIDERS (comma-separated registry names) restricts the set and makes
- * unknown or failing providers throw; otherwise every registered provider that initializes.
+ * @brief Create, initialize and self-test energy providers, keyed by registry name.
+ * CODEGREEN_PROVIDERS (the only place it is read) is a comma-separated list of items, each a
+ * registry name or alternatives `a|b` (the first that initializes and self-tests is used); it
+ * makes unknown names, empty names and items with no working alternative throw. Unset: every
+ * registered provider that works. Either way only the first working provider of each
+ * EnergyProviderSpec::counter_group is kept.
  */
 std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers();
+
+/**
+ * @brief Integrates per-device power samples into cumulative joules (trapezoid rule).
+ * A missed sample keeps the device's cumulative value (held); the next good sample integrates
+ * across the gap. A device with more than max_misses consecutive misses is lost for good and
+ * lost_devices() becomes non-zero. Not locked: the owning provider serializes all calls.
+ */
+class PowerIntegrator {
+public:
+    explicit PowerIntegrator(size_t devices = 0) : dev_(devices) {}
+    /** @brief watts empty = failed read. Returns true when the device's value was held. */
+    bool add(size_t i, std::optional<double> watts, uint64_t t_ns, uint32_t max_misses) {
+        Device& d = dev_.at(i);
+        if (!watts) {
+            if (++d.misses > max_misses && !d.lost) { d.lost = true; ++lost_; }
+            return true;
+        }
+        if (d.t_ns) d.joules += 0.5 * (d.watts + *watts) * static_cast<double>(t_ns - d.t_ns) / 1e9;
+        d.watts = *watts;
+        d.t_ns = t_ns;
+        d.misses = 0;
+        return false;
+    }
+    double joules(size_t i) const { return dev_.at(i).joules; }
+    uint32_t lost_devices() const { return lost_; }
+    void reset() { for (auto& d : dev_) d = Device{}; lost_ = 0; }
+private:
+    struct Device { double joules{0}, watts{0}; uint64_t t_ns{0}; uint32_t misses{0}; bool lost{false}; };
+    std::vector<Device> dev_;
+    uint32_t lost_{0};
+};
 
 } // namespace codegreen::nemb

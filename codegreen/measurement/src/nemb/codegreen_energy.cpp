@@ -37,6 +37,25 @@ static int _nemb_getpid() { return getpid(); }
 
 namespace codegreen {
 
+static bool debug_logging(bool configured) {
+    const char* env = std::getenv("CODEGREEN_DEBUG");
+    return configured || (env && std::string(env) == "1");
+}
+
+namespace {
+// Mutes std::cout/std::cerr (provider init chatter) for its lifetime when `mute` is set.
+struct QuietStreams {
+    std::streambuf* out;
+    std::streambuf* err;
+    std::ostringstream sink;
+    bool mute;
+    explicit QuietStreams(bool m) : out(std::cout.rdbuf()), err(std::cerr.rdbuf()), mute(m) {
+        if (mute) { std::cout.rdbuf(sink.rdbuf()); std::cerr.rdbuf(sink.rdbuf()); }
+    }
+    ~QuietStreams() { if (mute) { std::cout.rdbuf(out); std::cerr.rdbuf(err); } }
+};
+}  // namespace
+
 // Implementation details hidden using PIMPL pattern
 class EnergyMeter::Impl {
 public:
@@ -51,7 +70,7 @@ public:
     void mark_checkpoint(const std::string& name);
     std::vector<EnergyMeter::CorrelatedCheckpoint> get_checkpoint_measurements(EnergyMeter::SamplerStats* sampler);
     std::vector<nemb::SynchronizedReading> get_time_series_since(uint64_t since_ts_ns) const;
-    void set_buffer_size(size_t n);
+    bool set_buffer_size(size_t n);
     void set_measurement_interval_ms(int ms);
     const NEMBConfig& get_config() const;
     bool self_test();
@@ -85,7 +104,6 @@ private:
     
     std::vector<Marker> markers_;
     mutable std::mutex markers_mutex_;
-    std::vector<std::string> provider_names_;
     std::string config_path_;
     uint64_t max_checkpoints_{0};
     std::atomic<uint64_t> checkpoint_calls_{0};
@@ -133,55 +151,25 @@ EnergyMeter::Impl::Impl(const NEMBConfig& config)
     coordinator_config.measurement_buffer_size = nemb_config.coordinator.measurement_buffer_size;
     coordinator_config.auto_restart_failed_providers = nemb_config.coordinator.auto_restart_failed_providers;
     coordinator_config.provider_restart_interval = nemb_config.coordinator.provider_restart_interval;
-    
-    // Suppress verbose init logging unless debug mode is enabled.
-    // Check both config flag and CODEGREEN_DEBUG env var (set by CLI --verbose).
-    bool debug_logging = config.enable_debug_logging;
-    const char* debug_env = std::getenv("CODEGREEN_DEBUG");
-    if (debug_env && std::string(debug_env) == "1") debug_logging = true;
-
-    std::streambuf* saved_cout = std::cout.rdbuf();
-    std::streambuf* saved_cerr = std::cerr.rdbuf();
-    std::ostringstream suppressed;
-    if (!debug_logging) {
-        std::cout.rdbuf(suppressed.rdbuf());
-        std::cerr.rdbuf(suppressed.rdbuf());
-    }
-
-    coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
-    markers_.reserve(10000);
-    config_path_ = nemb::ConfigLoader::find_config_file();
+    coordinator_config.max_consecutive_failures = nemb_config.coordinator.max_consecutive_failures;
+    coordinator_config.enable_real_time_filtering = nemb_config.coordinator.real_time_filtering;
+    config_path_ = nemb_config.path;
     max_checkpoints_ = nemb_config.max_checkpoints;
-
-    const char* requested = std::getenv("CODEGREEN_PROVIDERS");
-    bool started = false;
-    std::string error;
-    try {
-        for (auto& [name, provider] : nemb::detect_available_providers()) {
-            if (coordinator_->add_provider(std::move(provider))) provider_names_.push_back(name);
-            else if (requested && *requested) throw std::runtime_error("CODEGREEN_PROVIDERS: provider '" + name + "' failed self-test");
-        }
-        started = coordinator_->start_measurements();
-    } catch (const std::exception& e) {
-        error = e.what();
-    }
-
+    markers_.reserve(10000);
+    {
+        // Provider init chatter is shown only with debug logging (config flag or CODEGREEN_DEBUG=1 from CLI --verbose).
+        QuietStreams quiet(!debug_logging(config.enable_debug_logging));
+        coordinator_ = std::make_unique<nemb::MeasurementCoordinator>(coordinator_config);
+        for (auto& [name, provider] : nemb::detect_available_providers())
+            if (!coordinator_->add_provider(std::move(provider), name))
+                throw std::runtime_error("NEMB: provider '" + name + "' could not be added");
+        if (!coordinator_->start_measurements()) throw std::runtime_error("Failed to start NEMB measurement coordinator");
 #ifdef __APPLE__
-    // Initialize kpc for hybrid checkpoint counters (cycles, IPC, cache misses)
-    nemb::drivers::DarwinKPCProvider::initialize();
+        // Initialize kpc for hybrid checkpoint counters (cycles, IPC, cache misses)
+        nemb::drivers::DarwinKPCProvider::initialize();
 #endif
-
-    // Restore output
-    if (!debug_logging) {
-        std::cout.rdbuf(saved_cout);
-        std::cerr.rdbuf(saved_cerr);
     }
 
-    if (!error.empty()) throw std::runtime_error(error);
-    if (!started) {
-        throw std::runtime_error("Failed to start NEMB measurement coordinator");
-    }
-    
     auto start_time = std::chrono::steady_clock::now();
     while (coordinator_->get_active_providers().empty() && 
            std::chrono::steady_clock::now() - start_time < config.timeout) {
@@ -249,16 +237,6 @@ void EnergyMeter::Impl::mark_checkpoint(const std::string& name) {
     }
 }
 
-static int affinity_cpus() {
-#ifdef __linux__
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    return sched_getaffinity(0, sizeof(set), &set) == 0 ? CPU_COUNT(&set) : -1;
-#else
-    return static_cast<int>(std::thread::hardware_concurrency());
-#endif
-}
-
 // x + w*(y-x) is exact at w == 0 and when x == y, so a flat or rising series stays non-decreasing.
 static double lerp(double x, double y, double w) {
     double v = x + w * (y - x);
@@ -297,9 +275,9 @@ void EnergyMeter::correlate(const std::vector<nemb::SynchronizedReading>& R, std
 std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint_measurements(EnergyMeter::SamplerStats* st) {
     auto readings = coordinator_->get_buffered_readings();
     bool wrapped = coordinator_->buffer_wrapped();
-    auto last = coordinator_->get_synchronized_reading();
-    bool last_ok = last.providers_active > 0 && last.providers_failed == 0 &&
-                   (readings.empty() || last.common_timestamp_ns > readings.back().common_timestamp_ns);
+    nemb::SynchronizedReading last;
+    bool sampled = coordinator_->sample_now(last);
+    bool last_ok = sampled && (readings.empty() || last.common_timestamp_ns > readings.back().common_timestamp_ns);
     if (last_ok) readings.push_back(std::move(last));
 
     std::vector<EnergyMeter::CorrelatedCheckpoint> cps;
@@ -322,10 +300,12 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
     }
     if (st) {
         st->interval_ms = coordinator_->measurement_interval().count();
+        st->interval_ms_min = coordinator_->interval_ms_min();
+        st->interval_ms_max = coordinator_->interval_ms_max();
         st->buffer_capacity = coordinator_->buffer_capacity();
         st->readings = readings.size();
         st->wrapped = wrapped;
-        st->rejected_readings = coordinator_->rejected_readings() + (last_ok ? 0 : 1);
+        st->rejected_readings = coordinator_->rejected_readings() + (sampled && !last_ok ? 1 : 0);
         uint64_t calls = checkpoint_calls_.load();
         st->dropped_checkpoints = calls > max_checkpoints_ ? calls - max_checkpoints_ : 0;
         std::vector<uint64_t> gaps;
@@ -337,8 +317,17 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             std::nth_element(gaps.begin(), gaps.begin() + gaps.size() / 2, gaps.end());
             st->median_gap_ns = gaps[gaps.size() / 2];
         }
-        st->affinity_cpus = affinity_cpus();
-        st->providers = provider_names_;
+        st->affinity_cpus = coordinator_->affinity_cpus();
+        st->sampler_affinity_cpus = coordinator_->sampler_affinity_cpus();
+        auto counts = coordinator_->provider_counts();
+        st->providers.clear();
+        for (const auto& [name, spec] : coordinator_->get_provider_specifications()) {
+            const auto& c = counts[name];
+            st->providers.push_back({name, spec.hardware_type, spec.energy_source, spec.counter_group,
+                                     spec.update_interval.count() / 1000.0, c.rejected, c.held});
+            st->failed_reads += c.rejected;
+            st->provider_restarts += c.restarts;
+        }
         st->config_path = config_path_;
     }
     return cps;
@@ -359,10 +348,11 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
     result.power_watts = sync_reading.total_system_power_watts;
     result.timestamp_ns = sync_reading.common_timestamp_ns;
     result.is_valid = sync_reading.providers_failed == 0;
-    // Aggregate per-domain breakdown from all providers
+    // Per-domain breakdown from all providers, signed: a failed domain is kept and counted, not dropped
     for (auto& pr : sync_reading.provider_readings) {
         for (auto& [domain, joules] : pr.domain_energy_joules) {
-            if (joules >= 0) result.components[domain] = joules;
+            result.components[domain] = joules;
+            if (joules < 0) result.negative_components++;
         }
     }
     return result;
@@ -396,8 +386,8 @@ std::vector<nemb::SynchronizedReading> EnergyMeter::Impl::get_time_series_since(
     return filtered;
 }
 
-void EnergyMeter::Impl::set_buffer_size(size_t n) {
-    if (coordinator_) coordinator_->set_buffer_size(n);
+bool EnergyMeter::Impl::set_buffer_size(size_t n) {
+    return coordinator_ && coordinator_->set_buffer_size(n);
 }
 
 void EnergyMeter::Impl::set_measurement_interval_ms(int ms) {
@@ -433,7 +423,7 @@ EnergyResult EnergyMeter::read() { return impl_->read(); }
 uint64_t EnergyMeter::start_session(const std::string& n) { return impl_->start_session(n); }
 EnergyDifference EnergyMeter::end_session(uint64_t i) { return impl_->end_session(i); }
 std::vector<nemb::SynchronizedReading> EnergyMeter::get_time_series_since(uint64_t since_ts_ns) const { return impl_->get_time_series_since(since_ts_ns); }
-void EnergyMeter::set_buffer_size(size_t n) { impl_->set_buffer_size(n); }
+bool EnergyMeter::set_buffer_size(size_t n) { return impl_->set_buffer_size(n); }
 void EnergyMeter::set_measurement_interval_ms(int ms) { impl_->set_measurement_interval_ms(ms); }
 const NEMBConfig& EnergyMeter::get_config() const { return impl_->get_config(); }
 bool EnergyMeter::self_test() { return impl_->self_test(); }
@@ -464,16 +454,14 @@ EnergyDifference calculate_difference(const EnergyResult& e, const EnergyResult&
         d.energy_joules = e.energy_joules - s.energy_joules;
         d.duration_seconds = (e.timestamp_ns - s.timestamp_ns) / 1e9;
         if(d.duration_seconds > 0) d.average_power_watts = d.energy_joules / d.duration_seconds;
-        // Per-domain delta: subtract baseline from end for each domain present in both
+        // Per-domain delta, signed and never dropped; a negative delta or a failed (negative) end/start value is counted
         for (auto& [domain, end_j] : e.components) {
             auto it = s.components.find(domain);
             double start_j = (it != s.components.end()) ? it->second : 0;
             double delta = end_j - start_j;
-            if (delta >= 0) {
-                d.component_energy[domain] = delta;
-                if (d.duration_seconds > 0)
-                    d.component_power[domain] = delta / d.duration_seconds;
-            }
+            d.component_energy[domain] = delta;
+            if (d.duration_seconds > 0) d.component_power[domain] = delta / d.duration_seconds;
+            if (delta < 0 || end_j < 0 || start_j < 0) d.negative_components++;
         }
     }
     return d;
@@ -559,6 +547,22 @@ extern "C" {
         }
         return c_api_meter->is_available() ? 1 : 0;
     }
+
+    // Detects, initializes and self-tests providers exactly as nemb_initialize does (config,
+    // CODEGREEN_PROVIDERS), then releases them: no sampler thread, no meter, no markers.
+    // Returns the number of usable providers; 0 (reason on stderr) when none or on error.
+    int nemb_probe() {
+        if (c_api_is_forked_child) return 0;
+        try {
+            codegreen::nemb::ConfigLoader::load_config();  // a bad config fails here as it would at init
+            codegreen::QuietStreams quiet(!codegreen::debug_logging(false));
+            return static_cast<int>(codegreen::nemb::detect_available_providers().size());
+        } catch (const std::exception& e) {
+            std::cerr << "NEMB probe failed: " << e.what() << std::endl;
+            return 0;
+        }
+    }
+
     uint64_t nemb_start_session(const char* n) {
         if (c_api_is_forked_child) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
@@ -589,13 +593,23 @@ extern "C" {
             for (const auto& [id, j] : c.provider_j) { ss << (first ? "" : ", ") << json_str(id) << ": " << j; first = false; }
             ss << "}}";
         }
-        ss << "], \"sampler\": {\"interval_ms\": " << st.interval_ms << ", \"buffer_capacity\": " << st.buffer_capacity
+        ss << "], \"sampler\": {\"interval_ms\": " << st.interval_ms << ", \"interval_ms_min\": " << st.interval_ms_min
+           << ", \"interval_ms_max\": " << st.interval_ms_max << ", \"buffer_capacity\": " << st.buffer_capacity
            << ", \"readings\": " << st.readings << ", \"wrapped\": " << (st.wrapped ? "true" : "false")
-           << ", \"rejected_readings\": " << st.rejected_readings << ", \"dropped_checkpoints\": " << st.dropped_checkpoints
+           << ", \"rejected_readings\": " << st.rejected_readings << ", \"failed_reads\": " << st.failed_reads
+           << ", \"provider_restarts\": " << st.provider_restarts << ", \"dropped_checkpoints\": " << st.dropped_checkpoints
            << ", \"first_ns\": " << st.first_ns
            << ", \"last_ns\": " << st.last_ns << ", \"median_gap_ns\": " << st.median_gap_ns
-           << ", \"max_gap_ns\": " << st.max_gap_ns << ", \"affinity_cpus\": " << st.affinity_cpus << ", \"providers\": [";
-        for (size_t i = 0; i < st.providers.size(); ++i) ss << (i ? ", " : "") << json_str(st.providers[i]);
+           << ", \"max_gap_ns\": " << st.max_gap_ns << ", \"affinity_cpus\": " << st.affinity_cpus
+           << ", \"sampler_affinity_cpus\": " << st.sampler_affinity_cpus << ", \"marker_reads\": " << json_str(st.marker_reads)
+           << ", \"providers\": [";
+        for (size_t i = 0; i < st.providers.size(); ++i) {
+            const auto& p = st.providers[i];
+            ss << (i ? ", " : "") << "{\"name\": " << json_str(p.name) << ", \"hardware_type\": " << json_str(p.hardware_type)
+               << ", \"energy_source\": " << json_str(p.energy_source) << ", \"update_interval_ms\": " << p.update_interval_ms
+               << ", \"counter_group\": " << json_str(p.counter_group) << ", \"rejected\": " << p.rejected
+               << ", \"held\": " << p.held << "}";
+        }
         ss << "], \"config_path\": " << json_str(st.config_path) << "}}";
         return ss.str();
     }
@@ -605,8 +619,9 @@ extern "C" {
     //   {
     //     "t_ns":     CLOCK_MONOTONIC nanoseconds at sample time,
     //     "energy_j": cumulative system-wide joules from session start (sum across providers),
-    //     "power_w":  system-wide instantaneous watts at this sample (sum across domains),
-    //     "domain_j": {<domain>: cumulative joules from session start},
+    //     "power_w":  system-wide instantaneous watts at this sample (sum across domains, raw),
+    //     "power_w_filtered": EMA of power_w, present only when nemb coordinator real_time_filtering is on,
+    //     "domain_j": {<domain>: cumulative joules from session start; signed, a failed domain reads negative},
     //     "domain_w": {<domain>: average watts since previous sample}
     //   }
     // Domains whose provider does not expose per-domain power (e.g. Darwin
@@ -624,8 +639,9 @@ extern "C" {
             if (!first) ss << ",";
             ss << "{\"t_ns\":"     << r.common_timestamp_ns
                << ",\"energy_j\":" << r.total_system_energy_joules
-               << ",\"power_w\":"  << r.total_system_power_watts
-               << ",\"domain_j\":{";
+               << ",\"power_w\":"  << r.total_system_power_watts;
+            if (r.power_filtered) ss << ",\"power_w_filtered\":" << r.filtered_system_power_watts;
+            ss << ",\"domain_j\":{";
             bool dfirst = true;
             for (auto& pr : r.provider_readings) {
                 for (auto& [domain, joules] : pr.domain_energy_joules) {
@@ -656,9 +672,7 @@ extern "C" {
     int nemb_set_buffer_size(int n) {
         if (c_api_is_forked_child || n <= 0) return 0;
         std::lock_guard<std::mutex> l(c_api_mutex);
-        if(!c_api_meter) return 0;
-        c_api_meter->set_buffer_size((size_t)n);
-        return 1;
+        return c_api_meter && c_api_meter->set_buffer_size((size_t)n) ? 1 : 0;
     }
 
     int nemb_set_measurement_interval_ms(int ms) {
@@ -672,6 +686,8 @@ extern "C" {
     // Atomic stop: returns total energy, power, duration, and per-domain JSON
     // breakdown of THIS session in a single locked operation. Race-free under
     // concurrent task tracking. Pass nullptr/0 for json_buf to skip serialization.
+    // Domain deltas are signed and never dropped: a negative value (failed domain read
+    // or a counter going backwards) is the caller's signal to flag the measurement.
     // Returns: positive bytes written to json_buf on success (0 if buf null/empty),
     //          0 if session invalid, -required_size if buf too small.
     int nemb_stop_session_v2(uint64_t i, double* e, double* p, double* dur,
@@ -733,27 +749,30 @@ extern "C" {
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        std::cerr << "NEMB result not written: another thread held the NEMB lock for 1 s at exit" << std::endl;
     }
+
+    // Lazy-init state of nemb_mark_checkpoint; guarded by c_api_mutex.
+    static bool c_api_init_failed = false;
+    static bool c_api_atexit_registered = false;
 
     void nemb_mark_checkpoint(const char* n) {
         if (c_api_is_forked_child) return;
         std::lock_guard<std::mutex> l(c_api_mutex);
         if(!c_api_meter) {
-            static bool init_failed = false;
-            if (init_failed) return;
+            if (c_api_init_failed) return;
             nemb_save_result_fd();  // before providers open files that could take a closed fd 1
             try {
                 c_api_meter = std::make_unique<codegreen::EnergyMeter>();
                 c_api_init_pid = _nemb_getpid();
             } catch (const std::exception& e) {
                 std::cerr << "NEMB init failed: " << e.what() << std::endl;
-                init_failed = true;
+                c_api_init_failed = true;
                 return;
             }
-            static bool atexit_registered = false;
-            if (!atexit_registered) {
+            if (!c_api_atexit_registered) {
                 std::atexit(nemb_report_at_exit);
-                atexit_registered = true;
+                c_api_atexit_registered = true;
             }
         }
         if(c_api_meter) c_api_meter->mark_checkpoint(n?n:"");
@@ -788,7 +807,7 @@ extern "C" {
     }
 
     // Returns per-domain energy DELTA from the last nemb_stop_session call.
-    // This is the energy consumed by the workload per domain, not cumulative.
+    // This is the energy consumed by the workload per domain, not cumulative; signed (see above).
     int nemb_get_domain_energy_json(char* b, int m) {
         std::lock_guard<std::mutex> l(c_api_mutex);
         std::ostringstream ss;

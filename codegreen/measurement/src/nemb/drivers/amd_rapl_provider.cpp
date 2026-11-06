@@ -93,6 +93,8 @@ public:
         spec.vendor = "amd";
         spec.measurement_domains = {"package"};
         spec.energy_resolution_joules = energy_unit_;
+        spec.update_interval = std::chrono::microseconds(1000);  // nominal RAPL counter update period (~1 ms)
+        spec.counter_group = "cpu_package";  // same package counter powercap exposes to intel_rapl
         return spec;
     }
 
