@@ -41,6 +41,10 @@ from rich.text import Text
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
+from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
+    _config_path, _load_config, _measurement_cfg, _validity, _thread_overlap, measurement_validity,
+    _checkpoint_events, _replay_checkpoint_events,
+)
 
 console = Console()
 
@@ -115,18 +119,12 @@ def get_binary_path() -> Optional[Path]:
     
     return None
 
-def get_config_path() -> Optional[Path]:
-    """Get the path to the default configuration file."""
-    pkg_root = Path(__file__).resolve().parent.parent
-    possible_paths = [
-        Path.home() / ".codegreen" / "config.json",            # user override (highest priority)
-        pkg_root / "config.json",                              # pip install (inside codegreen/)
-        pkg_root.parent / "config" / "codegreen.json",         # dev: repo_root/config/codegreen.json
-    ]
-    for path in possible_paths:
-        if path.exists():
-            return path
-    return None
+def get_config_path() -> Path:
+    """The active config file (codegreen_runtime._config_path: CODEGREEN_CONFIG, ~/.codegreen/config.json, bundled).
+    Exported as CODEGREEN_CONFIG so every child runtime and the native library read the same file."""
+    path = _config_path()
+    os.environ.setdefault("CODEGREEN_CONFIG", str(path))
+    return path
 
 def _get_runtime_path() -> Optional[Path]:
     """Get path to runtime module directory"""
@@ -146,25 +144,11 @@ def ensure_runtime_available() -> bool:
     return _get_runtime_path() is not None
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
-    """Load configuration from file."""
-    if not config_path:
-        config_path = get_config_path()
-    
-    if config_path and config_path.exists():
-        try:
-            with open(config_path, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            console.print(f"[yellow]Warning: Failed to load config: {e}[/yellow]")
-    
-    # Return default config
-    return {
-        "measurement": {
-            "pmt": {
-                "preferred_sensors": ["rapl", "nvidia", "amd_gpu"]
-            }
-        }
-    }
+    """One config file as written, or (no path) the bundled config merged with the active one. Parse errors raise."""
+    if config_path:
+        return json.loads(Path(config_path).read_text())
+    get_config_path()
+    return _load_config()
 
 
 # Hotspot taxonomy. OCP-compliant: each verdict is a *rule* declared as
@@ -1218,102 +1202,6 @@ def _extract_failure_reason(output: str) -> str:
         if "error:" in low or ln.strip().endswith("Error") or "exception" in low:
             return ln.strip()
     return lines[-1].strip()
-
-
-def _measurement_cfg() -> Dict[str, Any]:
-    """measurement.report.validity plus sensor_providers, run_path and toolchain from the bundled config.json, overridden
-    key by key by the active config file (get_config_path), so an older ~/.codegreen/config.json cannot drop a key."""
-    bundled = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())["measurement"]
-    active = load_config().get("measurement", {})
-    cfg = {**bundled["report"]["validity"], **active.get("report", {}).get("validity", {})}
-    cfg["sensor_providers"] = {**bundled["sensor_providers"], **active.get("sensor_providers", {})}
-    cfg["run_sampler_interval_ms"] = {**bundled["run_path"], **active.get("run_path", {})}["sampler_interval_ms"]
-    cfg["toolchain"] = {**bundled["toolchain"], **active.get("toolchain", {})}
-    if cfg["gpu_in_total"] not in ("invalid", "allow"):
-        raise ValueError(f"measurement.report.validity.gpu_in_total must be invalid or allow, got {cfg['gpu_in_total']!r}")
-    return cfg
-
-
-def _validity(reasons: Dict[str, str], warnings: Optional[Dict[str, str]] = None, **extra) -> Dict[str, Any]:
-    """reasons are fatal; warnings are non-fatal facts a consumer must see (code -> text)."""
-    return {"status": "invalid" if reasons else "valid", "reasons": list(reasons), "detail": reasons,
-            "warnings": warnings or {}, **extra}
-
-
-def _thread_overlap(cps: List[Dict]) -> int:
-    """Most threads inside instrumented frames at once, from time-ordered `type:...#inv_N_t<tid>` markers."""
-    depth: Dict[str, int] = {}
-    open_threads = peak = 0
-    for m in cps:
-        tid, d = m["checkpoint_id"].rpartition("_t")[2], depth.get(m["checkpoint_id"].rpartition("_t")[2], 0)
-        nd = d + 1 if m["checkpoint_id"].startswith("enter:") else max(d - 1, 0)
-        open_threads += (nd > 0) - (d > 0)
-        depth[tid], peak = nd, max(peak, open_threads)
-    return peak
-
-
-def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Dict], run: Dict[str, Any],
-                         sensors_explicit: bool, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Validity of one checkpointed run: {status, reasons, detail, warnings}. Every reason is fatal; warnings
-    (SAMPLER_GAP, OVERLAPPING_THREADS) are not.
-    checkpoints: the NEMB result block's measurements, or None when the runtime aggregated in-process (Java
-    standalone; marker checks do not apply). run: timed_out, timeout_s, returncode, failure, init_failed.
-    sampler None with checkpoints present means the library predates ABI 4 (STALE_LIBRARY)."""
-    r: Dict[str, str] = {}
-    w: Dict[str, str] = {}
-    if run.get("init_failed"):
-        r["NEMB_INIT_FAILED"] = run["init_failed"]
-    if run.get("timed_out"):
-        r["INCOMPLETE_TIMEOUT"] = f"killed after {run['timeout_s']} s"
-    elif run.get("returncode"):
-        r["INCOMPLETE_CRASH"] = f"exit {run['returncode']}: {run.get('failure', '')}"
-    if checkpoints is not None and len(checkpoints) < 2:
-        r["INCOMPLETE_NO_CHECKPOINTS"] = f"{len(checkpoints)} checkpoint(s) in the result block"
-    if sampler is None:
-        if checkpoints != []:
-            r["STALE_LIBRARY"] = "no sampler statistics in the result (libcodegreen-nemb ABI < 4 or stale runtime)"
-        return _validity(r)
-    iv = sampler["interval_ms"] * 1e6
-    if sampler["affinity_cpus"] < cfg["min_affinity_cpus"]:
-        r["AFFINITY_SINGLE_CPU"] = (f"measured process allowed on {sampler['affinity_cpus']} CPU(s) "
-                                    f"(< {cfg['min_affinity_cpus']}); the sampler competes with the workload")
-    gap_factor = cfg["java_max_gap_factor"] if checkpoints is None else cfg["max_gap_factor"]
-    if sampler["readings"] >= 2 and (sampler["max_gap_ns"] > gap_factor * iv
-                                     or sampler["median_gap_ns"] > cfg["median_gap_factor"] * iv):
-        # Java standalone markers read the poller's last published cumulative counter, so a gap (GC safepoint) bounds
-        # marker staleness, not window energy: a warning plus a resolution downgrade; NEMB interpolates across it.
-        (w if checkpoints is None else r)["SAMPLER_GAP" if checkpoints is None else "SAMPLER_STARVED"] = (
-            f"reading gaps median {sampler['median_gap_ns'] / 1e6:.3f} ms, max "
-            f"{sampler['max_gap_ns'] / 1e6:.3f} ms vs interval {sampler['interval_ms']} ms")
-    if sampler["dropped_checkpoints"]:
-        r["CHECKPOINT_CAP"] = (f"{sampler['dropped_checkpoints']} checkpoint(s) dropped at "
-                               "measurement.report.max_checkpoints")
-    if sampler["wrapped"]:
-        r["BUFFER_WRAPPED"] = f"ring buffer of {sampler['buffer_capacity']} readings overwrote the start of the run"
-    gpu = sorted(set(sampler["providers"]) & set(cfg["gpu_providers"]))
-    if gpu and not sensors_explicit and cfg["gpu_in_total"] == "invalid":
-        r["GPU_IN_TOTAL"] = f"{gpu} summed into the total; choose providers with --sensors"
-    if checkpoints is None:
-        if sampler["readings"] < cfg["min_window_samples"]:
-            r["TOTAL_BELOW_RESOLUTION"] = f"{sampler['readings']} reading(s) < {cfg['min_window_samples']}"
-        return _validity(r, w)
-    clamped = [m["checkpoint_id"] for m in checkpoints if m["clamp"] != "none"]
-    if clamped:
-        r["MARKER_CLAMPED"] = f"{len(clamped)} marker(s) outside the sampled range (first {clamped[0]})"
-    if len(checkpoints) >= 2:
-        cps = sorted(checkpoints, key=lambda m: m["timestamp"])
-        span = cps[-1]["ri"] - cps[0]["ri"]
-        if span < cfg["min_window_samples"]:
-            r["TOTAL_BELOW_RESOLUTION"] = f"root window spans {span} reading(s) < {cfg['min_window_samples']}"
-        if any(b["joules"] < a["joules"] for a, b in zip(cps, cps[1:])):
-            r["NEGATIVE_ENERGY"] = "cumulative energy decreases between markers"
-        elif cps[-1]["joules"] == cps[0]["joules"]:
-            r["ZERO_ENERGY"] = "root window measured 0 J"
-        peak = _thread_overlap(cps)
-        if peak > 1:
-            w["OVERLAPPING_THREADS"] = (f"up to {peak} threads inside instrumented frames at once; each frame is "
-                                        "charged the whole package energy, so concurrent exclusive energies overlap")
-    return _validity(r, w)
 
 
 def _build_comprehensive_json(
@@ -3617,66 +3505,10 @@ def _nemb_checkpoint_events(stdout: str, known_ids) -> list:
     return _checkpoint_events(_nemb_result_block(stdout).get("measurements", []), known_ids)
 
 
-def _checkpoint_events(measurements: List[Dict], known_ids) -> list:
-    """Replay events from NEMB measurements. Markers are `type:name:id#inv_N_t<thread>` with cumulative
-    joules. Names may contain ':' (C++ scopes), so the id is the suffix that matches an instrumented
-    checkpoint id. The 7th element is the sampler reading index (ri, ABI 4) or None."""
-    splits, events = {}, []
-    for m in measurements:
-        marker, sep, inv = m["checkpoint_id"].rpartition("#inv_")
-        if not sep:
-            raise ValueError(f"NEMB checkpoint without invocation suffix: {m['checkpoint_id']!r}")
-        cp_type, _, rest = marker.partition(":")
-        if rest not in splits:
-            splits[rest] = next(((rest[:i], rest[i + 1:]) for i, c in enumerate(rest)
-                                 if c == ":" and rest[i + 1:] in known_ids), rest.rpartition(":")[::2])
-        name, cp_id = splits[rest]
-        events.append((cp_type, name, cp_id, int(m["timestamp"]), round(m["joules"] * 1e6), inv.rpartition("_t")[2],
-                       m.get("ri")))
-    events.sort(key=lambda e: e[3])
-    return events
-
-
 def _device_sync_count(stdout: str) -> int:
     """Device synchronisations the Python runtime performed, from its result block."""
     return sum(json.loads(chunk.split(_NEMB_RESULT_END, 1)[0]).get("device_sync", {}).get("syncs", 0)
                for chunk in stdout.split(_NEMB_RESULT_START)[1:])
-
-
-def _replay_checkpoint_events(events, func_data: dict) -> set:
-    """Replay enter/exit events on per-thread call stacks into func_data
-    (name -> inclusive_uj, exclusive_uj, time_ns, calls). Exits without a
-    matching frame are ignored; abandoned inner frames are unwound. Every matched
-    exit counts and energies stay signed: a decreasing counter is NEGATIVE_ENERGY in
-    measurement_validity, never dropped here. Events carrying
-    sampler reading indices (7th element) also record min_window_samples, the fewest
-    readings inside any call. Returns the (name, checkpoint_id) pairs seen."""
-    stacks, seen = {}, set()
-    for cp_type, name, cp_id, ts, energy, tid, *ri in events:
-        ri = ri[0] if ri else None
-        seen.add((name, cp_id))
-        d = func_data.setdefault(name, {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
-        stack = stacks.setdefault(tid, [])
-        if cp_type == "enter":
-            stack.append([name, ts, energy, 0, ri])
-            continue
-        if cp_type != "exit":
-            continue
-        idx = next((i for i in range(len(stack) - 1, -1, -1) if stack[i][0] == name), None)
-        if idx is None:
-            continue
-        frame = stack[idx]
-        del stack[idx:]
-        inclusive = energy - frame[2]
-        d["inclusive_uj"] += inclusive
-        d["exclusive_uj"] += inclusive - frame[3]
-        d["time_ns"] += ts - frame[1]
-        d["calls"] += 1
-        if ri is not None and frame[4] is not None:
-            d["min_window_samples"] = min(d.get("min_window_samples", ri - frame[4]), ri - frame[4])
-        if stack:
-            stack[-1][3] += inclusive
-    return seen
 
 
 def _find_source_roots(file_paths, proj_cfg: dict) -> set:

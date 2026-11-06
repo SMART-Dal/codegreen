@@ -193,40 +193,189 @@ def _package_file(name: str) -> Optional[Path]:
     return here.parents[3] / name if len(here.parents) > 3 else None
 
 
+def _config_path() -> Path:
+    """The one config resolver for the CLI, this runtime and (through CODEGREEN_CONFIG) the native library:
+    CODEGREEN_CONFIG, else the user override ~/.codegreen/config.json, else the bundled package config.json."""
+    if os.environ.get("CODEGREEN_CONFIG"):
+        return Path(os.environ["CODEGREEN_CONFIG"])
+    user = Path.home() / ".codegreen" / "config.json"
+    return user if user.exists() else _package_file("config.json")
+
+
+def _deep_merge(base: Dict, over: Dict) -> Dict:
+    for k, v in over.items():
+        base[k] = _deep_merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return base
+
+
+def _load_config() -> Dict:
+    """The bundled config.json deep-merged with the active one (_config_path), so an older user config cannot drop
+    a key. A missing or unparsable file raises, naming it; there are no silent defaults."""
+    out: Dict = {}
+    for p in dict.fromkeys([_package_file("config.json"), _config_path()]):
+        try:
+            _deep_merge(out, json.loads(Path(p).read_text()))
+        except (OSError, TypeError, ValueError) as e:
+            raise RuntimeError(f"codegreen config {p}: {e} (set CODEGREEN_INSTALL_DIR or CODEGREEN_CONFIG)") from e
+    return out
+
+
 def _report_config() -> Dict:
-    """Single source of truth for report/quality thresholds. All thresholds
-    that were previously magic numbers (CV%, drop ratio, run-id length) live
-    here. Loaded from bundled config.json with defensive defaults."""
-    cfg_path = _package_file("config.json")
-    defaults = {
-        "schema_version": "1",
-        "iso_timestamp_format": "rfc3339_utc",
-        "run_id_bytes": 6,
-        "outlier_method": "iqr_1.5",
-        "noise_warning": {
-            "within_task_power_cv_pct_threshold": 10.0,
-            "sampling_drop_ratio_threshold": 0.20,
-            "quality_excellent_below_cv_pct": 2.0,
-            "quality_good_below_cv_pct": 5.0,
-            "quality_moderate_below_cv_pct": 10.0,
-        },
-    }
-    try:
-        with open(cfg_path) as f:
-            d = json.load(f)
-        cfg = d["measurement"]["report"]
-        out = dict(defaults); out.update(cfg)
-        nw = dict(defaults["noise_warning"]); nw.update(cfg.get("noise_warning", {}))
-        out["noise_warning"] = nw
-        return out
-    except Exception:
-        return defaults
+    """Report/quality thresholds (measurement.report in config.json)."""
+    return _load_config()["measurement"]["report"]
+
+
+# --- Measurement validity policy ---------------------------------------------
+# The single home of the validity rules. Stdlib-only and free of import side effects beyond this module's own, because
+# `codegreen project` injects this one file into user projects: the runtime embeds the verdict in its result block and
+# the CLI imports the same functions for runtimes that only report facts (NEMB's C/C++/Java blocks).
+
+def _measurement_cfg() -> Dict[str, Any]:
+    """measurement.report.validity plus sensor_providers, run_path and toolchain of the merged config."""
+    m = _load_config()["measurement"]
+    cfg = {**m["report"]["validity"], "sensor_providers": m["sensor_providers"],
+           "run_sampler_interval_ms": m["run_path"]["sampler_interval_ms"], "toolchain": m["toolchain"]}
+    if cfg["gpu_in_total"] not in ("invalid", "allow"):
+        raise ValueError(f"measurement.report.validity.gpu_in_total must be invalid or allow, got {cfg['gpu_in_total']!r}")
+    return cfg
 
 
 def _validity(reasons: Dict[str, str], warnings: Optional[Dict[str, str]] = None, **extra) -> Dict[str, Any]:
     """reasons are fatal; warnings are non-fatal facts a consumer must see (code -> text)."""
     return {"status": "invalid" if reasons else "valid", "reasons": list(reasons), "detail": reasons,
             "warnings": warnings or {}, **extra}
+
+
+def _thread_overlap(cps: List[Dict]) -> int:
+    """Most threads inside instrumented frames at once, from time-ordered `type:...#inv_N_t<tid>` markers."""
+    depth: Dict[str, int] = {}
+    open_threads = peak = 0
+    for m in cps:
+        tid, d = m["checkpoint_id"].rpartition("_t")[2], depth.get(m["checkpoint_id"].rpartition("_t")[2], 0)
+        nd = d + 1 if m["checkpoint_id"].startswith("enter:") else max(d - 1, 0)
+        open_threads += (nd > 0) - (d > 0)
+        depth[tid], peak = nd, max(peak, open_threads)
+    return peak
+
+
+def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Dict], run: Dict[str, Any],
+                         sensors_explicit: bool, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Validity of one checkpointed run: {status, reasons, detail, warnings}. Every reason is fatal; warnings
+    (SAMPLER_GAP, OVERLAPPING_THREADS) are not.
+    checkpoints: the NEMB result block's measurements, or None when the runtime aggregated in-process (Java
+    standalone; marker checks do not apply). run: timed_out, timeout_s, returncode, failure, init_failed.
+    sampler None with checkpoints present means the library predates ABI 4 (STALE_LIBRARY)."""
+    r: Dict[str, str] = {}
+    w: Dict[str, str] = {}
+    if run.get("init_failed"):
+        r["NEMB_INIT_FAILED"] = run["init_failed"]
+    if run.get("timed_out"):
+        r["INCOMPLETE_TIMEOUT"] = f"killed after {run['timeout_s']} s"
+    elif run.get("returncode"):
+        r["INCOMPLETE_CRASH"] = f"exit {run['returncode']}: {run.get('failure', '')}"
+    if checkpoints is not None and len(checkpoints) < 2:
+        r["INCOMPLETE_NO_CHECKPOINTS"] = f"{len(checkpoints)} checkpoint(s) in the result block"
+    if sampler is None:
+        if checkpoints != []:
+            r["STALE_LIBRARY"] = "no sampler statistics in the result (libcodegreen-nemb ABI < 4 or stale runtime)"
+        return _validity(r)
+    iv = sampler["interval_ms"] * 1e6
+    if sampler["affinity_cpus"] < cfg["min_affinity_cpus"]:
+        r["AFFINITY_SINGLE_CPU"] = (f"measured process allowed on {sampler['affinity_cpus']} CPU(s) "
+                                    f"(< {cfg['min_affinity_cpus']}); the sampler competes with the workload")
+    gap_factor = cfg["java_max_gap_factor"] if checkpoints is None else cfg["max_gap_factor"]
+    if sampler["readings"] >= 2 and (sampler["max_gap_ns"] > gap_factor * iv
+                                     or sampler["median_gap_ns"] > cfg["median_gap_factor"] * iv):
+        # Java standalone markers read the poller's last published cumulative counter, so a gap (GC safepoint) bounds
+        # marker staleness, not window energy: a warning plus a resolution downgrade; NEMB interpolates across it.
+        (w if checkpoints is None else r)["SAMPLER_GAP" if checkpoints is None else "SAMPLER_STARVED"] = (
+            f"reading gaps median {sampler['median_gap_ns'] / 1e6:.3f} ms, max "
+            f"{sampler['max_gap_ns'] / 1e6:.3f} ms vs interval {sampler['interval_ms']} ms")
+    if sampler["dropped_checkpoints"]:
+        r["CHECKPOINT_CAP"] = (f"{sampler['dropped_checkpoints']} checkpoint(s) dropped at "
+                               "measurement.report.max_checkpoints")
+    if sampler["wrapped"]:
+        r["BUFFER_WRAPPED"] = f"ring buffer of {sampler['buffer_capacity']} readings overwrote the start of the run"
+    gpu = sorted(set(sampler["providers"]) & set(cfg["gpu_providers"]))
+    if gpu and not sensors_explicit and cfg["gpu_in_total"] == "invalid":
+        r["GPU_IN_TOTAL"] = f"{gpu} summed into the total; choose providers with --sensors"
+    if checkpoints is None:
+        if sampler["readings"] < cfg["min_window_samples"]:
+            r["TOTAL_BELOW_RESOLUTION"] = f"{sampler['readings']} reading(s) < {cfg['min_window_samples']}"
+        return _validity(r, w)
+    clamped = [m["checkpoint_id"] for m in checkpoints if m["clamp"] != "none"]
+    if clamped:
+        r["MARKER_CLAMPED"] = f"{len(clamped)} marker(s) outside the sampled range (first {clamped[0]})"
+    if len(checkpoints) >= 2:
+        cps = sorted(checkpoints, key=lambda m: m["timestamp"])
+        span = cps[-1]["ri"] - cps[0]["ri"]
+        if span < cfg["min_window_samples"]:
+            r["TOTAL_BELOW_RESOLUTION"] = f"root window spans {span} reading(s) < {cfg['min_window_samples']}"
+        if any(b["joules"] < a["joules"] for a, b in zip(cps, cps[1:])):
+            r["NEGATIVE_ENERGY"] = "cumulative energy decreases between markers"
+        elif cps[-1]["joules"] == cps[0]["joules"]:
+            r["ZERO_ENERGY"] = "root window measured 0 J"
+        peak = _thread_overlap(cps)
+        if peak > 1:
+            w["OVERLAPPING_THREADS"] = (f"up to {peak} threads inside instrumented frames at once; each frame is "
+                                        "charged the whole package energy, so concurrent exclusive energies overlap")
+    return _validity(r, w)
+
+
+def _checkpoint_events(measurements: List[Dict], known_ids) -> list:
+    """Replay events from NEMB measurements. Markers are `type:name:id#inv_N_t<thread>` with cumulative
+    joules. Names may contain ':' (C++ scopes), so the id is the suffix that matches an instrumented
+    checkpoint id. The 7th element is the sampler reading index (ri, ABI 4) or None."""
+    splits, events = {}, []
+    for m in measurements:
+        marker, sep, inv = m["checkpoint_id"].rpartition("#inv_")
+        if not sep:
+            raise ValueError(f"NEMB checkpoint without invocation suffix: {m['checkpoint_id']!r}")
+        cp_type, _, rest = marker.partition(":")
+        if rest not in splits:
+            splits[rest] = next(((rest[:i], rest[i + 1:]) for i, c in enumerate(rest)
+                                 if c == ":" and rest[i + 1:] in known_ids), rest.rpartition(":")[::2])
+        name, cp_id = splits[rest]
+        events.append((cp_type, name, cp_id, int(m["timestamp"]), round(m["joules"] * 1e6), inv.rpartition("_t")[2],
+                       m.get("ri")))
+    events.sort(key=lambda e: e[3])
+    return events
+
+
+def _replay_checkpoint_events(events, func_data: dict) -> set:
+    """Replay enter/exit events on per-thread call stacks into func_data
+    (name -> inclusive_uj, exclusive_uj, time_ns, calls). Exits without a
+    matching frame are ignored; abandoned inner frames are unwound. Every matched
+    exit counts and energies stay signed: a decreasing counter is NEGATIVE_ENERGY in
+    measurement_validity, never dropped here. Events carrying
+    sampler reading indices (7th element) also record min_window_samples, the fewest
+    readings inside any call. Returns the (name, checkpoint_id) pairs seen."""
+    stacks, seen = {}, set()
+    for cp_type, name, cp_id, ts, energy, tid, *ri in events:
+        ri = ri[0] if ri else None
+        seen.add((name, cp_id))
+        d = func_data.setdefault(name, {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
+        stack = stacks.setdefault(tid, [])
+        if cp_type == "enter":
+            stack.append([name, ts, energy, 0, ri])
+            continue
+        if cp_type != "exit":
+            continue
+        idx = next((i for i in range(len(stack) - 1, -1, -1) if stack[i][0] == name), None)
+        if idx is None:
+            continue
+        frame = stack[idx]
+        del stack[idx:]
+        inclusive = energy - frame[2]
+        d["inclusive_uj"] += inclusive
+        d["exclusive_uj"] += inclusive - frame[3]
+        d["time_ns"] += ts - frame[1]
+        d["calls"] += 1
+        if ri is not None and frame[4] is not None:
+            d["min_window_samples"] = min(d.get("min_window_samples", ri - frame[4]), ri - frame[4])
+        if stack:
+            stack[-1][3] += inclusive
+    return seen
 
 
 # --- HW/OS adapter layer (shared interface; new platforms slot in by adding
@@ -771,71 +920,16 @@ class TaskResult:
 
 # Sample size estimate (matches SynchronizedReading on 64-bit) for buffer sizing
 _BYTES_PER_SAMPLE_EST = 800
-_DEFAULT_SAMPLE_INTERVAL_MS = 10  # NEMB default; mirror in Session for sizing math
 
 
 def _bundled_sample_interval_ms() -> int:
-    """Read the NEMB default sample interval from bundled config.json. The
-    correct path is `measurement.nemb.coordinator.measurement_interval_ms`;
-    earlier versions looked it up at the top level and silently fell back."""
-    cfg = _package_file("config.json")
-    try:
-        with open(cfg) as f:
-            d = json.load(f)
-        return int(d["measurement"]["nemb"]["coordinator"]["measurement_interval_ms"])
-    except Exception:
-        return _DEFAULT_SAMPLE_INTERVAL_MS
+    """The NEMB sampler period, measurement.nemb.coordinator.measurement_interval_ms."""
+    return int(_load_config()["measurement"]["nemb"]["coordinator"]["measurement_interval_ms"])
 
 
-_MONITOR_DEFAULTS = {
-    "interval_ms_default": 500,
-    "interval_ms_min": 50,
-    "interval_ms_warn_below": 100,
-    "max_samples_in_memory": 10000,
-    "rotate_mb_default": 0,
-    "rotate_max_backups": 5,
-    "attribution": {
-        "mode_default": "auto",
-        "cgroup_root": "/sys/fs/cgroup",
-        "cgroup_unified_root": "/sys/fs/cgroup/unified",
-        "allow_cgroup_v1": True,
-    },
-    "annotation": {
-        "socket_path_default": "",
-        "max_label_count": 64,
-        "max_label_chars": 256,
-        "summary_top_labels": 50,
-        "listener_backlog": 16,
-        "recv_buf_bytes": 65536,
-        "max_labels": 1000,
-        "overflow_bucket": "__other__",
-    },
-}
-
-
-def _monitor_config(strict: bool = False) -> Dict:
-    """Single source of truth for Monitor knobs. Magic numbers live in config.json
-    under `monitor.*`; defaults here mirror that block for offline use.
-
-    Args:
-        strict: when True, raise instead of falling back to defaults on
-            unreadable/malformed config. Used by SIGHUP-reload to fail loud."""
-    cfg = _package_file("config.json")
-    out = json.loads(json.dumps(_MONITOR_DEFAULTS))
-    try:
-        with open(cfg) as f:
-            d = json.load(f)
-    except (OSError, TypeError, json.JSONDecodeError):
-        if strict:
-            raise
-        return out
-    m = d.get("monitor", {}) or {}
-    for k, v in m.items():
-        if k in ("annotation", "attribution") and isinstance(v, dict):
-            out[k].update(v)
-        else:
-            out[k] = v
-    return out
+def _monitor_config() -> Dict:
+    """Monitor knobs (config.json `monitor.*`). An unreadable config raises; SIGHUP reload keeps the old values."""
+    return _load_config()["monitor"]
 
 
 def _quality_label(cv_percent: float) -> str:
@@ -2030,7 +2124,7 @@ class Monitor:
         _duration_s — those require a full restart."""
         with self._reload_lock:
             try:
-                new_cfg = _monitor_config(strict=True)
+                new_cfg = _monitor_config()
             except Exception as e:
                 _warnings.warn(
                     f"codegreen.Monitor: SIGHUP reload failed to read config "
