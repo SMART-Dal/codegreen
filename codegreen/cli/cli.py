@@ -2496,7 +2496,6 @@ def run_command(
     warmup: Annotated[int, typer.Option("--warmup", "-w", help="Warmup runs")] = 1,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     budget: Annotated[Optional[float], typer.Option("--budget", help="Energy budget in Joules (fail if exceeded)")] = None,
-    include_warmup: Annotated[bool, typer.Option("--include-warmup", help="Measure energy during warmup and include in results")] = False,
     stdin_file: Annotated[Optional[str], typer.Option("--stdin", help="Bind file as stdin (avoids unsafe bash -c '... < file' wrapping)")] = None,
     validate: Annotated[bool, typer.Option("--validate/--no-validate", help="Execute the command once, unmeasured, before measuring (a failing command is also caught by the first measured run)")] = True,
     validate_timeout: Annotated[int, typer.Option("--validate-timeout", help="Seconds allowed for the validation run")] = 300,
@@ -2729,39 +2728,26 @@ def run_command(
     run_sampler_ms = (backend.slow_sampler(vcfg["run_sampler_interval_ms"])
                       if isinstance(backend, _NEMBBackend) else None)
     measurement_pairs: List[tuple] = []
-    warmup_pairs: List[tuple] = []
     run_domains: List[Dict[str, float]] = []  # per measured run, aligned with measurement_pairs
 
-    def _collect_run(label: str, idx: int, total: int, into: List[tuple]):
+    for i in range(warmup):  # unmeasured: a measured warmup in the statistics is a run (--warmup 0, more --repeat)
         if not json_output:
-            console.print(f"[dim]{label} {idx+1}/{total}[/dim]")
-        energy_j, elapsed = backend.measure(command, timeout=timeout)
-        into.append((energy_j, elapsed))
-        if label == "Run":
-            run_domains.append(backend.get_last_domain_breakdown() if energy_j is not None and energy_j > 0 else {})
-
-    for i in range(warmup):
-        if include_warmup:
-            try:
-                _collect_run("Warmup", i, warmup, warmup_pairs)
-            except RuntimeError as e:
-                if json_output: print(_emit_failure_meta(f"Warmup failed: {e}"))
-                else: console.print(f"[red]Warmup failed: {e}[/red]")
-                raise typer.Exit(1)
-        else:
-            if not json_output:
-                console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
-            try:
-                subprocess.run(command, capture_output=True, timeout=300,
-                               stdin=_stdin())
-            except subprocess.TimeoutExpired:
-                if json_output: print(_emit_failure_meta("Warmup timed out"))
-                else: console.print(f"[red]Warmup timed out[/red]")
-                raise typer.Exit(1)
+            console.print(f"[dim]Warmup {i+1}/{warmup}[/dim]")
+        try:
+            subprocess.run(command, capture_output=True, timeout=300,
+                           stdin=_stdin())
+        except subprocess.TimeoutExpired:
+            if json_output: print(_emit_failure_meta("Warmup timed out"))
+            else: console.print(f"[red]Warmup timed out[/red]")
+            raise typer.Exit(1)
 
     for i in range(repeat):
+        if not json_output:
+            console.print(f"[dim]Run {i+1}/{repeat}[/dim]")
         try:
-            _collect_run("Run", i, repeat, measurement_pairs)
+            energy_j, elapsed = backend.measure(command, timeout=timeout)
+            measurement_pairs.append((energy_j, elapsed))
+            run_domains.append(backend.get_last_domain_breakdown() if energy_j is not None and energy_j > 0 else {})
         except RuntimeError as e:
             if json_output: print(_emit_failure_meta(str(e)))
             else: console.print(f"[red]{e}[/red]")
@@ -2860,7 +2846,7 @@ def run_command(
             domain_support="full" if avg_domains else ("scalar_only" if energies else "none"),
             domains=avg_domains,
             record_time_series=False,
-            extras={"include_warmup": bool(include_warmup), "warmup_runs_configured": warmup,
+            extras={"warmup_runs_configured": warmup,
                     "run_sampler_interval_ms": run_sampler_ms},
         )
         out = {
@@ -2875,8 +2861,7 @@ def run_command(
                 "excluded": len(measurement_pairs) - len(energies),
                 "energies_j": [e for e, _ in measurement_pairs],
                 "status": statuses,
-                "warmup_included_in_stats": bool(include_warmup),
-                "warmup_runs": len(warmup_pairs) if include_warmup else 0,
+                "warmup_runs": warmup,
                 "measurement_runs": repeat,
             },
             "energy_j": stats["energy_j"],
@@ -2920,8 +2905,7 @@ def run_command(
         console.print(f"  CV:    [{color}]{cv:.1f}% ({quality})[/{color}]")
         console.print(f"[bold]Time:[/bold]   {t_mean:.4f} s +/- {t['std']:.4f} s")
         console.print(f"[bold]Power:[/bold]  {stats['power_w']['mean']:.2f} W (mean of per-run E/t)")
-        runs_note = f"  Runs: {len(energies)}" + (f" (includes {warmup} warmup)" if include_warmup and warmup > 0 else "")
-        console.print(runs_note)
+        console.print(f"  Runs: {len(energies)}")
         if filtered:
             console.print(f"  Filtered ({method}): {filtered['energy_j']['mean']:.4f} J over {filtered['runs']} runs, "
                           f"{iqr_outliers_removed} removed")

@@ -131,8 +131,7 @@ Use `--` before commands that have their own flags; otherwise flags such as
 | Option | Description |
 |--------|-------------|
 | `-n, --repeat INTEGER` | Number of repetitions (default: 10) |
-| `-w, --warmup INTEGER` | Warmup runs (default: 1) |
-| `--include-warmup` | Measure energy during warmup and include in results |
+| `-w, --warmup INTEGER` | Unmeasured warmup runs before the measured ones (default: 1; `runs.warmup_runs`) |
 | `--stdin TEXT` | Bind this file as the subprocess's stdin on every repeat (cat/hash/ETL workloads) |
 | `--json` | Output results as JSON |
 | `--budget FLOAT` | Energy budget in Joules; exits with error if mean exceeds budget |

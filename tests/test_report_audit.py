@@ -603,12 +603,13 @@ class TestCLI:
         assert {p["hardware_type"] for p in out["runs"][0]["sampler"]["providers"]} == {"cpu"}
         assert "GPU_IN_TOTAL" not in out["validity"]["warnings"]
 
-    def test_include_warmup_separates_counts(self) -> None:
-        out, _, _, _ = _cli_run("run", "--json", "-n", "3", "-w", "2", "--include-warmup",
-                                "--", *self.SMALL_WORKLOAD)
-        assert out["runs"]["warmup_runs"] == 2
-        assert out["runs"]["warmup_included_in_stats"] is True
-        assert out["meta"].get("include_warmup") is True
+    def test_warmup_runs_stay_out_of_the_statistics(self) -> None:
+        """Warmup runs are unmeasured; a warmup counted in the statistics is a run (--warmup 0, more --repeat)."""
+        out, _, _, _ = _cli_run("run", "--json", "-n", "3", "-w", "2", "--", *self.SMALL_WORKLOAD)
+        assert out["runs"]["warmup_runs"] == 2 and out["runs"]["attempted"] == len(out["runs"]["energies_j"]) == 3
+        assert "warmup_included_in_stats" not in out["runs"] and "include_warmup" not in out["meta"]
+        _, _, err, rc = _cli_run("run", "--include-warmup", "--", "true")
+        assert rc == 2 and "No such option" in err
 
     def test_stdin_flag_binds_file_to_workload_stdin(self, tmp_path: Path) -> None:
         """`--stdin <file>` MUST bind the file as the workload's stdin via

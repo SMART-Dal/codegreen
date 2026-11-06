@@ -48,6 +48,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - New `validity` block with `RUN_BELOW_RESOLUTION` (mean run shorter than `min_run_updates` resolutions), `ZERO_ENERGY_RUNS`, `NEGATIVE_ENERGY_RUNS` and `PROVIDER_READ_FAILED`; `checks` records `affinity_cpus` and `resolution_ms`. Each run keeps its signed reading (`runs.energies_j`, `null` for a failed read) and a status (`runs.status`); only `ok` runs enter the statistics.
 - `measurement.report.outlier_method` is honoured (`iqr_<k>` or `none`); time and power are summarized over the runs the energy filter kept, and `energy_j.raw` reports the unfiltered summary.
 - New `--sensors` option.
+- `--include-warmup` is removed. Warmup runs were measured but never entered the statistics while the output claimed `runs.warmup_included_in_stats: true`; a warmup counted in the statistics is a measured run (`--warmup 0` with a larger `--repeat`). `runs.warmup_runs` is the number of unmeasured warmup runs; `meta.include_warmup` is gone.
 - During run sessions the NEMB background sampler is slowed to `measurement.run_path.sampler_interval_ms` (default 1000), because run energy is read synchronously at each boundary; it is kept at the coordinator interval when a selected provider integrates power (`energy_source`). The value is in `meta.run_sampler_interval_ms` (`null` when not changed).
 
 ### `codegreen project`
