@@ -2056,6 +2056,55 @@ class TestRound3:
         assert cli._toolchain_compiler("c") == "/usr/bin/true"
 
 
+class TestInvalidReads:
+    """A failed backend read is flagged and counted, never a 0 J reading (fake clients, no hardware)."""
+
+    def test_monitor_skips_failed_reads(self, monkeypatch):
+        import types
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+        vals = iter([(10.0, 1.0), None, (12.0, 1.0), (13.0, 1.0)])
+        fake = types.SimpleNamespace(lib=object(), read_energy=lambda: next(vals, None))
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: fake)
+        fed = []
+        sink = types.SimpleNamespace(name="rec", feed_sample=fed.append, feed_header=lambda r: None,
+                                     feed_aggregate=lambda p: None, close=dict)
+        m = rt.Monitor(interval_ms=50, duration_s=0.5)
+        m._extra_sinks = [sink]
+        m.start()
+        m._thread.join(timeout=5.0)
+        s = m.stop()
+        assert [r["joules_delta"] for r in fed] == [2.0, 1.0] and all(r["valid"] for r in fed)
+        assert s["samples"] == 2 and s["invalid_samples"] >= 1 and s["total_joules"] == 3.0
+        assert s["validity"]["reasons"] == ["PROVIDER_READ_FAILED"] and "SAMPLES_INVALID" in s["validity"]["warnings"]
+        fake.read_energy = lambda: None
+        with pytest.raises(RuntimeError, match="no baseline"):
+            rt.Monitor(interval_ms=50, duration_s=0.5).start()
+
+    def test_session_excludes_failed_tasks(self, monkeypatch):
+        import types
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+        ids = iter(range(1, 10))
+
+        def stop(sid, e, p, dur, buf, n):
+            if sid.value == 2:
+                return 0
+            e._obj.value, dur._obj.value, buf.value = 5.0, 1.0, b'{"package-0": 5.0}'
+            return len(buf.value)
+        lib = types.SimpleNamespace(nemb_start_session=lambda n: next(ids), nemb_stop_session_v2=stop,
+                                    nemb_abi_version=lambda: 4)
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4))
+        s = rt.Session("inv", save_to_file=False, warn_on_concurrent=False).start()
+        for name in ("ok", "bad"):
+            with s.task(name):
+                pass
+        rep = s.stop()
+        assert [(t["valid"], t["invalid_reason"]) for t in rep["tasks"]] == [(True, None), (False, "provider_read_failed")]
+        assert rep["totals"]["energy_j"] == 5.0 and rep["totals"]["invalid_tasks"] == 1
+        assert rep["totals"]["domains"] == {"package-0": 5.0}
+        assert rep["meta"]["measurement_quality"] == "provider_read_failed"
+        assert rep["validity"]["reasons"] == ["PROVIDER_READ_FAILED"]
+
+
 def _java_workload(dest: Path) -> Path:
     """Self-contained CPU-bound Java workload; args[0] is the iteration count."""
     out = dest / "Spin.java"

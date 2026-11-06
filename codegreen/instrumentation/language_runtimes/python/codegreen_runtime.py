@@ -223,6 +223,12 @@ def _report_config() -> Dict:
         return defaults
 
 
+def _validity(reasons: Dict[str, str], warnings: Optional[Dict[str, str]] = None, **extra) -> Dict[str, Any]:
+    """reasons are fatal; warnings are non-fatal facts a consumer must see (code -> text)."""
+    return {"status": "invalid" if reasons else "valid", "reasons": list(reasons), "detail": reasons,
+            "warnings": warnings or {}, **extra}
+
+
 # --- HW/OS adapter layer (shared interface; new platforms slot in by adding
 # a branch to the resolver, not by editing callers) ---------------------------
 
@@ -464,16 +470,13 @@ class NEMBClient:
         payload = _read_nemb_json(self.lib.nemb_get_checkpoints_json, 1 << 20)
         return json.loads(payload) if payload else {"measurements": [], "sampler": None}
 
-    def read_energy(self) -> tuple:
-        """Returns (joules, watts) - kept for compatibility"""
-        if not self.lib:
-            return (0.0, 0.0)
-
-        energy = c_double()
-        power = c_double()
-        if self.lib.nemb_read_current(byref(energy), byref(power)):
-            return (energy.value, power.value)
-        return (0.0, 0.0)
+    def read_energy(self) -> Optional[Tuple[float, float]]:
+        """(cumulative joules, watts), or None when there is no backend or the read failed: a failed read is never
+        a 0 J reading, which would turn the next delta into the whole cumulative counter."""
+        energy, power = c_double(), c_double()
+        if self.lib and self.lib.nemb_read_current(byref(energy), byref(power)):
+            return energy.value, power.value
+        return None
 
 # --- Runtime Implementation ---
 
@@ -762,6 +765,8 @@ class TaskResult:
     ended_at_mono_ns: int = 0                            # CLOCK_MONOTONIC stamp at task close
     timeseries: Optional[List[Dict[str, float]]] = None  # [{t_ns,energy_j,power_w,domains}], inclusive of children
     noise: Optional[Dict[str, float]] = None             # populated when timeseries present
+    valid: bool = True                                   # False: energy_j/domains are not a measurement
+    invalid_reason: Optional[str] = None                 # provider_read_failed | negative_energy
 
 
 # Sample size estimate (matches SynchronizedReading on 64-bit) for buffer sizing
@@ -1149,13 +1154,10 @@ class Session:
             ret = self._client.lib.nemb_stop_session_v2(
                 ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
             )
-        if ret <= 0:
-            domains: Dict[str, float] = {}
-        else:
-            try:
-                domains = json.loads(buf.value.decode("utf-8"))
-            except Exception:
-                domains = {}
+        # ret 0: the backend could not read the providers at start or stop, so e/p/dur were never written.
+        domains: Dict[str, float] = json.loads(buf.value.decode("utf-8")) if ret > 0 else {}
+        invalid_reason = ("provider_read_failed" if ret == 0 else
+                          "negative_energy" if e.value < 0 or any(j < 0 for j in domains.values()) else None)
         t_end = time.time()
         t_end_mono_ns = time.monotonic_ns()
         ts: Optional[List[Dict]] = None
@@ -1182,7 +1184,7 @@ class Session:
             depth=depth, parent=parent, domains=domains,
             domains_power_w=domains_power,
             started_at_mono_ns=t_mono_ns, ended_at_mono_ns=t_end_mono_ns,
-            timeseries=ts,
+            timeseries=ts, valid=invalid_reason is None, invalid_reason=invalid_reason,
         )
         with self._tasks_lock:
             self._tasks.append(result)
@@ -1231,9 +1233,10 @@ class Session:
         if not self._ended_at_iso:
             self._ended_at_iso = _iso_utc_now()
             self._ended_at_local_iso = _iso_local_now()
-        total_e = sum(t.energy_j for t in self._tasks if t.depth == 0)
         wall_d = (time.monotonic() - self._t0_mono) if self._started else 0.0
         depth0 = [t for t in self._tasks if t.depth == 0]
+        invalid = [t for t in self._tasks if not t.valid]
+        total_e = sum(t.energy_j for t in depth0 if t.valid)
         task_d = sum(t.duration_s for t in depth0)
         if depth0 and all(t.started_at_mono_ns and t.ended_at_mono_ns for t in depth0):
             ivs = sorted([(t.started_at_mono_ns, t.ended_at_mono_ns) for t in depth0])
@@ -1294,7 +1297,7 @@ class Session:
         agg_domain_e: Dict[str, float] = {}
         domain_active_d: Dict[str, float] = {}
         for t in depth0:
-            if not t.domains:
+            if not t.valid:
                 continue
             for d, j in t.domains.items():
                 agg_domain_e[d] = agg_domain_e.get(d, 0.0) + j
@@ -1307,6 +1310,8 @@ class Session:
             measurement_quality = "no_tasks"
         elif self._noop:
             measurement_quality = "no_backend"
+        elif invalid:
+            measurement_quality = invalid[0].invalid_reason
         elif total_e <= 0.0:
             measurement_quality = "energy_zero"
         else:
@@ -1321,6 +1326,7 @@ class Session:
             "concurrent_overlap_s": round(concurrent_overlap_s, 6),
             "n_tasks": len(self._tasks),
             "n_top_level_tasks": len(depth0),
+            "invalid_tasks": len(invalid),
             "domains": agg_domain_e,
             "domains_power_w": agg_domain_p,
             "sample_interval_ms": self._sample_interval_ms if self._record_ts else None,
@@ -1347,6 +1353,9 @@ class Session:
             "meta": meta,
             "tasks": [t.__dict__ for t in self._tasks],
             "totals": totals,
+            "validity": _validity({c.upper(): f"{sum(t.invalid_reason == c for t in invalid)} task(s) excluded from "
+                                   f"totals: {sorted({t.name for t in invalid if t.invalid_reason == c})}"
+                                   for c in sorted({t.invalid_reason for t in invalid})}),
         }
         self._finalized_report = report
         return report
@@ -1778,6 +1787,8 @@ class Monitor:
         self._proc = None
         self._samples: "deque[Dict]" = deque(maxlen=max_in_mem if max_in_mem > 0 else 1)
         self._samples_count = 0
+        self._invalid_samples = 0
+        self._final_read_failed = False
         self._t0: Optional[float] = None
         self._j0: Optional[float] = None
         self._j_last: Optional[float] = None
@@ -1843,10 +1854,11 @@ class Monitor:
                     )
             else:
                 self._attributor.prime()
-        j, _ = self._client.read_energy()
+        first = self._client.read_energy()
+        if first is None:
+            raise RuntimeError("NEMB energy read failed at Monitor start; no baseline to measure from")
         self._t0 = time.monotonic()
-        self._j0 = float(j)
-        self._j_last = float(j)
+        self._j0 = self._j_last = first[0]
         if self._output_file:
             try:
                 self._fp = open(self._output_file, "w", buffering=1)
@@ -2091,14 +2103,22 @@ class Monitor:
             if self._duration_s is not None and (time.monotonic() - self._t0) >= self._duration_s:
                 self._stop_evt.set()
                 break
-            j, w = self._client.read_energy()
-            t_rel = time.monotonic() - self._t0
+            r = self._client.read_energy()
+            t_rel = round(time.monotonic() - self._t0, 4)
+            if r is None:
+                # Flag, never zero-fill: the next valid sample's delta spans the gap (_j_last is kept), so no
+                # energy is lost or invented; annotations, the deque and the exporter sinks only see valid samples.
+                self._invalid_samples += 1
+                self._write_record({"type": "sample", "t": t_rel, "valid": False})
+                continue
+            j, w = r
             sample = {
                 "type": "sample",
-                "t": round(t_rel, 4),
-                "joules_total": round(float(j) - self._j0, 6),
-                "joules_delta": round(float(j) - self._j_last, 6),
-                "watts": round(float(w), 4),
+                "t": t_rel,
+                "valid": True,
+                "joules_total": round(j - self._j0, 6),
+                "joules_delta": round(j - self._j_last, 6),
+                "watts": round(w, 4),
             }
             if self._proc is not None:
                 import psutil as _psutil
@@ -2150,7 +2170,7 @@ class Monitor:
                     sample["proc_attributed_joules"] = round(
                         sample["joules_delta"] * (cpu / (100.0 * self._ncores)), 6
                     )
-            self._j_last = float(j)
+            self._j_last = j
             self._samples_count += 1
             if self._max_in_mem > 0:
                 self._samples.append(sample)
@@ -2255,15 +2275,11 @@ class Monitor:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
-        try:
-            j, _ = self._client.read_energy()
-            self._j_last = float(j)
-        except (OSError, AttributeError, RuntimeError) as e:
-            _warnings.warn(
-                f"codegreen.Monitor.stop: final read_energy failed ({type(e).__name__}: {e}); "
-                f"using last sample's j",
-                RuntimeWarning, stacklevel=2,
-            )
+        final = self._client.read_energy()
+        if final is None:
+            self._final_read_failed = True
+        else:
+            self._j_last = final[0]
         # Snapshot per_label aggregate to sinks (give OTLP one last chance to
         # observe final totals); then close sinks and merge their per-sink
         # summary dicts into summary["exporters"][<name>].
@@ -2326,11 +2342,17 @@ class Monitor:
                 "latency_ms_p50": round(p50, 3),
                 "latency_ms_p95": round(p95, 3),
             }
+        reasons = {"PROVIDER_READ_FAILED": "final energy read failed; total_joules ends at the last valid sample"
+                   } if self._final_read_failed else {}
+        warnings = {"SAMPLES_INVALID": f"{self._invalid_samples} sample read(s) failed; the next valid sample's "
+                                       "delta spans each gap"} if self._invalid_samples else {}
         return {
             "duration_s": round(duration, 4),
             "total_joules": round(total_j, 6),
             "avg_watts": round(avg_w, 4),
             "samples": self._samples_count,
+            "invalid_samples": self._invalid_samples,
+            "validity": _validity(reasons, warnings),
             "samples_in_memory": len(self._samples) if self._max_in_mem > 0 else 0,
             "pid": self._pid,
             "proc_attributed_joules": proc_total,

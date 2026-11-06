@@ -3844,13 +3844,15 @@ def monitor_energy(
 
     summary = mon.stop()
     if json_output:
-        print(json.dumps({"success": True, **summary}))
+        print(json.dumps({"success": summary["validity"]["status"] == "valid", **summary}))
     else:
         console.print("\n[bold]Summary[/bold]")
         console.print(f"  duration: {summary['duration_s']:.2f} s")
         console.print(f"  total energy: {summary['total_joules']:.3f} J ({summary['total_joules']/3600.0:.4f} Wh)")
         console.print(f"  avg power: {summary['avg_watts']:.2f} W")
-        console.print(f"  samples: {summary['samples']}")
+        console.print(f"  samples: {summary['samples']} valid, {summary['invalid_samples']} failed reads")
+        for code, text in {**summary["validity"]["detail"], **summary["validity"]["warnings"]}.items():
+            console.print(f"  [yellow]{code}: {text}[/yellow]")
         if pid:
             backend = summary.get("attribution_backend") or "cpu_percent"
             console.print(f"  pid {pid} attributed: {summary['proc_attributed_joules']:.3f} J [backend={backend}]")
