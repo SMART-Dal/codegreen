@@ -76,47 +76,6 @@ struct AMDGPUUtilization {
 };
 
 /**
- * @brief Energy integration for AMD GPUs using power sampling
- */
-class AMDGPUEnergyIntegrator {
-public:
-    /**
-     * @brief Add power sample for energy integration
-     * @param power_watts Current power consumption
-     * @param timestamp_ns Timestamp in nanoseconds
-     */
-    void add_power_sample(double power_watts, uint64_t timestamp_ns);
-    
-    /**
-     * @brief Get accumulated energy since last reset
-     * @return Energy in joules
-     */
-    double get_accumulated_energy() const;
-    
-    /**
-     * @brief Reset energy accumulation
-     */
-    void reset_accumulation();
-    
-    /**
-     * @brief Get average power over integration period
-     * @return Average power in watts
-     */
-    double get_average_power() const;
-
-private:
-    struct PowerSample {
-        double power_watts;
-        uint64_t timestamp_ns;
-    };
-    
-    std::vector<PowerSample> power_samples_;
-    double accumulated_energy_joules_{0.0};
-    uint64_t last_integration_time_{0};
-    mutable std::mutex integration_mutex_;
-};
-
-/**
  * @brief AMD GPU energy provider implementation using ROCm SMI
  * 
  * Provides energy monitoring for AMD GPUs using the ROCm System Management Interface.
@@ -208,10 +167,8 @@ private:
     struct AMDGPUState {
         rsmi_device_t device_handle;
         AMDGPUInfo info;
-        std::unique_ptr<AMDGPUEnergyIntegrator> energy_integrator;
         bool monitoring_enabled{true};
         bool available{false};
-        uint32_t consecutive_failures{0};
         AMDGPUPowerState last_power_state;
         std::chrono::steady_clock::time_point last_reading_time;
     };
@@ -265,7 +222,7 @@ private:
     
     // Configuration
     double power_measurement_timeout_ms_{100.0};
-    uint32_t max_consecutive_failures_{5};
+    PowerIntegrator integrator_;  // per-GPU energy; a lost GPU makes every later reading invalid
     bool enable_advanced_metrics_{true};
 };
 
