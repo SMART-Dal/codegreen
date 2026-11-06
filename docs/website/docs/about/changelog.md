@@ -41,14 +41,16 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - The child's exit code and a timeout are reported (`INCOMPLETE_CRASH`, `INCOMPLETE_TIMEOUT`); a malformed result block raises instead of being ignored. A compile error is `COMPILE_FAILED` with the compiler output.
 - C/C++ compilers come from `measurement.toolchain` (`CC`/`CXX` override), resolved in `prefer_dirs` before `PATH`.
 - `--output`/`-o` writes the `--json` document (with `success: false` and `error: "invalid_measurement: ..."` on an invalid run); the former `{timestamp, analysis, measurement}` file reported `measurement.success: true` for invalid runs and had no per-function energy.
+- Text output prints Energy, Time, Power, a per-function table, the validity status, fatal reasons with detail and warnings.
 - `codegreen --version` reads `pyproject.toml` in a source or editable tree, so stale installed metadata no longer reports an older version.
 - Coarse granularity is config-driven: `instrumentation_config.entry_points` names the entry functions and `ast_config.insertion_rules.<type>.boundary` (`enter`/`exit`) marks frame points, so C's `main` closes on every return.
 
 ### `codegreen run`
 
 - New `validity` block with `RUN_BELOW_RESOLUTION` (mean run shorter than `min_run_updates` resolutions), `ZERO_ENERGY_RUNS`, `NEGATIVE_ENERGY_RUNS` and `PROVIDER_READ_FAILED`; `checks` records `affinity_cpus` and `resolution_ms`. Each run keeps its signed reading (`runs.energies_j`, `null` for a failed read) and a status (`runs.status`); only `ok` runs enter the statistics.
-- `measurement.report.outlier_method` is honoured (`iqr_<k>` or `none`); time and power are summarized over the runs the energy filter kept, and `energy_j.raw` reports the unfiltered summary.
+- `run --json` statistics cover every ok run unfiltered (`energy_j`, `duration_s`, `domains`, `domains_power_w`; power is the mean of per-run E/t). `measurement.report.outlier_method` defaults to `none`; with `iqr_<k>` a separate `filtered` block carries the filtered summary. `energy_j.raw`, `energy_j.outlier_method`, `duration_s.outliers_removed` and `duration_s.paired_with` are removed.
 - New `--sensors` option.
+- Text output prints the validity status, fatal reasons with their detail and warnings, as `measure` and `project` do.
 - `--include-warmup` is removed. Warmup runs were measured but never entered the statistics while the output claimed `runs.warmup_included_in_stats: true`; a warmup counted in the statistics is a measured run (`--warmup 0` with a larger `--repeat`). `runs.warmup_runs` is the number of unmeasured warmup runs; `meta.include_warmup` is gone.
 - During run sessions the NEMB background sampler is slowed to `measurement.run_path.sampler_interval_ms` (default 1000), because run energy is read synchronously at each boundary; it is kept at the coordinator interval when a selected provider integrates power (`energy_source`). The value is in `meta.run_sampler_interval_ms` (`null` when not changed).
 
@@ -61,6 +63,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 
 ### Python API
 
+- `Session.stop()` emits every validity reason and warning (including `GPU_IN_TOTAL`) as a `RuntimeWarning`.
 - `Session`: a task whose energy read failed (`provider_read_failed`) or came out negative is flagged (`TaskResult.valid`, `invalid_reason`), excluded from `totals` (`totals.invalid_tasks`) and named in the report's `validity`; `meta.measurement_quality` reports it. It was a silent 0 J before.
 - `Monitor`: a failed sample read is written as `{"type": "sample", "t": ..., "valid": false}`, skipped by annotations, the in-memory deque and exporters, and counted (`invalid_samples`); valid samples carry `valid: true`. The summary adds `validity`. A failed read used to be 0 J, which produced a negative delta followed by a spike of the whole cumulative counter.
 - Injected runtime files are removed before their directories.
@@ -80,11 +83,12 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 
 - **Pinning the measured process to one CPU** carries the warning `AFFINITY_SINGLE_CPU`; the sampler thread then competes with the workload, which shows up as the fatal `SAMPLER_STARVED`. Pin to at least `min_affinity_cpus` (default 2) CPUs.
 - **Short windows are invalid.** A root window spanning fewer than `min_window_samples` sampler readings is `TOTAL_BELOW_RESOLUTION`; a `run` shorter than `min_run_updates` resolutions is `RUN_BELOW_RESOLUTION`.
+- **RAPL zones:** the zone rule (a psys zone alone when present, else every top-level zone plus its dram sub-zones, never core) is one config entry, `measurement.nemb.providers.intel_rapl.superset_zone` / `disjoint_subzone`, read by NEMB and the Java poller. Zones that share a name keep their own domain (`dram`, `dram-1`), so domain keys on multi-socket hosts change.
 - **`codegreen init`** writes registry-named provider flags and the detected sensors as `default_sensors`, and no longer shrinks `measurement_buffer_size` to 500 on shared servers and hosts with less than 4 GB of memory (a 5 s window at the default 10 ms interval).
 
 ### Known limitations
 
-- A provider that fails while others read still rejects the whole reading (counted in `rejected_readings`); per-provider correlation is planned.
+- A provider that fails while others read still rejects the whole reading (counted in `rejected_readings`); a provider that stops reporting is the fatal `PROVIDER_STALLED`.
 - Concurrent threads inside instrumented frames are each charged the whole package energy (`OVERLAPPING_THREADS`), so exclusive energies can sum above the total.
 
 ## v0.4.9
