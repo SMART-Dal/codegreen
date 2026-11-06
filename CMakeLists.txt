@@ -49,16 +49,6 @@ add_subdirectory(codegreen/measurement)
 # NEMB finds its config at <library dir>/../config.json; place the bundled one there so the build tree works
 configure_file(${CMAKE_SOURCE_DIR}/codegreen/config.json ${CMAKE_BINARY_DIR}/config.json COPYONLY)
 
-# Copy config to build dir
-if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
-    file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config)
-    configure_file(
-        ${CMAKE_SOURCE_DIR}/config/codegreen.json
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config/codegreen.json
-        COPYONLY
-    )
-endif()
-
 # Dev-install: copy NEMB library to project root for pip editable installs
 add_custom_target(dev-install ALL
     DEPENDS codegreen-nemb
@@ -82,12 +72,6 @@ install(FILES
     ${CMAKE_SOURCE_DIR}/codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py
     DESTINATION bin/runtime
 )
-
-if(EXISTS "${CMAKE_SOURCE_DIR}/config/codegreen.json")
-    install(FILES ${CMAKE_SOURCE_DIR}/config/codegreen.json
-        DESTINATION bin/config
-    )
-endif()
 
 set(CPACK_PACKAGE_NAME "CodeGreen")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
