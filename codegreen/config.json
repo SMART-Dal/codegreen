@@ -282,7 +282,7 @@
     }
   },
   "hotspot_taxonomy": {
-    "_comment": "Per-verdict thresholds for `codegreen project`'s per-function classifier. OCP-compliant: each verdict is a self-contained block; new verdicts can be added without touching dispatch code. Defaults match the historical hardcoded thresholds at codegreen/cli/cli.py:3424-3435 prior to extraction. CodeGreen detects wrapper / TYPE_1_DIRECT / TYPE_2_INEFFICIENT / TYPE_5_FREQUENCY / minor; TYPE_3_INDIRECT and TYPE_4_STRUCTURAL require callgraph analysis and are deferred to the consuming agent.",
+    "_comment": "Per-verdict thresholds for `codegreen project`'s per-function classifier. OCP-compliant: each verdict is a self-contained block; new verdicts can be added without touching dispatch code. Defaults match the historical hardcoded thresholds at codegreen/cli/cli.py:3424-3435 prior to extraction. CodeGreen detects wrapper / TYPE_1_DIRECT / TYPE_2_INEFFICIENT / TYPE_5_FREQUENCY / minor; TYPE_3_INDIRECT and TYPE_4_STRUCTURAL require callgraph analysis and are deferred to the consuming agent. inclusive_pct_min and exclusive_pct_min are percentages of the run's attributed energy (the sum of exclusive energies), the energy_pct and exclusive_pct of the project report.",
     "wrapper": {
       "self_ratio_max": 0.2,
       "inclusive_pct_min": 5.0

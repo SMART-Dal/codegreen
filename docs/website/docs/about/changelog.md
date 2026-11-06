@@ -59,6 +59,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - Each run carries `sampler`, `validity` and `resolution_ns`; the top-level `validity` merges every run, and an invalid result exits 3.
 - Each function has `quality`: `measured`, `aggregate_only` (summed time at least `aggregate_min_factor` resolutions) or `below_resolution`.
 - New `--sensors` option (no short form: `-s` is `--source-glob`).
+- `energy_pct` (`Incl%`) is the function's inclusive energy as a share of the attributed energy, like `exclusive_pct`: the root reads 100 % and a leaf its exclusive share. It was divided by the sum of all inclusive energies, which counts nested calls once per enclosing frame (a leaf holding 60 % read 30 %); the `wrapper` verdict's `inclusive_pct_min` now sees the undiluted share. A recursive function's inclusive energy counts every nested frame and can exceed 100 %.
 - Java standalone runs build `sampler` from the JVMs' `CG_CP_META` records; a poller gap (GC safepoint) is the warning `SAMPLER_GAP` and widens the resolution to the largest gap, a failed poller read is `PROVIDER_READ_FAILED`.
 
 ### Python API

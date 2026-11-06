@@ -3912,16 +3912,16 @@ def project_energy(
                         else measurement_validity(nemb_cps, sampler, run, vcfg))
             res_ns = resolution_ns(sampler, validity) if sampler else None
 
-            # Compute per-function metrics (inclusive + exclusive)
+            # Per-function shares of the attributed energy (the exclusive sum; the root's inclusive energy in a
+            # single-threaded run): exclusive_pct partitions it, energy_pct is a call subtree's share.
             func_energy = {}
-            total_inclusive = sum(d["inclusive_uj"] for d in func_data.values())
             total_exclusive = sum(d["exclusive_uj"] for d in func_data.values())
             for name, data in sorted(func_data.items(), key=lambda x: x[1]["exclusive_uj"], reverse=True):
                 inc_j = data["inclusive_uj"] / 1e6
                 exc_j = data["exclusive_uj"] / 1e6
                 time_s = data["time_ns"] / 1e9
                 calls = data["calls"]
-                inc_pct = (data["inclusive_uj"] / total_inclusive * 100) if total_inclusive > 0 else 0
+                inc_pct = (data["inclusive_uj"] / total_exclusive * 100) if total_exclusive > 0 else 0
                 exc_pct = (data["exclusive_uj"] / total_exclusive * 100) if total_exclusive > 0 else 0
                 self_ratio = data["exclusive_uj"] / data["inclusive_uj"] if data["inclusive_uj"] > 0 else 0
                 # Hotspot taxonomy (Types 1-5, see energy_agent_workflow.txt 9C)

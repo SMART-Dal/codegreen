@@ -2381,6 +2381,29 @@ class TestValidityDefects:
             **real(lang), "instrumentation_config": {**real(lang)["instrumentation_config"], "entry_points": ["run"]}})
         assert [p.type for p in cli._filter_main_entry_points(pts, "c")] == ["function_enter", "function_return"]
 
+    def test_project_energy_pct_is_a_share_of_the_attributed_energy(self, tmp_path, monkeypatch):
+        """energy_pct divided inclusive energy by the sum of inclusive energies, which counts a nested call once per
+        enclosing frame: a leaf holding 60 % of the energy read 37.5 % here (Heavy 29.96 % vs exclusive 59.88 %)."""
+        from typer.testing import CliRunner
+        import codegreen.cli.cli as cli
+        (tmp_path / "w.py").write_text("def heavy():\n    return 1\n\n\ndef main():\n    return heavy()\n\n\nmain()\n")
+        cps = [_vcp("enter:main:a", 0, 0.0, 1), _vcp("enter:heavy:b", 10, 4.0, 11), _vcp("exit:heavy:c", 70, 10.0, 71),
+               _vcp("exit:main:d", 100, 10.0, 101)]
+
+        class Fake(cli._EnergyBackend):
+            name = "fake"
+            def is_available(self): return True
+            def run_project(self, cmd, cwd, checkpoint_file, env):
+                out = f"{cli._NEMB_RESULT_START}\n{json.dumps({'measurements': cps, 'sampler': _vsampler()})}\n{cli._NEMB_RESULT_END}\n"
+                return subprocess.CompletedProcess(cmd, 0, out.encode(), b""), 12.0, 1.0
+
+        monkeypatch.setattr(cli._NEMBBackend, "is_available", lambda self: True)
+        monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
+        r = CliRunner().invoke(cli.app, ["project", "python", str(tmp_path), "--run-cmd", "true", "--json"])
+        f = json.loads(r.stdout[r.stdout.index("{"):])["runs"][0]["functions"]
+        assert r.exit_code == 0 and f["main"]["energy_pct"] == 100 and f["main"]["exclusive_pct"] == 40
+        assert f["heavy"]["energy_pct"] == f["heavy"]["exclusive_pct"] == 60
+
     def test_benchmark_java_args_follow_the_class_name(self, tmp_path, monkeypatch):
         """`java -cp dir Class args`: the class name was passed as the first program argument (NumberFormatException)."""
         import benchmark.profilers as bp

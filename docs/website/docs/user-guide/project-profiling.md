@@ -90,7 +90,12 @@ schema as `codegreen measure -g fine`. Top fields:
 
 With `--json`, each run reports `sampler`, `validity` and `resolution_ns`, and
 each function a `quality` of `measured`, `aggregate_only` or
-`below_resolution`. The top-level `validity` merges every run; an invalid
+`below_resolution`. A function's `energy_pct` (inclusive) and `exclusive_pct`
+are percentages of the run's attributed energy (`attributed_energy_j`, the
+sum of exclusive energies), so exclusive shares sum to 100 and a call
+subtree's share is not diluted by nesting depth; the hotspot verdict
+thresholds (`hotspot_taxonomy`) use the same percentages. The top-level
+`validity` merges every run; an invalid
 result exits 3. Pass
 `--cores` with at least two CPUs. See
 [Exit codes and measurement validity](cli-reference.md#exit-codes-and-measurement-validity).
