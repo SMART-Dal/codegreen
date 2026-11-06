@@ -971,6 +971,7 @@ def temp_config(monkeypatch, tmp_path: Path) -> Path:
     cfg = tmp_path / "config.json"
     cfg.write_text(real("config.json").read_text())
     monkeypatch.setattr(rt, "_package_file", lambda name: cfg if name == "config.json" else real(name))
+    monkeypatch.setenv("CODEGREEN_CONFIG", str(cfg))  # the resolver prefers it over the bundled file
     return cfg
 
 
