@@ -304,9 +304,10 @@ def _run_reasons(run: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
-    """Scope labels from the providers' hardware facts (sampler.providers[].hardware_type, .held). held counts device
-    reads answered with a held value: a failed power read keeps the last good value, and a cumulative counter read
-    within one update period of the previous read (which would discard energy) answers with that read."""
+    """Scope labels from the providers' hardware facts (sampler.providers[]). held counts failed power reads that kept
+    the last good value. boundary_held counts boundary reads of a cumulative counter answered with the previous read
+    (a fresh read within one update period would discard energy); such an answer misses at most the energy of the span
+    it covers, which stays within the counter's own resolution unless boundary_held_max_ns exceeds its update interval."""
     names = [p["name"] for p in sampler["providers"]]
     gpu = [p["name"] for p in sampler["providers"] if p["hardware_type"] == "gpu"]
     if gpu and len(gpu) < len(names):
@@ -314,7 +315,47 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
                              "with --sensors or measurement.default_sensors")
     held = {p["name"]: p["held"] for p in sampler["providers"] if p["held"]}
     if held:
-        w["GPU_READ_HELD"] = f"reads answered with a held value (failed read, or counter read within its period): {held}"
+        w["GPU_READ_HELD"] = f"failed reads replaced by the last good power value: {held}"
+    stale = {p["name"]: f"{p['boundary_held_max_ns'] / 1e6:.3f} ms" for p in sampler["providers"]
+             if p["boundary_held_max_ns"] > (p["update_interval_ms"] or sampler["interval_ms_max"]) * 1e6}
+    if stale:
+        w["BOUNDARY_READ_HELD"] = (f"boundary reads answered from a previous read older than the provider's update "
+                                   f"interval (longest span {stale}): that energy is missing beyond its resolution")
+
+
+def _provider_stalls(sampler: Dict, cfg: Dict[str, Any], r: Dict[str, str]) -> None:
+    """A provider that stops reporting mid-run: from its own facts, no successful read (readings 0), cumulative energy
+    unchanged over successful reads (max_stall_ns), or no successful read since the last provider's (last_ns), longer
+    than provider_stall_resolutions of its resolution (update interval, or the sampler interval when slower). Counted
+    and named, never filled. max_stall_ns None: the producer does not track stalls (Java poller)."""
+    end, lost = max(p["last_ns"] for p in sampler["providers"]), {}
+    for p in sampler["providers"]:
+        limit = cfg["provider_stall_resolutions"] * max(p["update_interval_ms"], sampler["interval_ms_max"]) * 1e6
+        quiet = max(end - p["last_ns"], p["max_stall_ns"] or 0)
+        if not p["readings"] or quiet > limit:
+            lost[p["name"]] = f"{p['readings']} reads, {quiet / 1e6:.3f} ms without new energy (limit {limit / 1e6:.3f} ms)"
+    if lost:
+        r["PROVIDER_STALLED"] = f"provider(s) stopped reporting energy mid-run; their share of the total is missing: {lost}"
+
+
+def _counter_divergence(sampler: Dict, cfg: Dict[str, Any], r: Dict[str, str], w: Dict[str, str]) -> None:
+    """providers[].counter_check: per domain, the energy of a provider's boundary counter and of its power integral
+    over the same span, and the counter reads in it. Another reader of the counter (nvidia-smi power.draw.instant,
+    DCGM) makes the counter lose energy. They may differ by counter_check.tolerance of the integral plus, per counter
+    read and at the span's end, one update interval of the span's mean power (a read returns the value of the last
+    update and discards what accrued since: the counter's own resolution); beyond that the boundary energies are
+    corrupted."""
+    cc, bad = cfg["counter_check"], {}
+    for p in sampler["providers"]:
+        res_s = (p["update_interval_ms"] or sampler["interval_ms_max"]) / 1e3
+        for dom, k in p["counter_check"].items():
+            slack = (k["reads"] + 1) * res_s * 1e9 / k["span_ns"] if k["span_ns"] else 0
+            if k["span_ns"] and abs(k["counter_j"] - k["integral_j"]) > (cc["tolerance"] + slack) * k["integral_j"]:
+                bad[f"{p['name']}.{dom}"] = f"counter {k['counter_j']:.3f} J, integral {k['integral_j']:.3f} J over {k['span_ns'] / 1e9:.3f} s"
+    if bad:
+        {"fatal": r, "warning": w}[cc["severity"]]["COUNTER_INTEGRAL_DIVERGED"] = (
+            f"boundary energy counter and power integral disagree beyond tolerance {cc['tolerance']}: {bad}; another "
+            "process reading the counter or instant power (nvidia-smi power.draw.instant, DCGM) discards counter energy")
 
 
 def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False, finest: bool = False) -> float:
@@ -361,6 +402,8 @@ def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Di
     if sampler["rejected_readings"]:
         w["READINGS_REJECTED"] = f"{sampler['rejected_readings']} reading(s) rejected; markers interpolate across them"
     _provider_warnings(sampler, w)
+    _counter_divergence(sampler, cfg, r, w)
+    _provider_stalls(sampler, cfg, r)
     if sampler["dropped_checkpoints"]:
         r["CHECKPOINT_CAP"] = (f"{sampler['dropped_checkpoints']} checkpoint(s) dropped at "
                                "measurement.report.max_checkpoints")
@@ -401,6 +444,8 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
         w["RESOLUTION_UNKNOWN"] = "the backend reports no provider update interval; RUN_BELOW_RESOLUTION not checked"
         return _validity(r, w)
     _provider_warnings(sampler, w)
+    _counter_divergence(sampler, cfg, r, w)
+    _provider_stalls(sampler, cfg, r)
     integrated = [p["name"] for p in sampler["providers"] if p["boundary_source"] == "integrated_power"]
     if integrated:
         w["RUN_POWER_INTEGRATED"] = (f"run energy of {integrated} integrates sampled power (no energy counter at the run "
@@ -413,6 +458,35 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
         w["COARSE_PROVIDER_RESOLUTION"] = (f"mean duration {mean_s:.6f} s < {cfg['min_run_updates']} update intervals of "
                                            f"{coarse} ({slow_s} s): their share of the total is not resolved; select providers with --sensors")
     return _validity(r, w)
+
+
+def task_checks(tasks: List[Dict[str, Any]], sampler: Dict, cfg: Dict[str, Any], r: Dict[str, str],
+                w: Dict[str, str]) -> None:
+    """Session tasks are boundary-read windows like runs (run_validity). A task with shared_boundary had a boundary
+    read while another task was open; a counter read there would discard the open task's energy (about half a counter
+    update period per read), so the backend answers it from the last counter read plus the power integral since: those
+    providers (energy_source integrated_power) give that task integrated power, like every task of a provider whose
+    boundary_source is integrated_power (TASK_POWER_INTEGRATED). A task shorter than min_run_updates of its resolution
+    (update interval; the sampler interval too where power is integrated) is TASK_BELOW_RESOLUTION."""
+    _provider_warnings(sampler, w)
+    _counter_divergence(sampler, cfg, r, w)
+    _provider_stalls(sampler, cfg, r)
+    iv, integrated, short = sampler["interval_ms_max"], {}, []
+    for t in tasks:
+        integ = [p["name"] for p in sampler["providers"] if p["boundary_source"] == "integrated_power"
+                 or (t["shared_boundary"] and p["energy_source"] == "integrated_power")]
+        for n in integ:
+            integrated.setdefault(n, []).append(t["name"])
+        res_ms = max(max(p["update_interval_ms"] or iv, iv) if p["name"] in integ else p["update_interval_ms"] or iv
+                     for p in sampler["providers"])
+        if t["duration_s"] < cfg["min_run_updates"] * res_ms / 1e3:
+            short.append(t["name"])
+    if integrated:
+        w["TASK_POWER_INTEGRATED"] = (f"task energy integrates sampled power (shared boundary or no energy counter): "
+                                      f"{ {n: f'{len(v)} task(s), first {v[:3]}' for n, v in integrated.items()} }")
+    if short:
+        w["TASK_BELOW_RESOLUTION"] = (f"{len(short)} task(s) shorter than {cfg['min_run_updates']} provider resolutions "
+                                      f"(first {short[:3]}): their energy is not resolved")
 
 
 def function_quality(d: Dict[str, Any], res_ns: float, cfg: Dict[str, Any]) -> str:
@@ -440,8 +514,16 @@ def _merge_samplers(samplers: List[Dict]) -> Optional[Dict]:
     for k in ("interval_ms_min", "first_ns", "affinity_cpus", "sampler_affinity_cpus"):
         out[k] = min(s[k] for s in samplers)
     for p in (p for s in samplers for p in s["providers"]):
-        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0})
+        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0, "boundary_held": 0, "counter_check": {}, "readings": 0})
+        for d, k in p["counter_check"].items():
+            c = q["counter_check"].setdefault(d, dict.fromkeys(k, 0))
+            for f, v in k.items():
+                c[f] += v
         q.update(rejected=q["rejected"] + p["rejected"], held=q["held"] + p["held"],
+                 boundary_held=q["boundary_held"] + p["boundary_held"],
+                 boundary_held_max_ns=max(q["boundary_held_max_ns"], p["boundary_held_max_ns"]),
+                 readings=q["readings"] + p["readings"], last_ns=max(q["last_ns"], p["last_ns"]),
+                 max_stall_ns=None if None in (q["max_stall_ns"], p["max_stall_ns"]) else max(q["max_stall_ns"], p["max_stall_ns"]),
                  update_interval_ms=max(q["update_interval_ms"], p["update_interval_ms"]))
     out.update(wrapped=any(s["wrapped"] for s in samplers), providers=list(prov.values()), processes=len(samplers))
     return out
@@ -450,13 +532,19 @@ def _merge_samplers(samplers: List[Dict]) -> Optional[Dict]:
 def _poller_sampler(records: List[Dict]) -> Optional[Dict]:
     """Sampler block of a run from in-process pollers' `CG_CP_META|<json>` records (one per JVM of the Java standalone
     runtime). A poller keeps no ring buffer, no gap distribution and no rejected readings, so those keys take what it
-    does know: the configured interval for interval_ms_min/max, the mean gap for median_gap_ns (gap_statistic mean)."""
+    does know: the configured interval for interval_ms_min/max, the mean gap for median_gap_ns (gap_statistic mean).
+    It takes no boundary reads, so its providers report no boundary holds and no counter_check; its one provider's
+    reads are the poller's (readings, last_ns), and it does not track stalls (max_stall_ns None)."""
     if len({r["interval_ms"] for r in records}) > 1:
         raise ValueError(f"processes of one run polled at different periods: {sorted({r['interval_ms'] for r in records})} ms")
     return _merge_samplers([{"interval_ms_min": r["interval_ms"], "interval_ms_max": r["interval_ms"],
                              "median_gap_ns": (r["last_ns"] - r["first_ns"]) / (r["readings"] - 1) if r["readings"] > 1 else 0,
                              "gap_statistic": "mean", "rejected_readings": 0, "wrapped": False, "buffer_capacity": None,
-                             "dropped_checkpoints": 0, **r} for r in records])
+                             "dropped_checkpoints": 0, **r,
+                             "providers": [{"boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {},
+                                            "readings": r["readings"], "last_ns": r["last_ns"], "max_stall_ns": None, **p}
+                                           for p in r["providers"]]}
+                            for r in records])
 
 
 def _checkpoint_events(measurements: List[Dict], known_ids) -> list:
@@ -1062,6 +1150,7 @@ class TaskResult:
     noise: Optional[Dict[str, float]] = None             # populated when timeseries present
     valid: bool = True                                   # False: energy_j/domains are not a measurement
     invalid_reason: Optional[str] = None                 # provider_read_failed | negative_energy
+    shared_boundary: bool = False                        # a boundary read while another task was open (task_checks)
 
 
 # Sample size estimate (matches SynchronizedReading on 64-bit) for buffer sizing
@@ -1169,7 +1258,7 @@ class Session:
         self._tasks: List[TaskResult] = []
         self._tasks_lock = threading.Lock()
         self._tls = threading.local()  # per-thread stack of (name, sid, t_start, depth)
-        self._all_open: Dict[int, Tuple[str, int, float, int]] = {}  # sid -> meta (for cleanup)
+        self._all_open: Dict[int, Tuple[str, int, int, float, int, bool]] = {}  # sid -> meta (for cleanup)
         self._started = False
         self._stopped = False
         self._finalized_report: Optional[Dict] = None
@@ -1342,7 +1431,7 @@ class Session:
         self.stop()
         return False
 
-    def _stack(self) -> List[Tuple[str, int, float, int]]:
+    def _stack(self) -> List[Tuple[str, int, int, float, int, bool]]:
         if not hasattr(self._tls, "stack"):
             self._tls.stack = []
         return self._tls.stack
@@ -1354,14 +1443,15 @@ class Session:
             raise RuntimeError("Session already stopped.")
         if _is_child_process or self._noop:
             return -1
-        sid = int(self._client.lib.nemb_start_session(name.encode("utf-8")))
         stack = self._stack()
         depth = len(stack)
-        # Track both monotonic (matches C++ sample timestamps) and wall clock
-        meta = (name, sid, time.monotonic_ns(), time.time(), depth)
-        stack.append(meta)
-        with self._tasks_lock:
+        with self._tasks_lock:  # the backend reads a boundary as shared while another session is open: the same view
+            shared = bool(self._all_open)
+            sid = int(self._client.lib.nemb_start_session(name.encode("utf-8")))
+            # Track both monotonic (matches C++ sample timestamps) and wall clock
+            meta = (name, sid, time.monotonic_ns(), time.time(), depth, shared)
             self._all_open[sid] = meta
+        stack.append(meta)
         return sid
 
     def _end_task(self, expected_name: Optional[str] = None) -> Optional[TaskResult]:
@@ -1370,30 +1460,31 @@ class Session:
         stack = self._stack()
         if not stack:
             raise RuntimeError("end_task called with no active task in this thread")
-        name, sid, t_mono_ns, t_start, depth = stack.pop()
+        name, sid, t_mono_ns, t_start, depth, shared = stack.pop()
         if expected_name is not None and expected_name != name:
-            stack.append((name, sid, t_mono_ns, t_start, depth))
+            stack.append((name, sid, t_mono_ns, t_start, depth, shared))
             raise RuntimeError(
                 f"task mismatch in thread: trying to end '{expected_name}' "
                 f"but innermost open task is '{name}'"
             )
-        with self._tasks_lock:
-            self._all_open.pop(sid, None)
         parent = stack[-1][0] if stack else None
-        return self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent)
+        return self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent, shared)
 
     def _close_by_sid(self, name: str, sid: int, t_mono_ns: int, t_start: float,
-                      depth: int, parent: Optional[str]) -> Optional[TaskResult]:
+                      depth: int, parent: Optional[str], shared: bool) -> Optional[TaskResult]:
         e, p, dur = c_double(), c_double(), c_double()
         buf = ctypes.create_string_buffer(4096)
-        ret = self._client.lib.nemb_stop_session_v2(
-            ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
-        )
-        if ret < 0:
-            buf = ctypes.create_string_buffer((-ret) + 1)
+        with self._tasks_lock:  # closed and stopped together, so _all_open is the backend's open-session view
+            self._all_open.pop(sid, None)
+            shared = shared or bool(self._all_open)
             ret = self._client.lib.nemb_stop_session_v2(
                 ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
             )
+            if ret < 0:
+                buf = ctypes.create_string_buffer((-ret) + 1)
+                ret = self._client.lib.nemb_stop_session_v2(
+                    ctypes.c_uint64(sid), byref(e), byref(p), byref(dur), buf, len(buf)
+                )
         # ret 0: the backend could not read the providers at start or stop, so e/p/dur were never written.
         domains: Dict[str, float] = json.loads(buf.value.decode("utf-8")) if ret > 0 else {}
         invalid_reason = ("provider_read_failed" if ret == 0 else
@@ -1424,7 +1515,7 @@ class Session:
             depth=depth, parent=parent, domains=domains,
             domains_power_w=domains_power,
             started_at_mono_ns=t_mono_ns, ended_at_mono_ns=t_end_mono_ns,
-            timeseries=ts, valid=invalid_reason is None, invalid_reason=invalid_reason,
+            timeseries=ts, valid=invalid_reason is None, invalid_reason=invalid_reason, shared_boundary=shared,
         )
         with self._tasks_lock:
             self._tasks.append(result)
@@ -1455,16 +1546,15 @@ class Session:
                     break
                 items = sorted(self._all_open.items(),
                                key=lambda kv: (-kv[1][4], -kv[1][2]))
-                sid, (name, _sid, t_mono_ns, t_start, depth) = items[0]
-                self._all_open.pop(sid, None)
-                remaining = list(self._all_open.values())
+                sid, (name, _sid, t_mono_ns, t_start, depth, shared) = items[0]
+                remaining = [m for s, m in self._all_open.items() if s != sid]
             parent_name = None
             best_depth = -1
-            for (rn, _rs, _rm, _rt, rd) in remaining:
+            for (rn, _rs, _rm, _rt, rd, _sh) in remaining:
                 if rd < depth and rd > best_depth:
                     parent_name = rn
                     best_depth = rd
-            self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent=parent_name)
+            self._close_by_sid(name, sid, t_mono_ns, t_start, depth, parent_name, shared)
         self._build_report()
 
     def _build_report(self) -> Dict:
@@ -1589,13 +1679,18 @@ class Session:
             record_time_series=self._record_ts,
             extras={"error": report_error} if report_error else None,
         )
+        r = {c.upper(): f"{sum(t.invalid_reason == c for t in invalid)} task(s) excluded from totals: "
+                        f"{sorted({t.name for t in invalid if t.invalid_reason == c})}" for c in sorted({t.invalid_reason for t in invalid})}
+        w: Dict[str, str] = {}
+        sampler = None if self._noop else self._client.get_final_measurements()["sampler"]
+        if sampler:
+            task_checks([t.__dict__ for t in self._tasks], sampler, _measurement_cfg(), r, w)
         report = {
             "meta": meta,
             "tasks": [t.__dict__ for t in self._tasks],
             "totals": totals,
-            "validity": _validity({c.upper(): f"{sum(t.invalid_reason == c for t in invalid)} task(s) excluded from "
-                                   f"totals: {sorted({t.name for t in invalid if t.invalid_reason == c})}"
-                                   for c in sorted({t.invalid_reason for t in invalid})}),
+            "sampler": sampler,
+            "validity": _validity(r, w),
         }
         self._finalized_report = report
         return report

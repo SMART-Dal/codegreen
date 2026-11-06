@@ -99,6 +99,13 @@ struct EnergyProviderSpec {
     std::vector<std::string> supported_metrics;        ///< List of available metrics beyond energy
 };
 
+/** @brief Energy of a provider's boundary counter and of its power integral over the same span (first to last counter
+ *  read), and the counter reads in it. */
+struct CounterCheck {
+    double counter_j{0}, integral_j{0};
+    uint64_t span_ns{0}, reads{0};
+};
+
 /**
  * @brief Abstract base class for all energy measurement providers
  * 
@@ -125,8 +132,16 @@ public:
      * @brief Reading at a session boundary (start/stop); the sampler and one-shot reads use get_reading().
      * A provider whose hardware keeps a cumulative counter that sampling would disturb reads it only here
      * (spec boundary_source); its cumulative values are then comparable only with other boundary readings.
+     * shared: another session is open across this read. A counter read would discard energy of that session, so such a
+     * provider answers from its last counter read plus its power integral since (energy_source over the read).
      */
-    virtual EnergyReading get_boundary_reading() { return get_reading(); }
+    virtual EnergyReading get_boundary_reading(bool shared) { (void)shared; return get_reading(); }
+
+    /**
+     * @brief Per domain, a provider with both a boundary counter and a power integral reports their energies over the
+     * same span; another reader of the counter makes them diverge. Empty for a provider with one energy source.
+     */
+    virtual std::map<std::string, CounterCheck> counter_checks() const { return {}; }
 
     /**
      * @brief Get provider specification and capabilities
@@ -164,8 +179,12 @@ public:
         uint64_t total = total_measurements_.load();
         return (total > 0) ? (1.0 - static_cast<double>(failed_measurements_.load()) / total) : 0.0;
     }
-    /** @brief Device reads for which the provider kept a held value instead of a fresh hardware value. */
+    /** @brief Device reads for which the provider kept a held value instead of a fresh hardware value (failed reads). */
     uint64_t get_held_readings() const { return held_readings_.load(); }
+    /** @brief Boundary device reads answered with the previous boundary read (a fresh read would discard energy),
+     *  and the longest time span one such answer covered. */
+    uint64_t get_boundary_held() const { return boundary_held_.load(); }
+    uint64_t get_boundary_held_max_ns() const { return boundary_held_max_ns_.load(); }
     /** @brief Consecutive failed reads after which a provider or one of its devices is treated as lost. */
     void set_max_consecutive_failures(uint32_t n) { max_consecutive_failures_.store(n); }
     uint32_t max_consecutive_failures() const { return max_consecutive_failures_.load(); }
@@ -182,7 +201,13 @@ protected:
     mutable std::atomic<uint64_t> total_measurements_{0};
     mutable std::atomic<uint64_t> failed_measurements_{0};
     std::atomic<uint64_t> held_readings_{0};
+    std::atomic<uint64_t> boundary_held_{0}, boundary_held_max_ns_{0};
     std::atomic<uint32_t> max_consecutive_failures_{5};
+
+    void record_boundary_hold(uint64_t span_ns) {
+        boundary_held_++;
+        for (uint64_t c = boundary_held_max_ns_.load(); span_ns > c && !boundary_held_max_ns_.compare_exchange_weak(c, span_ns);) {}
+    }
 
     // Helper method for derived classes to update statistics
     void record_measurement_attempt(bool success) {

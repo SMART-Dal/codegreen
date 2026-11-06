@@ -101,10 +101,10 @@ public:
     void stop_measurements();
     
     /**
-     * @brief Get current synchronized reading from all providers (boundary: their get_boundary_reading)
+     * @brief Get current synchronized reading from all providers (boundary: their get_boundary_reading(shared))
      * @return SynchronizedReading with aligned measurements
      */
-    SynchronizedReading get_synchronized_reading(bool boundary = false);
+    SynchronizedReading get_synchronized_reading(bool boundary = false, bool shared = false);
 
     /**
      * @brief Take one sampler reading now. A reading with a failed provider is counted in
@@ -169,7 +169,12 @@ public:
     struct ProviderCounts {
         uint64_t rejected{0};   ///< sampler readings rejected because this provider's read failed
         uint64_t held{0};       ///< device reads the provider answered with a held value
+        uint64_t boundary_held{0}, boundary_held_max_ns{0};  ///< boundary reads answered from the previous one; longest span
         uint64_t restarts{0};   ///< re-initializations; each is a discontinuity in its cumulative energy
+        std::map<std::string, CounterCheck> counter_check;  ///< EnergyProvider::counter_checks()
+        uint64_t readings{0};      ///< successful non-boundary reads (sampler, one-shot)
+        uint64_t last_ns{0};       ///< monotonic time of the last successful non-boundary read
+        uint64_t max_stall_ns{0};  ///< longest span its cumulative energy did not change across those reads (incl. the tail)
     };
     std::map<std::string, ProviderCounts> provider_counts() const;
 
@@ -228,6 +233,8 @@ private:
         uint32_t consecutive_failures{0};
         uint64_t rejected{0};
         uint64_t restarts{0};
+        uint64_t readings{0}, last_ns{0}, advance_ns{0}, max_stall_ns{0};  // see ProviderCounts
+        double last_j{0};
         EnergyReading last_reading;
     };
     
@@ -278,7 +285,7 @@ private:
      * @brief Collect readings from all active providers
      * @return Map of provider name to reading
      */
-    std::map<std::string, EnergyReading> collect_provider_readings(bool boundary = false);
+    std::map<std::string, EnergyReading> collect_provider_readings(bool boundary = false, bool shared = false);
     
     /**
      * @brief Time-align measurements from different providers

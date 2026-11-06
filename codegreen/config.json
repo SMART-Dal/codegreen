@@ -69,7 +69,7 @@
         "quality_moderate_below_cv_pct": 10.0
       },
       "validity": {
-        "_comment": "Measurement validity policy (codegreen_runtime.measurement_validity / run_validity). Windows are counted in sampler readings; a resolution is the slowest selected provider's update_interval_ms (a provider fact) or the sampler interval. gap_policy is keyed by sampler.marker_reads: interpolated (NEMB markers interpolate between readings, so a starved sampler is fatal SAMPLER_STARVED) and last_poll (the Java standalone poller's markers read the last polled counter, so a gap is the warning SAMPLER_GAP and widens per-function resolution, while a failed read leaves a stale counter: fatal PROVIDER_READ_FAILED). severity values: fatal or warning. Per-function quality: measured (the mean call spans measured_min_factor resolutions and every call as many sampler readings), aggregate_only (summed time spans aggregate_min_factor resolutions), below_resolution. min_run_updates: a `codegreen run` mean duration below this many resolutions is RUN_BELOW_RESOLUTION. fail_on_invalid: exit 3 on any fatal reason (measure, run, project).",
+        "_comment": "Measurement validity policy (codegreen_runtime.measurement_validity / run_validity). Windows are counted in sampler readings; a resolution is the slowest selected provider's update_interval_ms (a provider fact) or the sampler interval. gap_policy is keyed by sampler.marker_reads: interpolated (NEMB markers interpolate between readings, so a starved sampler is fatal SAMPLER_STARVED) and last_poll (the Java standalone poller's markers read the last polled counter, so a gap is the warning SAMPLER_GAP and widens per-function resolution, while a failed read leaves a stale counter: fatal PROVIDER_READ_FAILED). severity values: fatal or warning. Per-function quality: measured (the mean call spans measured_min_factor resolutions and every call as many sampler readings), aggregate_only (summed time spans aggregate_min_factor resolutions), below_resolution. min_run_updates: a `codegreen run` mean duration below this many resolutions is RUN_BELOW_RESOLUTION. counter_check: a provider with a boundary energy counter and a power integral (NVIDIA) reports both over the same span; they may differ by tolerance (fraction of the integral) plus one update interval of energy per counter read and at the end, beyond which COUNTER_INTEGRAL_DIVERGED has that severity (another reader of the counter or instant power discards counter energy). provider_stall_resolutions: a provider with no successful read, or whose cumulative energy stays unchanged (or unread) for longer than this many of its resolutions, is PROVIDER_STALLED. fail_on_invalid: exit 3 on any fatal reason (measure, run, project).",
         "min_window_samples": 2,
         "median_gap_factor": 1.5,
         "gap_policy": {
@@ -80,6 +80,8 @@
         "min_run_updates": 10,
         "measured_min_factor": 10,
         "aggregate_min_factor": 10,
+        "counter_check": {"tolerance": 0.05, "severity": "fatal"},
+        "provider_stall_resolutions": 10,
         "fail_on_invalid": true
       }
     },

@@ -192,10 +192,16 @@ So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]
 | `noise` | `Optional[Dict]` | quality summary computed from `timeseries` |
 | `valid` | `bool` | `False` when the task is not a measurement; it is then excluded from `totals` (counted in `totals.invalid_tasks`) |
 | `invalid_reason` | `Optional[str]` | `provider_read_failed` (the backend could not read the providers at start or stop) or `negative_energy` |
+| `shared_boundary` | `bool` | a start or stop read happened while another task was open. A provider with a boundary energy counter (NVIDIA) then answers from its last counter read plus its power integral since, because a counter read discards the open task's energy (about half an update period per read); that task's energy from it is integrated power |
 
-A report also carries `validity` (`{status, reasons, detail, warnings}`, the
-same block as the CLI): `PROVIDER_READ_FAILED` or `NEGATIVE_ENERGY` name the
-excluded tasks. A failed read is never reported as 0 J.
+A report also carries `sampler` (the backend's sampler block, as in the CLI
+output) and `validity` (`{status, reasons, detail, warnings}`, the same block
+as the CLI): `PROVIDER_READ_FAILED` or `NEGATIVE_ENERGY` name the excluded
+tasks, the provider checks of `run` apply (`GPU_IN_TOTAL`, `GPU_READ_HELD`,
+`BOUNDARY_READ_HELD`, `COUNTER_INTEGRAL_DIVERGED`, `PROVIDER_STALLED`), and the
+warnings `TASK_POWER_INTEGRATED` (tasks whose energy integrates sampled power)
+and `TASK_BELOW_RESOLUTION` (tasks shorter than `min_run_updates` provider
+resolutions) name the tasks. A failed read is never reported as 0 J.
 
 See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
 
@@ -440,7 +446,9 @@ object is returned by `nemb_get_checkpoints_json`):
              "sampler_affinity_cpus": 8, "interval_ms_min": 10, "interval_ms_max": 10, "failed_reads": 0,
              "marker_reads": "interpolated", "config_path": "/.../codegreen/config.json",
              "providers": [{"name": "intel_rapl", "hardware_type": "cpu", "energy_source": "counter",
-                            "boundary_source": "counter", "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0}]},
+                            "boundary_source": "counter", "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0,
+                            "boundary_held": 0, "boundary_held_max_ns": 0, "readings": 42, "last_ns": 13973...,
+                            "max_stall_ns": 0, "counter_check": {}}]},
  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}}
 --- CODEGREEN_RESULT_END ---
 ```

@@ -288,8 +288,9 @@ bool NVIDIAGPUProvider::initialize() {
 }
 
 // Session boundaries read the total-energy counter instead of the power integral. A read within one counter update
-// period of the previous one would discard energy, so it is answered with the previous read's value (held).
-EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
+// period of the previous one would discard energy, so it is answered with the previous read's value (held). A shared
+// read (another session open) would discard that session's energy, so it adds the power integral to the last read.
+EnergyReading NVIDIAGPUProvider::get_boundary_reading(bool shared) {
     EnergyReading reading = get_reading();
     if (!counters_ || reading.energy_joules < 0) return reading;
     std::lock_guard<std::mutex> lock(reading_mutex_);
@@ -300,10 +301,15 @@ EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
         std::string dom = "gpu" + std::to_string(i);
         uint64_t t = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
         unsigned long long mj = 0;
+        if (shared && gs.counter.t_ns()) {
+            reading.domain_energy_joules[dom] = gs.counter.joules_at(integrator_.joules(i));
+            reading.energy_joules += reading.domain_energy_joules[dom];
+            continue;
+        }
         if (!gs.counter.due(t)) {
-            held_readings_++;
+            record_boundary_hold(t - gs.counter.t_ns());
         } else if (nvmlReturn_t r = nvml().DeviceGetTotalEnergyConsumption(gs.device_handle, &mj); r == NVML_SUCCESS) {
-            gs.counter.add(mj, t);
+            gs.counter.add(mj, t, integrator_.joules(i));
         } else {
             handle_nvml_error("get_total_energy", r);
             reading.domain_energy_joules[dom] = reading.energy_joules = -1.0;
@@ -313,6 +319,14 @@ EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
         reading.energy_joules += gs.counter.joules();
     }
     return reading;
+}
+
+std::map<std::string, CounterCheck> NVIDIAGPUProvider::counter_checks() const {
+    std::lock_guard<std::mutex> lock(reading_mutex_);
+    std::map<std::string, CounterCheck> out;
+    for (uint32_t i = 0; counters_ && i < gpu_count_; ++i)
+        if (gpu_states_[i].available && gpu_states_[i].monitoring_enabled) out["gpu" + std::to_string(i)] = gpu_states_[i].counter.check();
+    return out;
 }
 
 EnergyReading NVIDIAGPUProvider::get_reading() {
@@ -363,7 +377,7 @@ EnergyProviderSpec NVIDIAGPUProvider::get_specification() const {
     spec.power_resolution_watts = 1e-3;
     uint64_t period_ns = 0;
     for (const auto& g : gpu_states_) if (g.available) period_ns = std::max(period_ns, g.counter.period_ns());
-    spec.update_interval = counters_ && period_ns ? std::chrono::microseconds(period_ns / 1000) : NVML_UPDATE_NOMINAL;
+    spec.update_interval = counters_ && period_ns ? std::chrono::microseconds((period_ns + 999) / 1000) : NVML_UPDATE_NOMINAL;
     spec.counter_bits = 32;
     spec.energy_source = "integrated_power";
     spec.boundary_source = counters_ ? "counter" : "integrated_power";

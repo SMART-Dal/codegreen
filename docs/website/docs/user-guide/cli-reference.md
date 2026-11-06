@@ -584,6 +584,7 @@ warnings are not.
 | `COMPILE_FAILED` | measure | C, C++ or Java compile error (compiler output in `detail`) |
 | `SAMPLER_STARVED` | measure, project | Max reading gap above `gap_policy.<marker_reads>.max_gap_factor` x interval, or median gap above `median_gap_factor` x interval, where that policy's `severity` is `fatal` (NEMB `interpolated` markers) |
 | `PROVIDER_READ_FAILED` | all | A provider read failed where the result depends on it: `last_poll` markers (`failed_reads`), a provider restart (counter discontinuity), a failed `run` session read, a failed `Session` task or a failed final `Monitor` read |
+| `PROVIDER_STALLED` | measure, run, project, Session | A provider stopped reporting mid-run: no successful read, or its cumulative energy unchanged or unread (`providers[].max_stall_ns`, `last_ns`) for more than `provider_stall_resolutions` of its resolution. Its share of the total is missing; nothing is filled in |
 | `CHECKPOINT_CAP` | measure, project | Markers dropped at `measurement.report.max_checkpoints` |
 | `BUFFER_WRAPPED` | measure, project | Ring buffer overwrote the start of the run |
 | `MARKER_CLAMPED` | measure, project | A marker lies outside the sampled range |
@@ -591,14 +592,18 @@ warnings are not.
 | `ZERO_ENERGY` | measure, project | Root window measured 0 J |
 | `NEGATIVE_ENERGY` | measure, project, Session | Cumulative energy decreases between markers, or a task's energy is negative |
 | `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` resolutions |
+| `COUNTER_INTEGRAL_DIVERGED` | measure, run, project, Session | A provider's boundary energy counter and its power integral (`providers[].counter_check`) differ by more than `counter_check.tolerance` of the integral plus one update interval of energy per counter read and at the end (a counter read discards what accrued since its last update). Another process reading the counter or instant power (`nvidia-smi --query-gpu=power.draw.instant`, DCGM) makes the NVML counter lose energy. Severity `counter_check.severity` (default fatal) |
 | `ZERO_ENERGY_RUNS` | run | At least one run read 0 J |
 | `NEGATIVE_ENERGY_RUNS` | run | At least one run read negative energy |
 | `AFFINITY_SINGLE_CPU` (warning) | measure, project | Measured process allowed on fewer than `min_affinity_cpus` CPUs; `SAMPLER_STARVED` is the fatal symptom |
 | `SAMPLER_GAP` (warning) | measure, project | A reading gap where the policy's `severity` is `warning` (`last_poll` markers); per-function resolution widened to the gap |
 | `PROVIDER_READ_FAILED` (warning) | measure, project | `failed_reads` where `failed_read_severity` is `warning` (`interpolated` markers skip the failed reading) |
 | `READINGS_REJECTED` (warning) | measure, project | Readings rejected by the sampler; markers interpolate across them |
-| `GPU_IN_TOTAL` (warning) | measure, run, project | The total sums GPU and non-GPU providers (scope label; choose with `--sensors` or `default_sensors`) |
-| `GPU_READ_HELD` (warning) | measure, run, project | A read was answered with a held value (`providers[].held`): a failed power read kept the last good value, or an energy counter read within one update period of the previous read (which would discard energy) returned that read |
+| `GPU_IN_TOTAL` (warning) | measure, run, project, Session | The total sums GPU and non-GPU providers (scope label; choose with `--sensors` or `default_sensors`) |
+| `GPU_READ_HELD` (warning) | measure, run, project, Session | A failed power read kept the last good value (`providers[].held`) |
+| `BOUNDARY_READ_HELD` (warning) | measure, run, project, Session | A boundary read answered from a previous read (`providers[].boundary_held`) spanned more than the provider's update interval (`boundary_held_max_ns`), so it misses energy beyond the counter's resolution. Holds within one update period (back-to-back `run --repeat` boundaries) are counted, not warned |
+| `TASK_POWER_INTEGRATED` (warning) | Session | Tasks whose energy integrates sampled power: a provider whose `boundary_source` is `integrated_power`, or an `integrated_power` provider for a task with `shared_boundary` (read while another task was open, so its energy counter was not read) |
+| `TASK_BELOW_RESOLUTION` (warning) | Session | Tasks shorter than `min_run_updates` resolutions of the selected providers |
 | `RUN_POWER_INTEGRATED` (warning) | run | A provider's run energy is integrated from sampled power (`boundary_source: integrated_power`), so it depends on the sampler interval |
 | `OVERLAPPING_THREADS` (warning) | measure, project | Several threads inside instrumented frames at once; each is charged the whole package energy |
 | `RESOLUTION_UNKNOWN` (warning) | run | The backend reports no provider facts, so `RUN_BELOW_RESOLUTION` is not checked |
@@ -620,7 +625,17 @@ provider with `name`, `hardware_type`, `energy_source` (`counter` or
 `integrated_power`: how sampled and marker readings get energy),
 `boundary_source` (the same for `run` and `Session` boundary reads; NVIDIA GPUs
 with a total-energy counter read it there), `update_interval_ms`,
-`counter_group`, `rejected` and `held`. Runs of several processes (JVM forks) merge their records (counts add,
+`counter_group`, `rejected`, `held` (failed reads that kept the last good
+value), `boundary_held` (boundary reads answered from the previous read, since a
+fresh counter read within one update period would discard energy) and
+`boundary_held_max_ns` (the longest span such an answer covered) and
+`readings`, `last_ns` and `max_stall_ns` (successful sampler and one-shot reads,
+the time of the last one, and the longest span over them with unchanged
+cumulative energy; `null` from the Java poller, which does not track it),
+`counter_check` (per domain, `counter_j` and `integral_j`: the energy of the
+boundary counter and of the power integral from the first to the last counter
+read, `span_ns` apart, and `reads`, the counter reads in that span; empty for a
+provider with one energy source). Runs of several processes (JVM forks) merge their records (counts add,
 gaps take the worst, `processes` counts them; `gap_statistic: "mean"` marks a
 poller that keeps only the mean gap).
 

@@ -64,7 +64,7 @@ public:
     
     bool is_available() const;
     std::vector<std::string> get_provider_info() const;
-    EnergyResult read(bool boundary = false);
+    EnergyResult read(bool boundary = false, bool shared = false);
     uint64_t start_session(const std::string& name);
     EnergyDifference end_session(uint64_t session_id);
     void mark_checkpoint(const std::string& name);
@@ -325,7 +325,9 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             const auto& c = counts[name];
             st->providers.push_back({name, spec.hardware_type, spec.energy_source,
                                      spec.boundary_source.empty() ? spec.energy_source : spec.boundary_source,
-                                     spec.counter_group, spec.update_interval.count() / 1000.0, c.rejected, c.held});
+                                     spec.counter_group, spec.update_interval.count() / 1000.0, c.rejected, c.held,
+                                     c.boundary_held, c.boundary_held_max_ns, {}, c.readings, c.last_ns, c.max_stall_ns});
+            for (const auto& [dom, k] : c.counter_check) st->providers.back().counter_check[dom] = {k.counter_j, k.integral_j, k.span_ns, k.reads};
             st->failed_reads += c.rejected;
             st->provider_restarts += c.restarts;
         }
@@ -334,11 +336,11 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
     return cps;
 }
 
-EnergyResult EnergyMeter::Impl::read(bool boundary) {
+EnergyResult EnergyMeter::Impl::read(bool boundary, bool shared) {
     if (!coordinator_ || coordinator_->get_active_providers().empty()) {
         EnergyResult res; res.is_valid = false; res.error_message = "Unavailable"; return res;
     }
-    auto sync_reading = coordinator_->get_synchronized_reading(boundary);
+    auto sync_reading = coordinator_->get_synchronized_reading(boundary, shared);
     return convert_synchronized_reading(sync_reading);
 }
 
@@ -362,7 +364,8 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
 uint64_t EnergyMeter::Impl::start_session(const std::string& name) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     uint64_t id = next_session_id_++;
-    active_sessions_[id] = {name, read(true), timer_.get_timestamp_ns(), true};
+    // A boundary read while another session is open is shared: it must not disturb that session's counter.
+    active_sessions_[id] = {name, read(true, !active_sessions_.empty()), timer_.get_timestamp_ns(), true};
     return id;
 }
 
@@ -370,7 +373,7 @@ EnergyDifference EnergyMeter::Impl::end_session(uint64_t id) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     auto it = active_sessions_.find(id);
     if (it == active_sessions_.end()) return {0,0,0,0,false};
-    auto diff = energy_utils::calculate_difference(read(true), it->second.baseline);
+    auto diff = energy_utils::calculate_difference(read(true, active_sessions_.size() > 1), it->second.baseline);
     active_sessions_.erase(it);
     return diff;
 }
@@ -610,7 +613,16 @@ extern "C" {
                << ", \"energy_source\": " << json_str(p.energy_source) << ", \"boundary_source\": " << json_str(p.boundary_source)
                << ", \"update_interval_ms\": " << p.update_interval_ms
                << ", \"counter_group\": " << json_str(p.counter_group) << ", \"rejected\": " << p.rejected
-               << ", \"held\": " << p.held << "}";
+               << ", \"held\": " << p.held << ", \"boundary_held\": " << p.boundary_held
+               << ", \"boundary_held_max_ns\": " << p.boundary_held_max_ns << ", \"readings\": " << p.readings
+               << ", \"last_ns\": " << p.last_ns << ", \"max_stall_ns\": " << p.max_stall_ns << ", \"counter_check\": {";
+            bool first = true;
+            for (const auto& [dom, k] : p.counter_check) {
+                ss << (first ? "" : ", ") << json_str(dom) << ": {\"counter_j\": " << k.counter_j << ", \"integral_j\": "
+                   << k.integral_j << ", \"span_ns\": " << k.span_ns << ", \"reads\": " << k.reads << "}";
+                first = false;
+            }
+            ss << "}}";
         }
         ss << "], \"config_path\": " << json_str(st.config_path) << "}}";
         return ss.str();

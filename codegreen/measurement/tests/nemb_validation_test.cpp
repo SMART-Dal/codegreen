@@ -70,23 +70,29 @@ static void test_correlate() {
 }
 
 // ok: readings carry energy; init: initialize()/self_test() succeed; group: counter_group; hold: every read is a held value;
-// boundary: session boundaries read a separate counter series (energy_source integrated_power, boundary_source counter).
+// boundary: session boundaries read a separate counter series (energy_source integrated_power, boundary_source counter);
+// stall: reads succeed but the cumulative energy never changes.
 class FakeProvider : public EnergyProvider {
 public:
-    explicit FakeProvider(bool ok, std::string group = "", bool init = true, bool hold = false, bool boundary = false)
-        : ok_(ok), init_(init), hold_(hold), boundary_(boundary), group_(std::move(group)) {}
+    explicit FakeProvider(bool ok, std::string group = "", bool init = true, bool hold = false, bool boundary = false,
+                          bool stall = false)
+        : ok_(ok), init_(init), hold_(hold), boundary_(boundary), stall_(stall), group_(std::move(group)) {}
     bool initialize() override { return init_; }
     EnergyReading get_reading() override {
         EnergyReading r; r.provider_id = "fake"; r.timestamp_ns = utils::PrecisionTimer::monotonic_timestamp_ns();
-        r.energy_joules = ok_ ? (j_ += 0.5) : -1.0;
+        r.energy_joules = ok_ ? (j_ += stall_ ? 0.0 : 0.5) : -1.0;
         r.average_power_watts = ok_ ? j_ : 0.0;  // rising power: an EMA lags behind it
         if (hold_) held_readings_++;
         return r;
     }
-    EnergyReading get_boundary_reading() override {  // a separate counter series, far above the sampled one
+    EnergyReading get_boundary_reading(bool shared) override {  // a separate counter series, far above the sampled one
         EnergyReading r = get_reading();
-        if (boundary_) r.energy_joules = b_ += 10;
+        if (boundary_ && shared) r.energy_joules = b_ + 1;  // last counter value plus the integral since: no counter read
+        else if (boundary_) { r.energy_joules = b_ += 10; record_boundary_hold(static_cast<uint64_t>(b_ - 1e6)); }
         return r;
+    }
+    std::map<std::string, CounterCheck> counter_checks() const override {
+        return boundary_ ? std::map<std::string, CounterCheck>{{"dev0", {b_ - 1e6, 9.5, 1000, 3}}} : std::map<std::string, CounterCheck>{};
     }
     EnergyProviderSpec get_specification() const override {
         EnergyProviderSpec s;
@@ -101,7 +107,7 @@ public:
     void shutdown() override {}
     std::string get_name() const override { return ok_ ? "fake_ok" : "fake_bad"; }
 private:
-    bool ok_, init_, hold_, boundary_;
+    bool ok_, init_, hold_, boundary_, stall_;
     std::string group_;
     double j_{0}, b_{1e6};
 };
@@ -111,6 +117,7 @@ static void register_fakes() {
     EnergyProvider::register_provider("fake_bad", [] { return std::make_unique<FakeProvider>(false); });
     EnergyProvider::register_provider("fake_hold", [] { return std::make_unique<FakeProvider>(true, "", true, true); });
     EnergyProvider::register_provider("fake_boundary", [] { return std::make_unique<FakeProvider>(true, "", true, false, true); });
+    EnergyProvider::register_provider("fake_stall", [] { return std::make_unique<FakeProvider>(true, "", true, false, false, true); });
     EnergyProvider::register_provider("fake_grp_a", [] { return std::make_unique<FakeProvider>(true, "g"); });
     EnergyProvider::register_provider("fake_grp_b", [] { return std::make_unique<FakeProvider>(true, "g"); });
     EnergyProvider::register_provider("fake_noinit", [] { return std::make_unique<FakeProvider>(true, "g", false); });
@@ -200,10 +207,13 @@ static void test_power_integrator() {
 static void test_gpu_energy_counter() {
     drivers::GPUEnergyCounter c(100, 1000);  // update period 100 ns, primed at 1000 mJ
     CHECK(c.due(1) && c.joules() == 0);      // the first read is due
-    c.add(3500, 1000);
+    c.add(3500, 1000, 7.0);
     CHECK(c.joules() == 2.5 && !c.due(1099) && c.due(1100));  // within one period the last read answers (held)
-    c.add(200, 1100);                                         // driver counter reset counts from zero
+    CHECK(c.check().counter_j == 0 && c.check().integral_j == 0 && c.check().span_ns == 0 && c.check().reads == 1);  // spans start at the first read
+    c.add(200, 1100, 7.5);                                    // driver counter reset counts from zero
     CHECK(std::fabs(c.joules() - 2.7) < 1e-12);
+    CHECK(std::fabs(c.check().counter_j - 0.2) < 1e-12 && c.check().integral_j == 0.5 && c.check().span_ns == 100 && c.check().reads == 2);
+    CHECK(std::fabs(c.joules_at(8.0) - 3.2) < 1e-12);  // shared read: last counter value plus the integral since
     CHECK(drivers::GPUEnergyCounter().period_ns() == 0);
 }
 
@@ -303,17 +313,34 @@ static void test_meter_sampler() {
         CHECK(st.providers.size() == 1 && st.providers[0].name == "fake_ok" && st.providers[0].hardware_type == "cpu" &&
               st.providers[0].energy_source == "counter" && st.providers[0].boundary_source == "counter" &&
               st.providers[0].update_interval_ms == 2.5 &&
-              st.providers[0].rejected == 0 && st.providers[0].held == 0 && st.failed_reads == 0);
+              st.providers[0].rejected == 0 && st.providers[0].held == 0 && st.providers[0].boundary_held == 0 &&
+              st.failed_reads == 0);
+        CHECK(st.providers[0].readings >= 2 && st.providers[0].last_ns >= st.last_ns && st.providers[0].max_stall_ns == 0);
+    }
+    setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_stall", 1);
+    {
+        EnergyMeter m;
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        EnergyMeter::SamplerStats st;
+        m.get_checkpoint_measurements(&st);
+        const auto& s = st.providers[1];  // successful reads of an unchanging energy: counted as a stall, still read
+        CHECK(st.providers[0].max_stall_ns == 0 && s.name == "fake_stall" && s.readings >= 10 && s.readings == st.providers[0].readings);
+        CHECK(s.max_stall_ns >= 20000000 && s.last_ns >= st.last_ns);
     }
     setenv("CODEGREEN_PROVIDERS", "fake_boundary", 1);
     {
         EnergyMeter m;
         auto d = m.end_session(m.start_session("s"));
         CHECK(d.is_valid && d.energy_joules == 10);  // sessions read get_boundary_reading
+        uint64_t outer = m.start_session("outer"), inner = m.start_session("inner");
+        CHECK(m.end_session(inner).energy_joules == 0 && m.end_session(outer).energy_joules == 10);  // nested reads are shared
         CHECK(m.read().energy_joules < 1e6);          // one-shot reads and the sampler read get_reading
         EnergyMeter::SamplerStats st;
         for (const auto& c : m.get_checkpoint_measurements(&st)) CHECK(c.cumulative_energy_joules < 1e6);
         CHECK(st.providers[0].energy_source == "integrated_power" && st.providers[0].boundary_source == "counter");
+        CHECK(st.providers[0].held == 0 && st.providers[0].boundary_held == 4 && st.providers[0].boundary_held_max_ns == 40);
+        const auto& k = st.providers[0].counter_check.at("dev0");
+        CHECK(st.providers[0].counter_check.size() == 1 && k.counter_j == 40 && k.integral_j == 9.5 && k.span_ns == 1000 && k.reads == 3);
     }
     setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_bad,fake_hold", 1);
     {
@@ -324,7 +351,7 @@ static void test_meter_sampler() {
         CHECK(st.providers.size() == 3 && st.providers[0].name == "fake_bad" && st.providers[1].name == "fake_hold");
         CHECK(st.providers[0].rejected > 0 && st.providers[1].rejected == 0 && st.providers[2].rejected == 0);
         CHECK(st.providers[1].held > 0 && st.failed_reads == st.providers[0].rejected && st.rejected_readings > 0);
-        CHECK(st.provider_restarts >= 1);
+        CHECK(st.provider_restarts >= 1 && st.providers[0].readings == 0 && st.providers[1].readings > 0);
     }
     setenv("CODEGREEN_CONFIG", (fs::temp_directory_path() / "nemb_no_such_config.json").c_str(), 1);
     bool threw = false;
@@ -405,6 +432,8 @@ static void test_result_fd() {
         CHECK(out.find("\"marker_reads\": \"interpolated\"", s) < e);
         CHECK(out.find("\"providers\": [{\"name\": \"fake_ok\", \"hardware_type\": \"cpu\", \"energy_source\": \"counter\", "
                        "\"boundary_source\": \"counter\"", s) < e);
+        CHECK(out.find("\"held\": 0, \"boundary_held\": 0, \"boundary_held_max_ns\": 0, \"readings\": ", s) < e);
+        CHECK(out.find("\"max_stall_ns\": 0, \"counter_check\": {}}", s) < e);
         if (std::string(mode) == "keep") CHECK(out.find("workload output") < s);
     }
     auto out = run_child("close_before");

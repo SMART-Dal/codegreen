@@ -1835,9 +1835,15 @@ def _vcp(cid: str, ts: int, joules: float, ri: int, clamp: str = "none", tid: st
             "clamp": clamp, "provider_j": {"intel_rapl": joules}}
 
 
-def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
+def _jprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0) -> Dict:
+    """A provider record as the Java standalone poller writes it (no boundary reads)."""
     return {"name": name, "hardware_type": hw, "energy_source": source, "boundary_source": source, "update_interval_ms": ms,
-            "counter_group": "cpu_package" if hw == "cpu" else "", "rejected": 0, "held": 0, **kw}
+            "counter_group": "cpu_package" if hw == "cpu" else "", "rejected": 0, "held": 0}
+
+
+def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
+    return {**_jprov(name, hw, source, ms), "boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {},
+            "readings": 50, "last_ns": 500_000_000, "max_stall_ns": 0, **kw}
 
 
 def _vsampler(**kw) -> Dict:
@@ -1896,6 +1902,57 @@ class TestValidity:
         v = run_validity([5.0], 2.0, _vsampler(providers=[{**gpu, "boundary_source": "counter", "held": 2}]),
                          _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["GPU_READ_HELD"]
+
+    @pytest.mark.parametrize("span_ns,warned", [(99_000_000, False), (100_000_000, False), (100_000_001, True)])
+    def test_boundary_holds_warn_only_beyond_the_update_interval(self, span_ns, warned):
+        """run --repeat chains stop/start within one counter period: those holds stay within the resolution."""
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter", boundary_held=9,
+                     boundary_held_max_ns=span_ns)
+        v = run_validity([5.0], 2.0, _vsampler(providers=[gpu]), _measurement_cfg())
+        assert v["status"] == "valid" and list(v["warnings"]) == (["BOUNDARY_READ_HELD"] if warned else [])
+
+    @pytest.mark.parametrize("counter_j,span_s,reads,reasons", [
+        (135.4, 6.0, 4, []),            # measured without another reader: counter/integral 0.99
+        (11.9, 6.0, 4, ["COUNTER_INTEGRAL_DIVERGED"]),  # nvidia-smi power.draw.instant every 10 ms: 0.07
+        (124.0, 6.0, 4, []),            # 9 % off over 6 s: within tolerance 0.05 plus five 100 ms update intervals
+        (110.0, 6.0, 4, ["COUNTER_INTEGRAL_DIVERGED"]),
+        (110.0, 6.0, 10, []),           # each counter read may discard up to one update interval of energy
+        (110.0, 1.0, 4, []),
+    ])
+    def test_counter_integral_divergence(self, counter_j, span_s, reads, reasons):
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        k = {"gpu0": {"counter_j": counter_j, "integral_j": 136.5, "span_ns": int(span_s * 1e9), "reads": reads}}
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter", counter_check=k)
+        v = run_validity([45.0] * 3, 2.0, _vsampler(providers=[gpu]), _measurement_cfg())
+        assert v["reasons"] == reasons and v["warnings"] == {}
+        assert self._check(sampler=_vsampler(providers=[gpu]))["reasons"] == reasons
+        cfg = _measurement_cfg()
+        cfg["counter_check"] = {**cfg["counter_check"], "severity": "warning"}
+        assert list(run_validity([45.0] * 3, 2.0, _vsampler(providers=[gpu]), cfg)["warnings"]) == reasons
+
+    @pytest.mark.parametrize("gpu_kw,lost", [
+        ({}, False),
+        ({"readings": 0, "last_ns": 0}, True),                # never read successfully
+        ({"max_stall_ns": 1_000_000_000}, False),            # 10 resolutions of the 100 ms update interval
+        ({"max_stall_ns": 1_000_000_001}, True),             # energy unchanged for longer: lost mid-run
+        ({"last_ns": 500_000_000 - 1_000_000_001}, True),    # no successful read since then while the CPU kept reading
+    ])
+    def test_provider_stalled(self, gpu_kw, lost):
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        sampler = _vsampler(providers=[_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, **gpu_kw)])
+        assert ("PROVIDER_STALLED" in self._check(sampler=sampler)["reasons"]) == lost
+        assert ("PROVIDER_STALLED" in run_validity([5.0], 2.0, sampler, _measurement_cfg())["reasons"]) == lost
+        cpu = _vsampler(providers=[_vprov(max_stall_ns=100_000_001)])  # CPU: 10 x the 10 ms sampler interval
+        assert self._check(sampler=cpu)["reasons"] == ["PROVIDER_STALLED"]
+
+    def test_counter_check_merges_across_processes(self):
+        from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import _merge_samplers
+        k = {"gpu0": {"counter_j": 1.0, "integral_j": 2.0, "span_ns": 3, "reads": 2}}
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, counter_check=k)
+        out = _merge_samplers([_vsampler(providers=[gpu]), _vsampler(providers=[gpu])])
+        assert out["providers"][0]["counter_check"] == {"gpu0": {"counter_j": 2.0, "integral_j": 4.0, "span_ns": 6, "reads": 4}}
+        assert k == {"gpu0": {"counter_j": 1.0, "integral_j": 2.0, "span_ns": 3, "reads": 2}}
 
     def test_gap_policy_is_config(self):
         from codegreen.cli.cli import _measurement_cfg
@@ -1981,7 +2038,7 @@ class TestValidity:
         def meta(readings, last, gap, failed=0, cpus=4, ms=1.0):
             return {"marker_reads": "last_poll", "interval_ms": 1.0, "readings": readings, "failed_reads": failed,
                     "first_ns": 0, "last_ns": last, "max_gap_ns": gap, "affinity_cpus": cpus,
-                    "sampler_affinity_cpus": cpus, "providers": [_vprov(ms=ms)]}
+                    "sampler_affinity_cpus": cpus, "providers": [_jprov(ms=ms)]}
         f = tmp_path / "sum"
         f.write_text(f"CG_CP_META|{json.dumps(meta(1001, 1_100_000_000, 2_000_000))}\nCG_CP_SUM|1|g|4|40|30|400\n"
                      f"CG_CP_META|{json.dumps(meta(11, 10_000_000, 9_000_000, cpus=5, ms=2.0))}\n")
@@ -1991,7 +2048,10 @@ class TestValidity:
         s = _poller_sampler(records)
         assert (s["readings"], s["interval_ms_max"], s["median_gap_ns"], s["affinity_cpus"], s["processes"]) == \
             (1012, 1.0, 1_100_000, 4, 2)
-        assert s["providers"][0]["update_interval_ms"] == 2.0
+        assert s["providers"][0]["update_interval_ms"] == 2.0 and s["providers"][0]["boundary_held"] == 0
+        assert s["providers"][0]["counter_check"] == {}
+        assert (s["providers"][0]["readings"], s["providers"][0]["last_ns"], s["providers"][0]["max_stall_ns"]) == \
+            (1012, 1_100_000_000, None)
         v = measurement_validity(None, s, {}, _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
         v = measurement_validity(None, _poller_sampler([meta(5, 4_000_000, 1_000_000, failed=1)]), {}, _measurement_cfg())
@@ -2334,7 +2394,8 @@ class TestInvalidReads:
             return len(buf.value)
         lib = types.SimpleNamespace(nemb_start_session=lambda n: next(ids), nemb_stop_session_v2=stop,
                                     nemb_abi_version=lambda: 4)
-        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4))
+        client = types.SimpleNamespace(lib=lib, abi=4, get_final_measurements=lambda: {"sampler": _vsampler()})
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: client)
         s = rt.Session("inv", save_to_file=False, warn_on_concurrent=False).start()
         for name in ("ok", "bad"):
             with s.task(name):
@@ -2345,6 +2406,45 @@ class TestInvalidReads:
         assert rep["totals"]["domains"] == {"package-0": 5.0}
         assert rep["meta"]["measurement_quality"] == "provider_read_failed"
         assert rep["validity"]["reasons"] == ["PROVIDER_READ_FAILED"]
+
+    def test_session_flags_shared_and_short_tasks(self, monkeypatch):
+        """A boundary read while another task is open is shared (the backend adds the power integral to the last
+        counter read instead of reading the counter); the task is TASK_POWER_INTEGRATED for a power-integrating provider.
+        Tasks shorter than min_run_updates resolutions are TASK_BELOW_RESOLUTION."""
+        import types
+        import threading
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+        ids, open_sids, seen = iter(range(1, 10)), set(), []
+
+        def start(n):
+            seen.append((n, bool(open_sids)))
+            sid = next(ids)
+            open_sids.add(sid)
+            return sid
+
+        def stop(sid, e, p, dur, buf, n):
+            open_sids.discard(sid.value)
+            seen.append(("stop", bool(open_sids)))
+            e._obj.value, dur._obj.value, buf.value = 5.0, {1: 2.0, 2: 0.5, 3: 2.0}[sid.value], b'{"gpu0": 5.0}'
+            return len(buf.value)
+        lib = types.SimpleNamespace(nemb_start_session=start, nemb_stop_session_v2=stop, nemb_abi_version=lambda: 4)
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter")
+        client = types.SimpleNamespace(lib=lib, abi=4, get_final_measurements=lambda: {"sampler": _vsampler(providers=[gpu])})
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: client)
+        s = rt.Session("shared", save_to_file=False, warn_on_concurrent=False).start()
+        with s.task("outer"):
+            with s.task("inner"):
+                pass
+        t = threading.Thread(target=lambda: s.task("alone").__enter__())  # opened on another thread, closed at stop
+        t.start()
+        t.join()
+        rep = s.stop()
+        assert seen[:4] == [(b"outer", False), (b"inner", True), ("stop", True), ("stop", False)]
+        assert {t["name"]: t["shared_boundary"] for t in rep["tasks"]} == {"inner": True, "outer": False, "alone": False}
+        w = rep["validity"]["warnings"]
+        assert rep["validity"]["status"] == "valid" and sorted(w) == ["TASK_BELOW_RESOLUTION", "TASK_POWER_INTEGRATED"]
+        assert "'inner'" in w["TASK_BELOW_RESOLUTION"] and "1 task(s)" in w["TASK_POWER_INTEGRATED"]
+        assert rep["sampler"]["providers"] == [gpu]
 
 
 def _java_workload(dest: Path) -> Path:
