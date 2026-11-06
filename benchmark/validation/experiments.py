@@ -293,6 +293,10 @@ class ValidityExperiment(Experiment):
         if smp["affinity_cpus"] < self.tol.min_affinity_cpus:
             warn.add("AFFINITY_SINGLE_CPU")
             opt.add("SAMPLER_STARVED")
+        if "SAMPLER_STARVED" in opt:
+            opt.add("TOTAL_BELOW_RESOLUTION")  # a starved sampler delivers fewer readings than the window length implies
+        if "TOTAL_BELOW_RESOLUTION" in req | opt:
+            opt.add("ZERO_ENERGY")  # a window no reading falls inside reports no energy
         if r["mode"] != "rapl" and any(p["hardware_type"] == "gpu" for p in smp["providers"]):
             warn.add("GPU_IN_TOTAL")
         return req, opt, warn
