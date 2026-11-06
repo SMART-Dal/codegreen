@@ -277,5 +277,10 @@
     "timestamp": null,
     "environment_type": "unknown",
     "detected_sensors": []
+  },
+  "hw_counters": {
+    "_comment": "CPU hardware counters (codegreen.analysis.hwcounters); perf: the perf binary every counter and event-sampler run uses. Perf event names per architecture live in codegreen/hw_events/*.json. attribution: logical events sampled with call stacks, one extra non-measured run each; the value is the number of events between samples (a prime, so samples do not lock step with loops).",
+    "perf": "perf",
+    "attribution": {"cache_misses": 10007}
   }
 }

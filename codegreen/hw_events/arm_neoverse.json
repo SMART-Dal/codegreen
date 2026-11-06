@@ -1,0 +1,3 @@
+{"name": "arm_neoverse", "priority": 10,
+ "match": {"CPU implementer": "0x41", "CPU part": {"in": ["0xd0c", "0xd40", "0xd49", "0xd4f", "0xd8e"]}},
+ "events": {"stalled_frontend": "stall_frontend", "stalled_backend": "stall_backend", "l2d_refills": "l2d_cache_refill"}}

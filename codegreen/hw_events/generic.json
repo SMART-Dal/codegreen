@@ -1,0 +1,5 @@
+{"name": "generic", "priority": 0, "match": {},
+ "events": {"cycles": "cycles", "instructions": "instructions", "cache_references": "cache-references",
+            "cache_misses": "cache-misses", "branches": "branch-instructions", "branch_misses": "branch-misses",
+            "stalled_frontend": "stalled-cycles-frontend", "stalled_backend": "stalled-cycles-backend",
+            "llc_misses": "LLC-load-misses", "l1d_misses": "L1-dcache-load-misses"}}

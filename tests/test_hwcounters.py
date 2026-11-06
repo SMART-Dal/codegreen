@@ -1,0 +1,127 @@
+import types
+
+import pytest
+
+from codegreen.analysis import hwcounters as hw
+from codegreen.analysis import metrics
+
+AMD = "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\n\nprocessor\t: 1\nvendor_id\t: other\n"
+INTEL = "vendor_id\t: GenuineIntel\ncpu family\t: 6\n"
+NEOVERSE = "processor\t: 0\nCPU implementer\t: 0x41\nCPU part\t: 0xd40\n"
+OLD_AMD = "vendor_id\t: AuthenticAMD\ncpu family\t: 21\n"
+STAT = ("# started on x\n\n"
+        "4000000,,cycles,1000,100.00,,\n8000000,,instructions,1000,100.00,2.00,insn per cycle\n"
+        "1000,,cache-references,1000,100.00,,\n250,,cache-misses,1000,62.50,,\n2000,,branch-instructions,1000,100.00,,\n"
+        "20,,branch-misses,1000,100.00,,\n<not supported>,,LLC-load-misses,0,100.00,,\n<not counted>,,stalled-cycles-backend,0,0.00,,\n")
+
+
+def test_event_maps_are_data_selected_by_cpuinfo_with_generic_fallback():
+    assert hw.event_map(hw.cpuinfo_fields(AMD))[0] == "amd_zen"
+    assert hw.cpuinfo_fields(AMD)["vendor_id"] == "AuthenticAMD"          # first processor block only
+    assert hw.event_map(hw.cpuinfo_fields(INTEL))[0] == "intel"
+    name, ev = hw.event_map(hw.cpuinfo_fields(NEOVERSE))
+    assert name == "arm_neoverse" and ev["stalled_backend"] == "stall_backend" and ev["cycles"] == "cycles"
+    assert hw.event_map(hw.cpuinfo_fields(OLD_AMD))[0] == "generic"           # family below the amd_zen rule
+    assert hw.event_map({})[0] == "generic"
+
+
+def test_a_new_architecture_is_a_data_file(tmp_path):
+    for p in hw.EVENTS_DIR.glob("*.json"):
+        (tmp_path / p.name).write_text(p.read_text())
+    (tmp_path / "riscv.json").write_text('{"name": "riscv", "priority": 10, "match": {"isa": "rv64imafdc"}, "events": {"cycles": "riscv_cycles"}}')
+    name, ev = hw.event_map({"isa": "rv64imafdc"}, tmp_path)
+    assert name == "riscv" and ev["cycles"] == "riscv_cycles" and ev["instructions"] == "instructions"
+
+
+def test_counts_unavailable_and_multiplexing_are_recorded_never_dropped(tmp_path):
+    p = hw.PerfCounters({"perf": "perf", "attribution": {"cache_misses": 10007}}, cpuinfo=AMD)
+    argv, env = p.wrap(["java", "-jar", "b.jar"], {"A": "1"}, tmp_path)
+    assert argv[:4] == ["perf", "stat", "-x", ","] and argv[-3:] == ["java", "-jar", "b.jar"] and env == {"A": "1"}
+    (tmp_path / "perf_stat.csv").write_text(STAT)
+    rows = {r.metric: r for r in p.read(tmp_path)}
+    assert rows["ipc"].value == 2.0 and rows["ipc"].unit == "ratio" and rows["ipc"].scope == "run"
+    assert rows["cache_miss_rate"].value == 0.25 and rows["branch_miss_rate"].value == 0.01
+    assert rows["mpki"].value == pytest.approx(1000 * 250 / 8e6) and rows["mpki"].reason == "basis cache_misses"
+    assert rows["cache_misses"].reason == "multiplexed 62% of run time"
+    assert not rows["llc_misses"].available and rows["llc_misses"].reason == "not supported"
+    assert not rows["stalled_backend"].available and not rows["backend_stall_fraction"].available
+    assert not rows["l1i_misses"].available and rows["l1i_misses"].reason == "not reported"
+    assert p.sampled_events() == {"cache_misses": ("cache-misses", 10007)}
+
+
+def test_attribution_events_must_be_in_the_map_and_probe_reports_each_event(monkeypatch):
+    with pytest.raises(ValueError, match="outside the amd_zen map"):
+        hw.PerfCounters({"perf": "perf", "attribution": {"bogus": 1}}, cpuinfo=AMD)
+    p = hw.PerfCounters({"perf": "perf", "attribution": {}}, cpuinfo=AMD)
+
+    def run(argv, **kw):
+        ev = argv[argv.index("-e") + 1]
+        return types.SimpleNamespace(returncode=0, stderr="<not supported>,,LLC-load-misses,,,\n" if ev == "LLC-load-misses"
+                                     else f"5,,{ev},1,100.00,,\n")
+    monkeypatch.setattr(hw.subprocess, "run", run)
+    monkeypatch.setattr(hw.shutil, "which", lambda b: "/usr/bin/perf")
+    r = p.probe()
+    assert r.available and r.details["arch"] == "amd_zen" and r.details["events"]["cycles"]["available"]
+    assert r.details["events"]["llc_misses"] == {"available": False, "reason": "not supported"}
+    monkeypatch.setattr(hw.shutil, "which", lambda b: None)
+    assert not p.probe().available and "not found" in p.probe().reason
+
+
+def test_hybrid_pmus_add_up_and_an_uncounted_core_type_does_not_hide_the_count():
+    text = ("3000,,cpu_core/cycles/,800,100.00,,\n1000,,cpu_atom/cycles/,200,40.00,,\n"
+            "<not counted>,,cpu_atom/instructions/,0,0.00,,\n5000,,cpu_core/instructions/,800,100.00,,\n"
+            "<not supported>,,cpu_atom/cache-misses/,0,100.00,,\n<not supported>,,cpu_core/cache-misses/,0,100.00,,\n")
+    res = hw.parse_stat(text, {"cycles": "cycles", "instructions": "instructions", "cache_misses": "cache-misses"})
+    assert res["counts"] == {"cycles": 4000.0, "instructions": 5000.0} and res["running_pct"]["cycles"] == 40.0
+    assert res["unavailable"] == {"cache_misses": "not supported"}
+
+
+def test_a_host_without_cpuinfo_reports_an_unavailable_provider(monkeypatch, tmp_path):
+    monkeypatch.setattr(hw, "CPUINFO", tmp_path / "absent")
+    monkeypatch.setattr("sys.platform", "darwin")
+    p = hw.PerfCounters({"perf": "perf", "attribution": {"cache_misses": 10007}})
+    a = p.probe()
+    assert not a.available and "perf_event counters need Linux" in a.reason
+    with pytest.raises(metrics.MetricUnavailable, match="need Linux"):
+        p.wrap(["true"], {}, tmp_path)
+
+
+def test_metric_records_share_one_schema_and_providers_register_once():
+    with pytest.raises(ValueError, match="unknown metric scope"):
+        metrics.MetricRecord("x", "count", "module", "", 1.0, "p")
+    with pytest.raises(ValueError, match="needs a reason"):
+        metrics.MetricRecord("x", "count", "run", "", None, "p", available=False)
+    stub = types.SimpleNamespace(name="stub_provider_for_test")
+    assert metrics.register_provider(stub) is stub and metrics.get_provider("stub_provider_for_test") is stub
+    with pytest.raises(ValueError, match="already registered"):
+        metrics.register_provider(stub)
+    del metrics.PROVIDERS._items["stub_provider_for_test"]
+    with pytest.raises(KeyError, match="no metric provider"):
+        metrics.get_provider("stub_provider_for_test")
+
+
+def test_attribution_gives_inclusive_shares_and_lift_over_the_cpu_share():
+    stacks = [((("", "main", None), ("A", "f", None)), 60.0), ((("", "main", None), ("A", "g", None)), 40.0)]
+    rows = {r.key: r for r in metrics.attribute("cache_misses", "hw_counters", stacks,
+                                                   {"A.f": lambda fr: fr[:2] == ("A", "f"), "A.g": lambda fr: fr[:2] == ("A", "g")},
+                                                   {"A.f": 30.0, "A.g": None})}
+    assert rows["A.f"].share == 60.0 and rows["A.f"].lift == 2.0 and rows["A.f"].scope == "function"
+    assert rows["A.g"].share == 40.0 and rows["A.g"].lift is None
+    none = metrics.attribute("m", "p", [], {"A.f": lambda fr: True}, {})
+    assert not none[0].available and none[0].reason == "no samples"
+
+
+def test_a_registry_probes_each_provider_once_until_it_is_replaced():
+    calls = []
+
+    class P:
+        name = "p"
+
+        def probe(self):
+            calls.append(1)
+            return metrics.Availability("p", True)
+    r = metrics.Registry("t")
+    r.register(P())
+    assert r.probe()[0].available and r.available() and len(calls) == 1
+    r.put(P())
+    assert r.available() and len(calls) == 2

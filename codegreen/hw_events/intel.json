@@ -1,0 +1,2 @@
+{"name": "intel", "priority": 10, "match": {"vendor_id": "GenuineIntel"},
+ "events": {"llc_references": "LLC-loads", "dtlb_misses": "dTLB-load-misses"}}
