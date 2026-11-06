@@ -1,4 +1,6 @@
 """Benchmarksgame suite: classic single-file compile-and-run benchmarks."""
+import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -81,6 +83,8 @@ class BenchmarksgameSuite(Suite):
     def build(self, task: Task) -> Task:
         env: LanguageEnv = task.metadata["env"]
         size = task.metadata["size"]
+        if env.compiler == "javac":
+            task.source_file = self._public_class_copy(task.source_file)
         source = task.source_file
 
         if env.compiler:
@@ -101,6 +105,19 @@ class BenchmarksgameSuite(Suite):
         clean = [f for f in files if '_coarse' not in f.name
                  and '_instrumented' not in f.name]
         return (clean or files)[0] if (clean or files) else None
+
+    def _public_class_copy(self, source: Path) -> Path:
+        """A copy named after the public class, as javac and `codegreen measure java` require (binarytrees.java-2.java
+        declares `public class binarytrees`)."""
+        m = re.search(r"^\s*public\s+(?:(?:final|abstract|strictfp)\s+)*class\s+(\w+)", source.read_text(), re.M)
+        if not m:
+            raise RuntimeError(f"{source}: no public class to name the compiled file after")
+        if source.stem == m[1]:
+            return source
+        copy = self._build_dir / source.stem / f"{m[1]}.java"
+        copy.parent.mkdir(exist_ok=True)
+        shutil.copyfile(source, copy)
+        return copy
 
     def _load_validation(self, problem: str, size: str) -> Optional[str]:
         out_file = self.benchmarks_dir / problem / f"{size}_out"
@@ -140,6 +157,5 @@ class BenchmarksgameSuite(Suite):
         return env.run_cmd.format(binary=str(binary)).split() + args
 
     def cleanup(self):
-        import shutil
         if self._build_dir.exists():
             shutil.rmtree(self._build_dir, ignore_errors=True)

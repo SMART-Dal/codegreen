@@ -2393,6 +2393,24 @@ class TestValidityDefects:
         prof.run(cmd)
         assert [c[7:] for c in seen] == [["10"], ["10"]]
 
+    def test_benchmark_java_source_is_compiled_under_its_public_class_name(self, tmp_path):
+        """binarytrees.java-2.java declares `public class binarytrees`; javac rejects it under its own file name."""
+        import shutil
+        from benchmark.suites.benchmarksgame import BenchmarksgameSuite
+        if not (shutil.which("javac") and shutil.which("java")):
+            pytest.skip("JDK missing")
+        (tmp_path / "binarytrees").mkdir()
+        (tmp_path / "binarytrees" / "binarytrees.java-2.java").write_text(
+            "public class binarytrees {\n  public static void main(String[] a) {\n"
+            "    System.out.println(2 * Integer.parseInt(a[0]));\n  }\n}\n")
+        suite = BenchmarksgameSuite(tmp_path, languages=["java"], problems=["binarytrees"], sizes=["21"])
+        try:
+            task = suite.build(suite.discover()[0])
+            assert task.source_file.name == "binarytrees.java" and suite.build(task).source_file == task.source_file
+            assert subprocess.run(task.run_command, capture_output=True, text=True).stdout == "42\n"
+        finally:
+            suite.cleanup()
+
 
 class TestRound3:
     """Injected-runtime cleanup order, stdout-closing workloads, and toolchain selection."""

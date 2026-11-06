@@ -51,11 +51,10 @@ class BenchmarkHarness:
         if not profiler.is_available():
             self.progress_callback(f"  Skipping {task.name} [{profiler_name}]: {profiler.unavailable_reason()}")
             return []
+        # Build the task (compile, construct run command); the build may name the source anew (Java public class)
+        task = self.suite.build(task)
         if hasattr(profiler, 'set_source') and task.source_file:
             profiler.set_source(task.source_file, task.language)
-
-        # Build the task (compile, construct run command)
-        task = self.suite.build(task)
         if not task.run_command:
             self.progress_callback(f"  No run command for {task.name}, skipping")
             return []
