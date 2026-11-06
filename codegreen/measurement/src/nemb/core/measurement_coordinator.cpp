@@ -292,6 +292,9 @@ void MeasurementCoordinator::set_measurement_interval_ms(int interval_ms) {
     interval_ms_.store(ms);
     atomic_min(interval_ms_min_, ms);
     atomic_max(interval_ms_max_, ms);
+    interval_gen_++;
+    std::lock_guard<std::mutex> lock(shutdown_mutex_);
+    shutdown_cv_.notify_all();
 }
 
 bool MeasurementCoordinator::set_buffer_size(size_t size) {
@@ -339,13 +342,14 @@ void MeasurementCoordinator::measurement_loop() {
             std::cerr << "Error in measurement loop: " << e.what() << std::endl;
         }
 
-        // Use condition variable wait instead of sleep for immediate shutdown response
+        // Condition-variable wait: shutdown and interval changes wake the sampler immediately
+        uint64_t gen = interval_gen_.load();
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         auto sleep_time = measurement_interval() - elapsed;
 
         if (sleep_time > std::chrono::milliseconds::zero()) {
             std::unique_lock<std::mutex> lock(shutdown_mutex_);
-            shutdown_cv_.wait_for(lock, sleep_time, [this]{ return !running_.load(); });
+            shutdown_cv_.wait_for(lock, sleep_time, [this, gen]{ return !running_.load() || interval_gen_.load() != gen; });
         }
     }
 }

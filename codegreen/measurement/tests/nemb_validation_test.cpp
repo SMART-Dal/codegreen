@@ -9,13 +9,16 @@
 #include <unistd.h>
 
 #include "nemb/codegreen_energy.hpp"
+#include "nemb/config_loader.hpp"
 #include "nemb/core/energy_provider.hpp"
 #include "nemb/core/measurement_coordinator.hpp"
+#include "nemb/drivers/intel_rapl_provider.hpp"
 #include "nemb/utils/precision_timer.hpp"
 
 using namespace codegreen;
 using namespace codegreen::nemb;
 using CP = EnergyMeter::CorrelatedCheckpoint;
+namespace fs = std::filesystem;
 
 static int failures = 0;
 #define CHECK(c) do { if (!(c)) { std::cerr << "FAIL " << __LINE__ << ": " #c "\n"; ++failures; } } while (0)
@@ -65,24 +68,43 @@ static void test_correlate() {
     CHECK(threw);
 }
 
+// ok: readings carry energy; init: initialize()/self_test() succeed; group: counter_group; hold: every read is a held value.
 class FakeProvider : public EnergyProvider {
 public:
-    explicit FakeProvider(bool ok) : ok_(ok) {}
-    bool initialize() override { return true; }
+    explicit FakeProvider(bool ok, std::string group = "", bool init = true, bool hold = false)
+        : ok_(ok), init_(init), hold_(hold), group_(std::move(group)) {}
+    bool initialize() override { return init_; }
     EnergyReading get_reading() override {
         EnergyReading r; r.provider_id = "fake"; r.timestamp_ns = utils::PrecisionTimer::monotonic_timestamp_ns();
         r.energy_joules = ok_ ? (j_ += 0.5) : -1.0;
+        if (hold_) held_readings_++;
         return r;
     }
-    EnergyProviderSpec get_specification() const override { return {}; }
-    bool self_test() override { return true; }
+    EnergyProviderSpec get_specification() const override {
+        EnergyProviderSpec s;
+        s.hardware_type = "cpu";
+        s.counter_group = group_;
+        s.update_interval = std::chrono::microseconds(2500);
+        return s;
+    }
+    bool self_test() override { return init_; }
     bool is_available() const override { return true; }
     void shutdown() override {}
     std::string get_name() const override { return ok_ ? "fake_ok" : "fake_bad"; }
 private:
-    bool ok_;
+    bool ok_, init_, hold_;
+    std::string group_;
     double j_{0};
 };
+
+static void register_fakes() {
+    EnergyProvider::register_provider("fake_ok", [] { return std::make_unique<FakeProvider>(true); });
+    EnergyProvider::register_provider("fake_bad", [] { return std::make_unique<FakeProvider>(false); });
+    EnergyProvider::register_provider("fake_hold", [] { return std::make_unique<FakeProvider>(true, "", true, true); });
+    EnergyProvider::register_provider("fake_grp_a", [] { return std::make_unique<FakeProvider>(true, "g"); });
+    EnergyProvider::register_provider("fake_grp_b", [] { return std::make_unique<FakeProvider>(true, "g"); });
+    EnergyProvider::register_provider("fake_noinit", [] { return std::make_unique<FakeProvider>(true, "g", false); });
+}
 
 static void test_coordinator() {
     CoordinatorConfig cfg;
@@ -92,12 +114,37 @@ static void test_coordinator() {
     CHECK(good.add_provider(std::make_unique<FakeProvider>(true)));
     CHECK(good.start_measurements());
     CHECK(!good.get_buffered_readings().empty());  // seed reading precedes the sampler thread
+    CHECK(good.interval_ms_min() == 1000 && good.interval_ms_max() == 1000);
+    CHECK(good.affinity_cpus() > 0 && good.sampler_affinity_cpus() > 0);
     good.set_measurement_interval_ms(1);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     CHECK(good.buffer_wrapped() && good.get_buffered_readings().size() == 3 && good.rejected_readings() == 0);
+    CHECK(good.measurement_interval().count() == 1 && good.interval_ms_min() == 1 && good.interval_ms_max() == 1000);
+    good.set_measurement_interval_ms(100000);
+    CHECK(good.measurement_interval().count() == 60000 && good.interval_ms_max() == 60000);
     good.stop_measurements();
 
+    auto before = good.get_buffered_readings();
+    CHECK(good.set_buffer_size(5) && good.get_buffered_readings().size() == 3 && good.buffer_wrapped());
+    CHECK(good.set_buffer_size(2));
+    auto after = good.get_buffered_readings();
+    CHECK(after.size() == 2 && after[0].common_timestamp_ns == before[1].common_timestamp_ns &&
+          after[1].common_timestamp_ns == before[2].common_timestamp_ns);
+    CHECK(!good.set_buffer_size(0));
+
     cfg.measurement_interval = std::chrono::milliseconds(1);
+    cfg.measurement_buffer_size = 100000;
+    MeasurementCoordinator grow(cfg);
+    CHECK(grow.add_provider(std::make_unique<FakeProvider>(true)));
+    CHECK(grow.start_measurements());
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    grow.stop_measurements();
+    auto all = grow.get_buffered_readings();
+    CHECK(!grow.buffer_wrapped() && all.size() >= 2);
+    CHECK(grow.set_buffer_size(1) && grow.buffer_wrapped());  // a resize that drops readings reports them
+    auto kept = grow.get_buffered_readings();
+    CHECK(kept.size() == 1 && kept[0].common_timestamp_ns == all.back().common_timestamp_ns);
+
     MeasurementCoordinator bad(cfg);
     CHECK(bad.add_provider(std::make_unique<FakeProvider>(true)));
     CHECK(bad.add_provider(std::make_unique<FakeProvider>(false)));
@@ -105,8 +152,23 @@ static void test_coordinator() {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     auto r = bad.get_synchronized_reading();
     CHECK(r.providers_failed == 1 && r.total_system_energy_joules >= 0);
-    CHECK(bad.get_buffered_readings().empty() && bad.rejected_readings() > 0);
     bad.stop_measurements();
+    auto counts = bad.provider_counts();
+    CHECK(bad.get_buffered_readings().empty() && bad.rejected_readings() > 0);
+    CHECK(counts["fake_bad"].rejected == bad.rejected_readings() && counts["fake_ok"].rejected == 0);
+}
+
+static void test_power_integrator() {
+    PowerIntegrator p(2);
+    CHECK(!p.add(0, 10.0, 1000000000ULL, 2) && p.joules(0) == 0);
+    CHECK(!p.add(0, 20.0, 2000000000ULL, 2) && p.joules(0) == 15);
+    CHECK(p.add(0, std::nullopt, 3000000000ULL, 2) && p.joules(0) == 15);              // held across a failed read
+    CHECK(!p.add(0, 0.0, 4000000000ULL, 2) && p.joules(0) == 35 && p.lost_devices() == 0);  // 0 W is valid; gap integrated
+    for (uint64_t i = 0; i < 3; ++i) CHECK(p.add(1, std::nullopt, 5000000000ULL + i, 2));
+    CHECK(p.lost_devices() == 1);
+    CHECK(!p.add(1, 5.0, 6000000000ULL, 2) && p.lost_devices() == 1);                 // lost for good
+    p.reset();
+    CHECK(p.lost_devices() == 0 && p.joules(0) == 0);
 }
 
 static bool throws_with(const char* env) {
@@ -116,23 +178,66 @@ static bool throws_with(const char* env) {
     return false;
 }
 
-static void test_provider_selection() {
-    EnergyProvider::register_provider("fake_ok", [] { return std::make_unique<FakeProvider>(true); });
-    setenv("CODEGREEN_PROVIDERS", "fake_ok", 1);
+static std::map<std::string, std::unique_ptr<EnergyProvider>> detect_with(const char* env) {
+    setenv("CODEGREEN_PROVIDERS", env, 1);
     auto p = detect_available_providers();
-    CHECK(p.size() == 1 && p.count("fake_ok"));
     unsetenv("CODEGREEN_PROVIDERS");
+    return p;
+}
+
+static void test_provider_selection() {
+    auto p = detect_with("fake_ok");
+    CHECK(p.size() == 1 && p.count("fake_ok"));
+    p = detect_with("fake_noinit|fake_grp_b");
+    CHECK(p.size() == 1 && p.count("fake_grp_b"));
+    p = detect_with("fake_grp_a|fake_grp_b,fake_ok");
+    CHECK(p.size() == 2 && p.count("fake_grp_a") && p.count("fake_ok"));
+    p = detect_with("fake_grp_a,fake_grp_b");  // same counter_group: the second is a duplicate counter
+    CHECK(p.size() == 1 && p.count("fake_grp_a"));
     CHECK(throws_with("no_such_provider"));
+    CHECK(throws_with("fake_noinit"));
     CHECK(throws_with(","));
+    CHECK(throws_with("fake_ok|"));
+    CHECK(throws_with("fake_ok,,fake_grp_a"));
     auto all = detect_available_providers();
+    CHECK(all.count("fake_grp_a") && !all.count("fake_grp_b") && !all.count("fake_noinit"));
     CHECK(!(all.count("intel_rapl") && all.count("amd_rapl")));
 }
 
-static void test_checkpoint_cap() {
-    auto dir = std::filesystem::temp_directory_path() / ("nemb_cap_" + std::to_string(getpid()));
-    std::filesystem::create_directories(dir / "codegreen");
-    std::ofstream(dir / "codegreen" / "config.json") << "{\n  \"max_checkpoints\": 3,\n  \"measurement_interval_ms\": 1\n}\n";
-    setenv("CODEGREEN_INSTALL_DIR", dir.c_str(), 1);
+static fs::path write_config(const std::string& tag, const std::string& body) {
+    auto p = fs::temp_directory_path() / ("nemb_" + tag + "_" + std::to_string(getpid()) + ".json");
+    std::ofstream(p) << body;
+    return p;
+}
+
+static bool load_throws_naming(const fs::path& p) {
+    setenv("CODEGREEN_CONFIG", p.c_str(), 1);
+    bool named = false;
+    try { ConfigLoader::load_config(); } catch (const std::runtime_error& e) { named = std::string(e.what()).find(p.string()) != std::string::npos; }
+    unsetenv("CODEGREEN_CONFIG");
+    return named;
+}
+
+static void test_config_resolution() {
+    auto good = write_config("good", "{\n  \"measurement_interval_ms\": 7,\n  \"max_consecutive_failures\": 9\n}\n");
+    setenv("CODEGREEN_CONFIG", good.c_str(), 1);
+    auto cfg = ConfigLoader::load_config();
+    CHECK(cfg.path == good.string() && cfg.coordinator.measurement_interval_ms == 7 && cfg.coordinator.max_consecutive_failures == 9);
+    unsetenv("CODEGREEN_CONFIG");
+    auto bad_value = write_config("badval", "{\n  \"measurement_interval_ms\": ten\n}\n");
+    auto truncated = write_config("trunc", "{\n  \"measurement_interval_ms\": 7,\n");
+    auto negative = write_config("neg", "{\n  \"max_consecutive_failures\": -1\n}\n");
+    CHECK(load_throws_naming(bad_value) && load_throws_naming(truncated) && load_throws_naming(negative));
+    CHECK(load_throws_naming(fs::temp_directory_path() / "nemb_no_such_config.json"));
+    auto found = ConfigLoader::find_config_file();  // library-relative bundled config, or none
+    CHECK(found.empty() || fs::is_regular_file(found));
+    for (const auto& p : {good, bad_value, truncated, negative}) fs::remove(p);
+}
+
+static void test_meter_sampler() {
+    auto cfg = write_config("meter", "{\n  \"max_checkpoints\": 3,\n  \"measurement_interval_ms\": 1,\n"
+                                     "  \"provider_restart_interval\": 1000,\n  \"max_consecutive_failures\": 2\n}\n");
+    setenv("CODEGREEN_CONFIG", cfg.c_str(), 1);
     setenv("CODEGREEN_PROVIDERS", "fake_ok", 1);
     {
         EnergyMeter m;
@@ -140,19 +245,74 @@ static void test_checkpoint_cap() {
         EnergyMeter::SamplerStats st;
         auto cps = m.get_checkpoint_measurements(&st);
         CHECK(cps.size() == 3 && st.dropped_checkpoints == 2);
-        CHECK(st.config_path == (dir / "codegreen" / "config.json").string());
+        CHECK(st.config_path == cfg.string() && st.marker_reads == "interpolated");
+        CHECK(st.interval_ms_min <= st.interval_ms && st.interval_ms <= st.interval_ms_max && st.interval_ms == 1);
+        CHECK(st.affinity_cpus > 0 && st.sampler_affinity_cpus > 0);
+        CHECK(st.providers.size() == 1 && st.providers[0].name == "fake_ok" && st.providers[0].hardware_type == "cpu" &&
+              st.providers[0].energy_source == "counter" && st.providers[0].update_interval_ms == 2.5 &&
+              st.providers[0].rejected == 0 && st.providers[0].held == 0 && st.failed_reads == 0);
     }
+    setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_bad,fake_hold", 1);
+    {
+        EnergyMeter m;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // fake_bad fails, is marked failed, restarted
+        EnergyMeter::SamplerStats st;
+        m.get_checkpoint_measurements(&st);
+        CHECK(st.providers.size() == 3 && st.providers[0].name == "fake_bad" && st.providers[1].name == "fake_hold");
+        CHECK(st.providers[0].rejected > 0 && st.providers[1].rejected == 0 && st.providers[2].rejected == 0);
+        CHECK(st.providers[1].held > 0 && st.failed_reads == st.providers[0].rejected && st.rejected_readings > 0);
+        CHECK(st.provider_restarts >= 1);
+    }
+    setenv("CODEGREEN_CONFIG", (fs::temp_directory_path() / "nemb_no_such_config.json").c_str(), 1);
+    bool threw = false;
+    try { EnergyMeter m; } catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
     unsetenv("CODEGREEN_PROVIDERS");
-    unsetenv("CODEGREEN_INSTALL_DIR");
-    std::filesystem::remove_all(dir);
+    unsetenv("CODEGREEN_CONFIG");
+    fs::remove(cfg);
+}
+
+static void write_file(const fs::path& p, const std::string& s) { std::ofstream(p) << s; }
+
+static void test_rapl_partial_domain() {
+    auto root = fs::temp_directory_path() / ("nemb_rapl_" + std::to_string(getpid()));
+    for (auto [dir, name] : {std::pair<const char*, const char*>{"intel-rapl:0", "package-0"}, {"intel-rapl:0:0", "core"}, {"intel-rapl:0:1", "dram"}}) {
+        fs::create_directories(root / dir);
+        write_file(root / dir / "name", std::string(name) + "\n");
+        write_file(root / dir / "energy_uj", "1000\n");
+        write_file(root / dir / "max_energy_range_uj", "262143328850\n");
+    }
+    drivers::IntelRAPLProvider rapl(root.string());
+    CHECK(rapl.initialize());
+    CHECK(rapl.get_reading().energy_joules >= 0);
+    write_file(root / "intel-rapl:0:0" / "energy_uj", "garbage\n");  // sub-domain of package: total unaffected
+    CHECK(rapl.get_reading().energy_joules >= 0);
+    write_file(root / "intel-rapl:0:1" / "energy_uj", "garbage\n");  // dram is summed: the reading is invalid
+    CHECK(rapl.get_reading().energy_joules < 0);
+    write_file(root / "intel-rapl:0:1" / "energy_uj", "2000\n");
+    CHECK(rapl.get_reading().energy_joules >= 0);
+    rapl.shutdown();
+    fs::remove_all(root);
 }
 
 extern "C" void nemb_mark_checkpoint(const char* n);
+extern "C" int nemb_probe();
+extern "C" int nemb_get_checkpoints_json(char* b, int m);
+
+static void test_probe() {
+    setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_hold", 1);
+    CHECK(nemb_probe() == 2);
+    char buf[64];
+    CHECK(nemb_get_checkpoints_json(buf, sizeof(buf)) == 0);  // no meter was created
+    setenv("CODEGREEN_PROVIDERS", "no_such_provider", 1);
+    CHECK(nemb_probe() == 0);
+    unsetenv("CODEGREEN_PROVIDERS");
+}
 
 // Child mode: stdout is closed after (or before) the first marker; the atexit report must
 // still arrive through the fd saved at init, or fail loud on stderr.
 static int child(const std::string& mode) {
-    EnergyProvider::register_provider("fake_ok", [] { return std::make_unique<FakeProvider>(true); });
+    register_fakes();
     setenv("CODEGREEN_PROVIDERS", "fake_ok", 1);
     if (mode == "close_before") close(1);
     nemb_mark_checkpoint("enter:main:1");
@@ -179,6 +339,8 @@ static void test_result_fd() {
         auto out = run_child(mode);
         auto s = out.find("--- CODEGREEN_RESULT_START ---"), e = out.find("--- CODEGREEN_RESULT_END ---");
         CHECK(s != std::string::npos && e > s && out.find("\"exit:main:1#inv_1", s) < e);
+        CHECK(out.find("\"marker_reads\": \"interpolated\"", s) < e);
+        CHECK(out.find("\"providers\": [{\"name\": \"fake_ok\", \"hardware_type\": \"cpu\", \"energy_source\": \"counter\"", s) < e);
         if (std::string(mode) == "keep") CHECK(out.find("workload output") < s);
     }
     auto out = run_child("close_before");
@@ -187,10 +349,15 @@ static void test_result_fd() {
 
 int main(int argc, char** argv) {
     if (argc > 1) return child(argv[1]);
+    register_fakes();
     test_correlate();
     test_coordinator();
+    test_power_integrator();
     test_provider_selection();
-    test_checkpoint_cap();
+    test_config_resolution();
+    test_meter_sampler();
+    test_rapl_partial_domain();
+    test_probe();
     test_result_fd();
     std::cout << (failures ? "FAILED " : "PASSED ") << failures << " failure(s)\n";
     return failures ? 1 : 0;

@@ -245,6 +245,7 @@ private:
     std::atomic<bool> buffer_full_{false};
     std::atomic<uint64_t> rejected_readings_{0};
     std::atomic<int64_t> interval_ms_, interval_ms_min_, interval_ms_max_;
+    std::atomic<uint64_t> interval_gen_{0};  // bumped on every interval change; wakes a sleeping sampler
     std::atomic<int> affinity_cpus_{-1}, sampler_affinity_cpus_{-1};
 
     // Shutdown synchronization
