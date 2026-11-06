@@ -28,7 +28,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -1680,8 +1680,10 @@ class TestJavaAggregateFile:
                                capture_output=True, text=True, check=True)
             assert r.stderr == ""
         lines = (tmp_path / "sum").read_text().splitlines()
-        assert len(lines) == 2 and all(line.startswith("CG_CP_SUM|") and "|T.f|1000|" in line
-                                       for line in lines)
+        sums = [line for line in lines if line.startswith("CG_CP_SUM|")]
+        metas = [line.split("|") for line in lines if line.startswith("CG_CP_META|")]
+        assert len(sums) == 2 and all("|T.f|1000|" in line for line in sums) and len(lines) == 4
+        assert len(metas) == 2 and all(len(m) == 6 and int(m[5]) == 1_000_000 for m in metas)
 
 
 def test_project_restores_sources_after_an_interrupted_run(tmp_path):
@@ -1763,3 +1765,340 @@ def test_project_fails_up_front_without_the_native_backend(tmp_path, monkeypatch
     (tmp_path / "p.py").write_text("print(1)\n")
     r = CliRunner().invoke(cli.app, ["project", "python", str(tmp_path), "--run-cmd", "python p.py"])
     assert r.exit_code == 1 and "NEMB native measurement library" in _plain(r.output)
+
+
+def _vcp(cid: str, ts: int, joules: float, ri: int, clamp: str = "none", tid: str = "1") -> Dict:
+    return {"checkpoint_id": f"{cid}#inv_1_t{tid}", "timestamp": ts, "joules": joules, "watts": 1.0, "ri": ri,
+            "clamp": clamp, "provider_j": {"intel_rapl": joules}}
+
+
+def _vsampler(**kw) -> Dict:
+    return {"interval_ms": 10, "buffer_capacity": 100000, "readings": 50, "wrapped": False, "rejected_readings": 0,
+            "first_ns": 0, "last_ns": 500_000_000, "median_gap_ns": 10_000_000, "max_gap_ns": 12_000_000,
+            "affinity_cpus": 8, "providers": ["intel_rapl"], "config_path": "config.json", "dropped_checkpoints": 0,
+            **kw}
+
+
+class TestValidity:
+    """measurement_validity reason codes on synthetic NEMB ABI-4 results (no hardware)."""
+
+    @staticmethod
+    def _check(cps=None, sampler=None, run=None, explicit=False):
+        from codegreen.cli.cli import measurement_validity, _measurement_cfg
+        cps = [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 400_000_000, 9.0, 41)] if cps is None else cps
+        return measurement_validity(cps, _vsampler() if sampler is None else sampler, run or {}, explicit,
+                                    _measurement_cfg())
+
+    def test_package_under_test_is_this_tree(self):
+        assert Path(codegreen.__file__).resolve().parents[1] == _CG_REPO
+
+    def test_clean_run_is_valid(self):
+        assert self._check() == {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}
+
+    @pytest.mark.parametrize("sampler_kw,code", [
+        ({"max_gap_ns": 400_000_000}, "SAMPLER_STARVED"),
+        ({"median_gap_ns": 16_000_000}, "SAMPLER_STARVED"),
+        ({"wrapped": True}, "BUFFER_WRAPPED"),
+        ({"affinity_cpus": 1}, "AFFINITY_SINGLE_CPU"),
+        ({"providers": ["intel_rapl", "nvidia_gpu"]}, "GPU_IN_TOTAL"),
+        ({"dropped_checkpoints": 3}, "CHECKPOINT_CAP"),
+    ])
+    def test_sampler_reasons(self, sampler_kw, code):
+        assert self._check(sampler=_vsampler(**sampler_kw))["reasons"] == [code]
+
+    def test_gpu_in_total_needs_implicit_sensors(self):
+        v = self._check(sampler=_vsampler(providers=["intel_rapl", "nvidia_gpu"]), explicit=True)
+        assert v["status"] == "valid"
+
+    @pytest.mark.parametrize("cps,code", [
+        ([_vcp("enter:main:E", 0, 1.0, 0, "before_first"), _vcp("exit:main:X", 9, 9.0, 41)], "MARKER_CLAMPED"),
+        ([_vcp("enter:main:E", 0, 1.0, 40), _vcp("exit:main:X", 9, 9.0, 41)], "TOTAL_BELOW_RESOLUTION"),
+        ([_vcp("enter:main:E", 0, 5.0, 1), _vcp("exit:main:X", 9, 5.0, 41)], "ZERO_ENERGY"),
+        ([_vcp("enter:main:E", 0, 5.0, 1), _vcp("enter:f:F", 5, 6.0, 9), _vcp("exit:main:X", 9, 4.0, 41)],
+         "NEGATIVE_ENERGY"),
+    ])
+    def test_marker_reasons(self, cps, code):
+        assert self._check(cps=cps)["reasons"] == [code]
+
+    def test_stale_library_and_incomplete_runs(self):
+        from codegreen.cli.cli import measurement_validity, _measurement_cfg
+        cfg, cps = _measurement_cfg(), [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 9, 9.0, 41)]
+        assert measurement_validity(cps, None, {}, False, cfg)["reasons"] == ["STALE_LIBRARY"]
+        assert measurement_validity([], None, {}, False, cfg)["reasons"] == ["INCOMPLETE_NO_CHECKPOINTS"]
+        assert self._check(run={"timed_out": True, "timeout_s": 5, "returncode": -15})["reasons"] == [
+            "INCOMPLETE_TIMEOUT"]
+        assert self._check(run={"returncode": 1, "failure": "boom"})["detail"] == {"INCOMPLETE_CRASH": "exit 1: boom"}
+        v = measurement_validity([], _vsampler(readings=0), {"init_failed": "NEMB init failed: x"}, True, cfg)
+        assert v["reasons"] == ["NEMB_INIT_FAILED", "INCOMPLETE_NO_CHECKPOINTS"]
+
+    def test_java_meta_lines_become_a_sampler(self, tmp_path):
+        from codegreen.cli.cli import (_stderr_checkpoint_events, _replay_checkpoint_events, _java_meta_sampler,
+                                       measurement_validity, _measurement_cfg, _cpuset_size)
+        f = tmp_path / "sum"
+        f.write_text("CG_CP_META|1001|0|1100000000|2000000|1000000\nCG_CP_SUM|1|g|4|40|30|400\n"
+                     "CG_CP_META|11|0|10000000|9000000|1000000\n")
+        func, meta = {}, []
+        _replay_checkpoint_events(_stderr_checkpoint_events(str(f), func, meta), func)
+        assert func["g"]["calls"] == 4 and meta == [[1001, 0, 1100000000, 2000000, 1000000],
+                                                    [11, 0, 10000000, 9000000, 1000000]]
+        s = _java_meta_sampler(meta, _cpuset_size("0-3,6"))
+        assert (s["readings"], s["interval_ms"], s["median_gap_ns"], s["affinity_cpus"]) == (1012, 1.0, 1_100_000, 5)
+        v = measurement_validity(None, s, {}, False, _measurement_cfg())
+        assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
+        s = _java_meta_sampler(meta[:1], 2)
+        assert measurement_validity(None, s, {}, False, _measurement_cfg())["status"] == "valid"
+        assert measurement_validity(None, None, {}, False, _measurement_cfg())["reasons"] == ["STALE_LIBRARY"]
+        with pytest.raises(ValueError, match="different periods"):
+            _java_meta_sampler([[2, 0, 1, 1, 1000], [2, 0, 1, 1, 2000]], 2)
+
+    def test_replay_partitions_the_root_and_reports_quality(self):
+        import types
+        from codegreen.cli.cli import _build_comprehensive_json
+        pts = [types.SimpleNamespace(id=i, type="function_enter", name=i, line=1, column=0, context="",
+                                     insertion_mode="before") for i in ("E", "X", "F", "G")]
+        cps = [_vcp("enter:main:E", 0, 1.0, 1), _vcp("enter:f:F", 10, 2.0, 5), _vcp("enter:f:F", 20, 3.0, 5),
+               _vcp("exit:f:G", 30, 3.5, 6), _vcp("exit:f:G", 40, 6.0, 20), _vcp("exit:main:X", 50, 9.0, 41)]
+        v = self._check(cps=cps)
+        out = _build_comprehensive_json(
+            types.SimpleNamespace(instrumentation_points=pts, optimization_suggestions=[]),
+            {"success": True, "output": "", "checkpoints": cps, "sampler": _vsampler(), "validity": v},
+            "x = 1\n", Path("t.py"), "python", "fine")
+        f, m = out["per_function_energy"]["f"], out["per_function_energy"]["main"]
+        assert f["calls"] == 2 and f["inclusive_j"] == pytest.approx(4.5) and f["quality"] == "interpolated"
+        assert m["exclusive_j"] == pytest.approx(4.0) and m["quality"] == "measured"
+        assert out["summary"]["exclusive_sum_j"] == pytest.approx(out["summary"]["total_energy_j"]) == 8.0
+        assert out["summary"]["energy_by_provider"] == {"intel_rapl": 8.0} and out["validity"] == v
+        assert out["summary"]["wall_time_s"] == 50 / 1e9 and out["sampler"]["readings"] == 50
+
+    def test_threads_count_every_call(self):
+        from codegreen.cli.cli import _checkpoint_events, _replay_checkpoint_events
+        cps = [_vcp("enter:w:E", 0, 0.0, 1, tid="1"), _vcp("enter:w:E", 1, 0.0, 1, tid="2"),
+               _vcp("exit:w:X", 30, 3.0, 4, tid="1"), _vcp("exit:w:X", 40, 4.0, 5, tid="2")]
+        func = {}
+        _replay_checkpoint_events(_checkpoint_events(cps, {"E", "X"}), func)
+        assert func["w"]["calls"] == 2 and func["w"]["min_window_samples"] == 3
+
+    @pytest.mark.parametrize("body,timeout,code", [
+        ("print('--- CODEGREEN_RESULT_START ---\\n{\"measurements\": []}\\n--- CODEGREEN_RESULT_END ---')\n"
+         "raise SystemExit(2)\n", 30, "INCOMPLETE_CRASH"),
+        ("import time\ntime.sleep(30)\n", 1, "INCOMPLETE_TIMEOUT"),
+        ("import os\nprint('NEMB init failed: x', os.environ['CODEGREEN_PROVIDERS'])\n", 30, "NEMB_INIT_FAILED"),
+    ])
+    def test_run_outcome_maps_to_incomplete_codes(self, tmp_path, body, timeout, code):
+        from codegreen.cli.cli import _run_energy_measurement, Language, SensorType
+        (tmp_path / "w.py").write_text(body)
+        r = _run_energy_measurement(tmp_path / "w.py", Language.python, [SensorType.rapl], False, timeout, None, True)
+        assert code in r["validity"]["reasons"] and "INCOMPLETE_NO_CHECKPOINTS" in r["validity"]["reasons"]
+        if code == "NEMB_INIT_FAILED":
+            assert "intel_rapl,amd_rapl" in r["output"]
+
+    def test_valid_block_passes_and_largest_block_wins(self, tmp_path):
+        from codegreen.cli.cli import _run_energy_measurement, Language
+        cps = [_vcp("enter:main:E", 0, 1.0, 1), _vcp("exit:main:X", 9, 9.0, 41)]
+        def blk(d):
+            return (f"print('--- CODEGREEN_RESULT_START ---'); print({json.dumps(json.dumps(d))}); "
+                    f"print('--- CODEGREEN_RESULT_END ---')\n")
+        (tmp_path / "w.py").write_text(blk({"measurements": [], "sampler": _vsampler()})
+                                       + blk({"measurements": cps, "sampler": _vsampler()}))
+        r = _run_energy_measurement(tmp_path / "w.py", Language.python, None, False, 30, None, True)
+        assert r["validity"]["status"] == "valid" and r["checkpoints"] == cps
+        (tmp_path / "w.py").write_text("print('--- CODEGREEN_RESULT_START ---\\n{bad\\n--- CODEGREEN_RESULT_END ---')\n")
+        with pytest.raises(ValueError):
+            _run_energy_measurement(tmp_path / "w.py", Language.python, None, False, 30, None, True)
+
+    @pytest.mark.parametrize("pairs,code,exit_code", [
+        ([(5.0, 0.5)] * 3, None, 0),
+        ([(5.0, 0.001)] * 3, "RUN_BELOW_RESOLUTION", 3),
+        ([(5.0, 0.5), (None, 0.5), (5.1, 0.5)], "ZERO_ENERGY_RUNS", 3),
+    ])
+    def test_run_command_validity(self, monkeypatch, pairs, code, exit_code):
+        from typer.testing import CliRunner
+        import codegreen.cli.cli as cli
+        it = iter(pairs)
+
+        class Fake(cli._EnergyBackend):
+            name = "fake"
+            def is_available(self): return True
+            def measure(self, command, timeout=None): return next(it)
+
+        monkeypatch.setattr(cli, "_get_energy_backend", lambda: Fake())
+        r = CliRunner().invoke(cli.app, ["run", "--json", "--no-validate", "-n", "3", "-w", "0", "--", "true"])
+        out = json.loads(r.stdout)
+        assert r.exit_code == exit_code and out["validity"]["reasons"] == ([code] if code else [])
+        assert out["validity"]["checks"]["affinity_cpus"] >= 1 and out["energy_j"]["mean"] > 0
+        assert (out.get("error") == f"invalid_measurement: {code}") if code else "error" not in out
+
+
+class TestValidityDefects:
+    """Regressions found by real-run validation."""
+
+    def test_replay_counts_every_exit_with_signed_energy(self):
+        from codegreen.cli.cli import _replay_checkpoint_events, measurement_validity, _measurement_cfg
+        func = {}
+        _replay_checkpoint_events([("enter", "p", "a", 0, 0, "1"), ("enter", "f", "a", 0, 100, "1"),
+                                   ("exit", "f", "b", 0, 100, "1"), ("enter", "f", "a", 5, 100, "1"),
+                                   ("exit", "f", "b", 9, 90, "1"), ("exit", "p", "b", 20, 50, "1")], func)
+        assert func["f"] == {"inclusive_uj": -10, "exclusive_uj": -10, "time_ns": 4, "calls": 2}
+        assert func["p"]["exclusive_uj"] == 60 and func["p"]["inclusive_uj"] == 50
+        cps = [_vcp("enter:p:a", 0, 0.0, 1), _vcp("enter:f:a", 5, 1e-4, 9), _vcp("exit:f:b", 9, 9e-5, 20),
+               _vcp("exit:p:b", 20, 5e-5, 41)]
+        assert "NEGATIVE_ENERGY" in measurement_validity(cps, _vsampler(), {}, True, _measurement_cfg())["reasons"]
+
+    def test_coarse_keeps_c_main_return(self):
+        from codegreen.cli.cli import _filter_main_entry_points
+        from codegreen.instrumentation.language_engine import LanguageEngine
+        src = "int f(int x) { return x + 1; }\nint main(void) {\n  int s = 0;\n  for (int i = 0; i < 9; i++) s = f(s);\n  return s == 9 ? 0 : 1;\n}\n"
+        pts = _filter_main_entry_points(LanguageEngine().analyze_code(src, "c").instrumentation_points, "c")
+        assert sorted(p.type for p in pts) == ["function_enter", "function_return"] and {p.name for p in pts} == {"main"}
+
+    def test_relative_c_binary_runs_and_binary_stdout_is_decoded(self, tmp_path, monkeypatch):
+        from codegreen.cli.cli import _run_energy_measurement, Language
+        monkeypatch.chdir(tmp_path)
+        Path("w.c").write_text('#include <stdio.h>\nint main(void) { fwrite("P4\\n\\xff\\xfe\\x80", 1, 6, stdout); return 0; }\n')
+        r = _run_energy_measurement(Path("w.c"), Language.c, None, False, 30, None, True)
+        assert r["returncode"] == 0 and "\ufffd" in r["output"]
+        assert r["validity"]["reasons"] == ["INCOMPLETE_NO_CHECKPOINTS"]
+
+    def test_launch_failure_is_incomplete_crash(self, tmp_path, monkeypatch):
+        from codegreen.cli.cli import _run_energy_measurement, Language
+        (tmp_path / "w.py").write_text("pass\n")
+        monkeypatch.setenv("PATH", str(tmp_path))
+        r = _run_energy_measurement(tmp_path / "w.py", Language.python, None, False, 30, None, True)
+        assert r["validity"]["reasons"] == ["INCOMPLETE_CRASH"] and "could not launch python3" in r["validity"]["detail"]["INCOMPLETE_CRASH"]
+
+    def test_compile_failure_exits_3_with_compiler_output(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        import codegreen.cli.cli as cli
+        monkeypatch.setattr(cli, "_should_run_actual_measurement", lambda: True)
+        (tmp_path / "w.c").write_text("int missing_symbol(void);\nint main(void) { return missing_symbol(); }\n")
+        r = CliRunner().invoke(cli.app, ["measure", "c", str(tmp_path / "w.c"), "--json"])
+        out = json.loads(r.stdout[r.stdout.index("{"):])
+        assert r.exit_code == 3 and out["error"] == "invalid_measurement: COMPILE_FAILED"
+        assert "missing_symbol" in out["validity"]["detail"]["COMPILE_FAILED"]
+
+    def test_overlapping_threads_are_flagged(self):
+        import types
+        from codegreen.cli.cli import _build_comprehensive_json
+        cps = [_vcp("enter:main:E", 0, 0.0, 1, tid="1"), _vcp("enter:w:F", 10, 1.0, 5, tid="2"),
+               _vcp("enter:w:F", 11, 1.1, 5, tid="3"), _vcp("exit:w:G", 30, 3.0, 20, tid="2"),
+               _vcp("exit:w:G", 31, 3.2, 21, tid="3"), _vcp("exit:main:X", 50, 4.0, 41, tid="1")]
+        v = TestValidity._check(cps=cps)
+        assert v["status"] == "valid" and "3 threads" in v["warnings"]["OVERLAPPING_THREADS"]
+        pts = [types.SimpleNamespace(id=i, type="function_enter", name=i, line=1, column=0, context="",
+                                     insertion_mode="before") for i in ("E", "X", "F", "G")]
+        out = _build_comprehensive_json(types.SimpleNamespace(instrumentation_points=pts, optimization_suggestions=[]),
+                                        {"success": True, "checkpoints": cps, "sampler": _vsampler(), "validity": v},
+                                        "x = 1\n", Path("t.py"), "java", "fine")
+        assert out["summary"]["overlapping_threads"] == 3 and out["summary"]["exclusive_sum_ratio"] > 1
+
+    @pytest.mark.parametrize("domains,expected", [({}, 1000), ({"package": 1.0}, 1000),
+                                                  ({"package": 1.0, "gpu0": 0.5}, None), ({"amd_gpu0": 0.5}, None)])
+    def test_run_path_slows_the_sampler_unless_gpu_is_integrated(self, monkeypatch, domains, expected):
+        import types
+        import codegreen.cli.cli as cli
+        calls = []
+        lib = types.SimpleNamespace(nemb_set_measurement_interval_ms=lambda ms: calls.append(ms) or 1)
+        b = cli._NEMBBackend()
+        monkeypatch.setattr(b, "_load", lambda: lib)
+        monkeypatch.setattr(b, "measure", lambda cmd, timeout=None: (1.0, 0.01))
+        monkeypatch.setattr(b, "get_last_domain_breakdown", lambda: domains)
+        assert b.slow_sampler(1000) == expected and calls == ([1000] if expected else [])
+
+
+class TestRound3:
+    """Injected-runtime cleanup order, stdout-closing workloads, and toolchain selection."""
+
+    def test_interrupted_run_removes_injected_runtime_dirs(self, tmp_path):
+        src = tmp_path / "work.py"
+        original = "def spin(n):\n    return n\n\n\nif __name__ == '__main__':\n    spin(1)\n"
+        src.write_text("# instrumented\n" + original)
+        rt = tmp_path / "codegreen" / "runtime"
+        rt.mkdir(parents=True)
+        (rt / "CodeGreenStandaloneRuntime.java").write_text("// injected")
+        backup = tmp_path / ".codegreen_backup"
+        backup.mkdir()
+        (backup / "0.orig").write_text(original)
+        (backup / "manifest.json").write_text(json.dumps({str(src): "0.orig"}))
+        (backup / "runtime.json").write_text(json.dumps([str(rt / "CodeGreenStandaloneRuntime.java"), str(rt), str(rt.parent)]))
+        subprocess.run(["codegreen", "project", "python", str(tmp_path), "--source-glob", "work.py", "--run-cmd", "true"],
+                       cwd=tmp_path, capture_output=True, text=True, timeout=120)
+        assert src.read_text() == original and not (tmp_path / "codegreen").exists()
+
+    def test_result_block_survives_a_closed_stdout(self, tmp_path):
+        rt_dir = Path(codegreen.__file__).parent / "instrumentation" / "language_runtimes" / "python"
+        (tmp_path / "w.py").write_text(
+            "import atexit, os, sys, types\nimport codegreen_runtime as rt\n"
+            "rt._get_nemb_client = lambda: types.SimpleNamespace(lib=None, abi=4, get_final_measurements=lambda: "
+            "{'measurements': [{'checkpoint_id': 'enter:m:x#inv_1_t1', 'timestamp': 1, 'joules': 0.0, 'watts': 0.0}], "
+            "'sampler': {'readings': 0}})\n"
+            "atexit.register(rt._report_at_exit)\nprint('payload')\nsys.stdout.close()\nos.close(1)\n")
+        r = subprocess.run([sys.executable, "w.py"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "PYTHONPATH": str(rt_dir)})
+        from codegreen.cli.cli import _nemb_result_block
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.startswith("payload\n") and _nemb_result_block(r.stdout)["sampler"] == {"readings": 0}
+
+    def test_toolchain_prefers_configured_dirs_and_runs_with_its_own_binutils(self, tmp_path, monkeypatch):
+        import codegreen.cli.cli as cli
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        fake = bindir / "gcc"
+        fake.write_text('#!/bin/sh\necho "PATH0=${PATH%%:*}" >&2\nexit 1\n')
+        fake.chmod(0o755)
+        cfg = cli._measurement_cfg()
+        monkeypatch.setattr(cli, "_measurement_cfg", lambda: {**cfg, "toolchain": {**cfg["toolchain"], "prefer_dirs": [str(bindir)]}})
+        monkeypatch.delenv("CC", raising=False)
+        assert cli._toolchain_compiler("c") == str(fake)
+        (tmp_path / "w.c").write_text("int main(void) { return 0; }\n")
+        binary, diag = cli._compile_instrumented(tmp_path / "w.c", cli.Language.c)
+        assert binary is None and f"PATH0={bindir}" in diag
+        monkeypatch.setenv("CC", "/usr/bin/true")
+        assert cli._toolchain_compiler("c") == "/usr/bin/true"
+
+
+def _java_workload(dest: Path) -> Path:
+    """Self-contained CPU-bound Java workload; args[0] is the iteration count."""
+    out = dest / "Spin.java"
+    out.write_text("public class Spin {\n"
+                   "    static double step(double x) { return Math.sin(x) * Math.cos(x) + x * 1e-9; }\n"
+                   "    public static void main(String[] args) {\n"
+                   "        long n = Long.parseLong(args[0]);\n"
+                   "        double acc = 0;\n"
+                   "        for (long i = 0; i < n; i++) acc += step(i);\n"
+                   "        System.out.println(acc);\n"
+                   "    }\n"
+                   "}\n")
+    return out
+
+
+@pytest.mark.needs_energy
+class TestValidityReplication:
+    """Real measurements through the CLI (brief runs; idle host required)."""
+
+    @staticmethod
+    def _measure(tmp_path, *args, pin: str = "", lang: str = "java", src: Optional[Path] = None):
+        src = src or _java_workload(tmp_path)
+        cmd = (["taskset", "-c", pin] if pin else []) + ["codegreen", "measure", lang, src.name, "--json", *args]
+        p = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, timeout=300)
+        return p.returncode, json.loads(p.stdout)
+
+    def test_single_cpu_affinity_is_invalid(self, tmp_path):
+        rc, out = self._measure(tmp_path, "--sensors", "rapl", "5000000", pin="2")
+        assert rc == 3 and "AFFINITY_SINGLE_CPU" in out["validity"]["reasons"]
+        rc, out = self._measure(tmp_path, "--sensors", "rapl", "5000000", pin="2,3")
+        assert rc == 0 and out["validity"]["status"] == "valid" and out["sampler"]["affinity_cpus"] == 2
+
+    def test_sub_interval_window_is_below_resolution(self, tmp_path):
+        (tmp_path / "tiny.py").write_text("def main():\n    return 1\n\n\nif __name__ == '__main__':\n    main()\n")
+        rc, out = self._measure(tmp_path, "--sensors", "rapl", lang="python", src=tmp_path / "tiny.py")
+        assert rc == 3 and "TOTAL_BELOW_RESOLUTION" in out["validity"]["reasons"]
+
+    def test_sensors_select_providers(self, tmp_path):
+        rc, out = self._measure(tmp_path, "--sensors", "rapl", "1000000")
+        providers = out["summary"]["providers"]
+        assert rc == 0 and providers in (["intel_rapl"], ["amd_rapl"])
+        assert out["summary"]["energy_by_provider"][providers[0]] == pytest.approx(out["summary"]["total_energy_j"])
+
+    def test_unavailable_sensor_fails_init(self, tmp_path):
+        rc, out = self._measure(tmp_path, "--sensors", "amd_gpu", "100")
+        assert rc == 3 and "NEMB_INIT_FAILED" in out["validity"]["reasons"]

@@ -103,3 +103,6 @@ install(TARGETS codegreen-nemb
 )
 
 install(DIRECTORY include/ DESTINATION include/core)
+
+add_executable(nemb-validation-test EXCLUDE_FROM_ALL tests/nemb_validation_test.cpp)
+target_link_libraries(nemb-validation-test codegreen-nemb)

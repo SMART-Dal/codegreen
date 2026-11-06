@@ -1089,6 +1089,9 @@ def test_java_runtime_sums_packages_and_handles_counter_wrap(java_rapl_prog, tmp
     d0, d1 = (tmp_path / f"intel-rapl:{i}" / "energy_uj" for i in (0, 1))
     r, out = _run_java_rapl(java_rapl_prog, tmp_path, str(d0), f"{100:012d}\n", str(d1), f"{400:012d}\n")
     assert r.returncode == 0, r.stderr
-    row = out.strip().split("|")
+    meta, sums = [ln for ln in out.splitlines() if ln.startswith("CG_CP_META|")], \
+        [ln for ln in out.splitlines() if ln.startswith("CG_CP_SUM|")]
+    assert len(meta) == 1 and len(sums) == 1
+    row = sums[0].split("|")
     assert row[:3] == ["CG_CP_SUM", row[1], "m"] and row[3] == "1"
     assert int(row[4]) == (100 + 1000 - 900) + (400 - 100)
