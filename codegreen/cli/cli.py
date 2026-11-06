@@ -669,8 +669,7 @@ def generate_optimized_config(
         # Shared server optimizations
         config["measurement"]["accuracy"]["minimize_system_noise"] = True
         config["performance"]["threading"]["max_worker_threads"] = min(2, performance_info.get("recommended_threads", 2))
-        config["measurement"]["nemb"]["coordinator"]["measurement_buffer_size"] = 500  # Reduced for shared systems
-        
+
     elif environment_info["type"] == "cicd":
         # CI/CD optimizations
         config["measurement"]["accuracy"]["priority"] = "balanced"
@@ -705,8 +704,7 @@ def generate_optimized_config(
     if performance_info["memory_gb"] < 4:
         config["performance"]["database"]["batch_operations"] = True
         config["performance"]["database"]["transaction_size"] = 500
-        config["measurement"]["nemb"]["coordinator"]["measurement_buffer_size"] = 500
-    
+
     # Apply custom configuration overrides
     if custom_config:
         def deep_merge(base_dict, override_dict):
@@ -1021,7 +1019,7 @@ def measure_energy(
         # Step 3: Run the measurement
         try:
             measurement_result = None
-            if _should_run_actual_measurement(sensors):
+            if _should_run_actual_measurement():
                 if not json_output:
                     console.print(f"\n[green]Running energy measurement...[/green]")
                 measurement_result = _run_energy_measurement(
@@ -1094,9 +1092,13 @@ def measure_energy(
                 if not json_output:
                     console.print(f"\n[yellow]Note: No energy sensors available. Code analysis completed.[/yellow]")
             
+            validity = (measurement_result or {}).get("validity")
+            invalid = validity is not None and validity["status"] != "valid"
+            if invalid:
+                error = f"invalid_measurement: {','.join(validity['reasons'])}"
             if json_output:
                 combined_results = _build_comprehensive_json(
-                    result, measurement_result, source_code, script, language.value, granularity.value
+                    result, measurement_result, source_code, script, language.value, granularity.value, sensors
                 )
                 combined_results["instrumentation_audit"] = {
                     "prospects_detected": n_prospects,
@@ -1104,8 +1106,16 @@ def measure_energy(
                     "fallback_to_coarse": fallback_used,
                     **({"warning": instrumentation_warning} if instrumentation_warning else {}),
                 }
+                if invalid:
+                    combined_results.update(success=False, error=error)
                 print(json.dumps(combined_results, indent=2))
-            else:
+            elif invalid:
+                console.print(f"[red]{error}[/red]")
+                for code, text in validity["detail"].items():
+                    console.print(f"  [red]{code}[/red]: {text}")
+            if invalid and _measurement_cfg()["fail_on_invalid"]:
+                raise typer.Exit(3)
+            if not json_output:
                 if measurement_result and measurement_result.get('success'):
                     console.print(f"\n[green][ok] CodeGreen measurement completed successfully![/green]")
             if export_plot and measurement_result and measurement_result.get('checkpoints'):
@@ -1121,7 +1131,9 @@ def measure_energy(
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 elif run_path.exists():
                     os.remove(run_path)
-        
+
+    except typer.Exit:
+        raise
     except FileNotFoundError as e:
         if not json_output:
             console.print(f"[red]Error: File not found: {e}[/red]")
@@ -1150,7 +1162,7 @@ def _filter_main_entry_points(points: List, language: str) -> List:
     """
     main_names = {"main", "__main__"}
     main_points = [p for p in points if p.name in main_names
-                   and p.type in ("function_enter", "function_exit")]
+                   and p.type in ("function_enter", "function_exit", "function_return")]
     if main_points:
         return main_points
     # Fallback: keep only the first function_enter and last function_exit
@@ -1208,9 +1220,105 @@ def _extract_failure_reason(output: str) -> str:
     return lines[-1].strip()
 
 
+def _measurement_cfg() -> Dict[str, Any]:
+    """measurement.report.validity plus sensor_providers, run_path and toolchain from the bundled config.json, overridden
+    key by key by the active config file (get_config_path), so an older ~/.codegreen/config.json cannot drop a key."""
+    bundled = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())["measurement"]
+    active = load_config().get("measurement", {})
+    cfg = {**bundled["report"]["validity"], **active.get("report", {}).get("validity", {})}
+    cfg["sensor_providers"] = {**bundled["sensor_providers"], **active.get("sensor_providers", {})}
+    cfg["run_sampler_interval_ms"] = {**bundled["run_path"], **active.get("run_path", {})}["sampler_interval_ms"]
+    cfg["toolchain"] = {**bundled["toolchain"], **active.get("toolchain", {})}
+    if cfg["gpu_in_total"] not in ("invalid", "allow"):
+        raise ValueError(f"measurement.report.validity.gpu_in_total must be invalid or allow, got {cfg['gpu_in_total']!r}")
+    return cfg
+
+
+def _validity(reasons: Dict[str, str], warnings: Optional[Dict[str, str]] = None, **extra) -> Dict[str, Any]:
+    """reasons are fatal; warnings are non-fatal facts a consumer must see (code -> text)."""
+    return {"status": "invalid" if reasons else "valid", "reasons": list(reasons), "detail": reasons,
+            "warnings": warnings or {}, **extra}
+
+
+def _thread_overlap(cps: List[Dict]) -> int:
+    """Most threads inside instrumented frames at once, from time-ordered `type:...#inv_N_t<tid>` markers."""
+    depth: Dict[str, int] = {}
+    open_threads = peak = 0
+    for m in cps:
+        tid, d = m["checkpoint_id"].rpartition("_t")[2], depth.get(m["checkpoint_id"].rpartition("_t")[2], 0)
+        nd = d + 1 if m["checkpoint_id"].startswith("enter:") else max(d - 1, 0)
+        open_threads += (nd > 0) - (d > 0)
+        depth[tid], peak = nd, max(peak, open_threads)
+    return peak
+
+
+def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Dict], run: Dict[str, Any],
+                         sensors_explicit: bool, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Validity of one checkpointed run: {status, reasons, detail, warnings}. Every reason is fatal; warnings
+    (SAMPLER_GAP, OVERLAPPING_THREADS) are not.
+    checkpoints: the NEMB result block's measurements, or None when the runtime aggregated in-process (Java
+    standalone; marker checks do not apply). run: timed_out, timeout_s, returncode, failure, init_failed.
+    sampler None with checkpoints present means the library predates ABI 4 (STALE_LIBRARY)."""
+    r: Dict[str, str] = {}
+    w: Dict[str, str] = {}
+    if run.get("init_failed"):
+        r["NEMB_INIT_FAILED"] = run["init_failed"]
+    if run.get("timed_out"):
+        r["INCOMPLETE_TIMEOUT"] = f"killed after {run['timeout_s']} s"
+    elif run.get("returncode"):
+        r["INCOMPLETE_CRASH"] = f"exit {run['returncode']}: {run.get('failure', '')}"
+    if checkpoints is not None and len(checkpoints) < 2:
+        r["INCOMPLETE_NO_CHECKPOINTS"] = f"{len(checkpoints)} checkpoint(s) in the result block"
+    if sampler is None:
+        if checkpoints != []:
+            r["STALE_LIBRARY"] = "no sampler statistics in the result (libcodegreen-nemb ABI < 4 or stale runtime)"
+        return _validity(r)
+    iv = sampler["interval_ms"] * 1e6
+    if sampler["affinity_cpus"] < cfg["min_affinity_cpus"]:
+        r["AFFINITY_SINGLE_CPU"] = (f"measured process allowed on {sampler['affinity_cpus']} CPU(s) "
+                                    f"(< {cfg['min_affinity_cpus']}); the sampler competes with the workload")
+    gap_factor = cfg["java_max_gap_factor"] if checkpoints is None else cfg["max_gap_factor"]
+    if sampler["readings"] >= 2 and (sampler["max_gap_ns"] > gap_factor * iv
+                                     or sampler["median_gap_ns"] > cfg["median_gap_factor"] * iv):
+        # Java standalone markers read the poller's last published cumulative counter, so a gap (GC safepoint) bounds
+        # marker staleness, not window energy: a warning plus a resolution downgrade; NEMB interpolates across it.
+        (w if checkpoints is None else r)["SAMPLER_GAP" if checkpoints is None else "SAMPLER_STARVED"] = (
+            f"reading gaps median {sampler['median_gap_ns'] / 1e6:.3f} ms, max "
+            f"{sampler['max_gap_ns'] / 1e6:.3f} ms vs interval {sampler['interval_ms']} ms")
+    if sampler["dropped_checkpoints"]:
+        r["CHECKPOINT_CAP"] = (f"{sampler['dropped_checkpoints']} checkpoint(s) dropped at "
+                               "measurement.report.max_checkpoints")
+    if sampler["wrapped"]:
+        r["BUFFER_WRAPPED"] = f"ring buffer of {sampler['buffer_capacity']} readings overwrote the start of the run"
+    gpu = sorted(set(sampler["providers"]) & set(cfg["gpu_providers"]))
+    if gpu and not sensors_explicit and cfg["gpu_in_total"] == "invalid":
+        r["GPU_IN_TOTAL"] = f"{gpu} summed into the total; choose providers with --sensors"
+    if checkpoints is None:
+        if sampler["readings"] < cfg["min_window_samples"]:
+            r["TOTAL_BELOW_RESOLUTION"] = f"{sampler['readings']} reading(s) < {cfg['min_window_samples']}"
+        return _validity(r, w)
+    clamped = [m["checkpoint_id"] for m in checkpoints if m["clamp"] != "none"]
+    if clamped:
+        r["MARKER_CLAMPED"] = f"{len(clamped)} marker(s) outside the sampled range (first {clamped[0]})"
+    if len(checkpoints) >= 2:
+        cps = sorted(checkpoints, key=lambda m: m["timestamp"])
+        span = cps[-1]["ri"] - cps[0]["ri"]
+        if span < cfg["min_window_samples"]:
+            r["TOTAL_BELOW_RESOLUTION"] = f"root window spans {span} reading(s) < {cfg['min_window_samples']}"
+        if any(b["joules"] < a["joules"] for a, b in zip(cps, cps[1:])):
+            r["NEGATIVE_ENERGY"] = "cumulative energy decreases between markers"
+        elif cps[-1]["joules"] == cps[0]["joules"]:
+            r["ZERO_ENERGY"] = "root window measured 0 J"
+        peak = _thread_overlap(cps)
+        if peak > 1:
+            w["OVERLAPPING_THREADS"] = (f"up to {peak} threads inside instrumented frames at once; each frame is "
+                                        "charged the whole package energy, so concurrent exclusive energies overlap")
+    return _validity(r, w)
+
+
 def _build_comprehensive_json(
     analysis_result, measurement_result, source_code: str,
-    script: Path, language: str, granularity: str
+    script: Path, language: str, granularity: str, sensors: Optional[List["SensorType"]] = None
 ) -> Dict[str, Any]:
     """Build comprehensive JSON output as single source of truth."""
     import hashlib, platform
@@ -1225,40 +1333,23 @@ def _build_comprehensive_json(
             "stable_id": f"{pt.name}@{content_hash}",
             "insertion_mode": pt.insertion_mode,
         }
-    checkpoints = []
-    per_func = {}
-    if measurement_result and measurement_result.get('checkpoints'):
-        checkpoints = measurement_result['checkpoints']
-        for cp in checkpoints:
-            # Parse type and name from checkpoint_id: "type:name:point_id#inv_N_tXXX"
-            cp_id = cp.get('checkpoint_id', '')
-            parts = cp_id.split(':')
-            ctype = parts[0] if len(parts) >= 1 else cp.get('type', '')
-            fname = parts[1] if len(parts) >= 2 else cp.get('name', 'unknown')
-            joules = cp.get('joules', 0.0)
-            ts = cp.get('timestamp', 0)
-            if fname not in per_func:
-                per_func[fname] = {"enter_j": None, "exit_j": None, "enter_ts": 0, "exit_ts": 0, "calls": 0}
-            if ctype == 'enter':
-                per_func[fname]['enter_j'] = joules
-                per_func[fname]['enter_ts'] = ts
-                per_func[fname]['calls'] += 1
-            elif ctype == 'exit':
-                per_func[fname]['exit_j'] = joules
-                per_func[fname]['exit_ts'] = ts
+    mr = measurement_result or {}
+    checkpoints, sampler = mr.get('checkpoints') or [], mr.get('sampler')
+    min_samples = _measurement_cfg()["min_window_samples"]
+    func_data: Dict[str, dict] = {}
+    _replay_checkpoint_events(_checkpoint_events(checkpoints, set(points_map)), func_data)
     func_energy = {}
-    for fname, data in per_func.items():
-        if data['enter_j'] is not None and data['exit_j'] is not None:
-            delta = data['exit_j'] - data['enter_j']
-            wall_ns = data['exit_ts'] - data['enter_ts']
-            wall_s = wall_ns / 1e9 if wall_ns > 1e6 else wall_ns / 1e3
-            energy = max(delta, 0.0)
-            func_energy[fname] = {
-                "energy_j": round(energy, 6),
-                "wall_time_s": round(wall_s, 6),
-                "avg_power_w": round(energy / wall_s, 2) if wall_s > 0 else 0.0,
-                "calls": data['calls'],
-            }
+    for fname, d in func_data.items():
+        if not d["calls"]:
+            continue
+        inc, wall_s = d["inclusive_uj"] / 1e6, d["time_ns"] / 1e9
+        func_energy[fname] = {
+            "energy_j": round(inc, 6), "inclusive_j": round(inc, 6), "exclusive_j": round(d["exclusive_uj"] / 1e6, 6),
+            "wall_time_s": round(wall_s, 9),
+            "avg_power_w": round(inc / wall_s, 2) if wall_s > 0 else 0.0,
+            "calls": d["calls"],
+            "quality": "measured" if d.get("min_window_samples", -1) >= min_samples else "interpolated",
+        }
     system = {"kernel": platform.release(), "cpu_model": "", "governor": ""}
     try:
         with open("/proc/cpuinfo") as f:
@@ -1273,65 +1364,48 @@ def _build_comprehensive_json(
             system["governor"] = f.read().strip()
     except OSError:
         pass
-    total_energy = 0.0
-    wall_time = 0.0
-    if checkpoints and len(checkpoints) >= 2:
-        total_energy = max(checkpoints[-1].get('joules', 0) - checkpoints[0].get('joules', 0), 0.0)
-        ts_delta = checkpoints[-1].get('timestamp', 0) - checkpoints[0].get('timestamp', 0)
-        wall_time = ts_delta / 1e6 if ts_delta > 1e6 else ts_delta
-    success = bool(measurement_result and measurement_result.get('success'))
+    cps = sorted(checkpoints, key=lambda m: m["timestamp"])
+    total_energy = cps[-1]["joules"] - cps[0]["joules"] if len(cps) >= 2 else 0.0
+    wall_time = (cps[-1]["timestamp"] - cps[0]["timestamp"]) / 1e9 if len(cps) >= 2 else 0.0
+    by_provider = ({p: round(cps[-1]["provider_j"][p] - cps[0]["provider_j"][p], 6) for p in cps[-1]["provider_j"]}
+                   if sampler is not None and len(cps) >= 2 else {})
+    exclusive_sum = sum(d["exclusive_uj"] for d in func_data.values()) / 1e6
+    success = bool(mr.get('success'))
     result = {
         "success": success,
         "file": str(script), "language": language, "granularity": granularity,
         "source_fingerprint": source_hash,
         "system": system,
         "summary": {"total_energy_j": total_energy, "wall_time_s": wall_time,
-                     "avg_power_w": total_energy / wall_time if wall_time > 0 else 0.0,
-                     "checkpoint_count": len(checkpoints)},
+                    "avg_power_w": total_energy / wall_time if wall_time > 0 else 0.0,
+                    "checkpoint_count": len(checkpoints),
+                    "energy_by_provider": by_provider,
+                    "providers": sampler["providers"] if sampler is not None else [],
+                    "sensors_requested": [s.value for s in sensors] if sensors else None,
+                    "exclusive_sum_j": round(exclusive_sum, 6),
+                    "exclusive_sum_ratio": round(exclusive_sum / total_energy, 4) if total_energy else None,
+                    "overlapping_threads": _thread_overlap(cps)},
         "instrumentation_points": points_map,
         "per_function_energy": func_energy,
         "checkpoints": checkpoints,
+        "sampler": sampler,
+        "validity": mr.get("validity"),
         "optimization_suggestions": analysis_result.optimization_suggestions,
     }
     # Never report a silent 0 J: when the run recorded no usable checkpoints,
     # surface WHY -- a real crash (traceback) vs a clean run that produced no
     # measurement markers -- so callers can distinguish "measured 0" from "failed".
     if not success or len(checkpoints) < 2:
-        out = (measurement_result or {}).get('output', '') or ''
+        out = mr.get('output', '') or ''
         result["error"] = (_extract_failure_reason(out) if _output_has_error(out)
                             else "no runtime checkpoints captured (per-function "
                                  "attribution unavailable; see instrumentation_audit)")
     return result
 
 
-def _should_run_actual_measurement(sensors: Optional[List[SensorType]]) -> bool:
-    """Check if actual energy measurement should be performed"""
-    # For now, check if binary exists for actual measurement
-    backend = _get_energy_backend()
-    return not isinstance(backend, _TimeOnlyBackend)
-
-
-def _parse_runtime_measurements(output: str) -> List[Dict[str, Any]]:
-    """Extract structured energy measurements from process output"""
-    measurements = []
-    
-    # Look for the JSON blob between markers
-    start_marker = "--- CODEGREEN_RESULT_START ---"
-    end_marker = "--- CODEGREEN_RESULT_END ---"
-    
-    if start_marker in output and end_marker in output:
-        try:
-            start_idx = output.find(start_marker) + len(start_marker)
-            end_idx = output.find(end_marker)
-            json_str = output[start_idx:end_idx].strip()
-            
-            data = json.loads(json_str)
-            measurements = data.get("measurements", [])
-        except Exception:
-            # Silently fail if parsing fails
-            pass
-            
-    return measurements
+def _should_run_actual_measurement() -> bool:
+    """True when a real energy backend (not time-only) is available."""
+    return not isinstance(_get_energy_backend(), _TimeOnlyBackend)
 
 
 def _get_c_runtime_paths(language: str = "c") -> tuple:
@@ -1348,38 +1422,44 @@ def _get_c_runtime_paths(language: str = "c") -> tuple:
     return include_path, repo_root / "lib"
 
 
-def _compile_instrumented(instrumented_path: Path, language: Language, verbose: bool) -> Optional[Path]:
-    """Compile instrumented C/C++/Java code. Returns binary path or None on failure."""
+def _toolchain_compiler(language: str) -> str:
+    """C/C++ compiler: env CC/CXX, else measurement.toolchain.<language>; resolved in toolchain.prefer_dirs before PATH,
+    so a PATH-first toolchain (linuxbrew binutils against an older system glibc) is not picked up by accident."""
+    tc = _measurement_cfg()["toolchain"]
+    name = os.environ.get({"c": "CC", "cpp": "CXX"}[language]) or tc[language]
+    return shutil.which(name, path=os.pathsep.join(tc["prefer_dirs"])) or shutil.which(name) or name
+
+
+def _compile_instrumented(instrumented_path: Path, language: Language) -> tuple:
+    """Compile instrumented C/C++/Java code: (binary, None) on success, (None, compiler diagnostics) on failure."""
     build_dir = instrumented_path.parent
     stem = instrumented_path.stem
     if language == Language.c:
         include_path, lib_path = _get_c_runtime_paths("c")
         binary = build_dir / f"{stem}.out"
-        cmd = ["gcc", "-O2", f"-I{include_path}", str(instrumented_path),
+        cmd = [_toolchain_compiler("c"), "-O2", f"-I{include_path}", str(instrumented_path),
                f"-L{lib_path}", "-lcodegreen-nemb", "-lm", "-lpthread", "-o", str(binary)]
     elif language == Language.cpp:
         include_path, lib_path = _get_c_runtime_paths("cpp")
         binary = build_dir / f"{stem}.out"
-        cmd = ["g++", "-O2", f"-I{include_path}", str(instrumented_path),
+        cmd = [_toolchain_compiler("cpp"), "-O2", f"-I{include_path}", str(instrumented_path),
                f"-L{lib_path}", "-lcodegreen-nemb", "-lpthread", "-o", str(binary)]
     elif language == Language.java:
         java_runtime = _get_runtime_source_dir() / "java"
         cmd = ["javac", "-cp", str(java_runtime), "-d", str(build_dir), str(instrumented_path)]
         binary = build_dir / f"{stem}.class"
     else:
-        return None
-
+        return None, f"no compiler for {language.value}"
+    # The driver finds `ld` and `as` on PATH: search the compiler's own directory first so they match it.
+    env = ({**os.environ, "PATH": os.pathsep.join([str(Path(cmd[0]).parent), os.environ.get("PATH", "")])}
+           if os.path.isabs(cmd[0]) else None)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            if verbose:
-                console.print(f"[red]Compilation failed: {result.stderr}[/red]")
-            return None
-        return binary
-    except Exception as e:
-        if verbose:
-            console.print(f"[red]Compilation error: {e}[/red]")
-        return None
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return None, f"{' '.join(cmd)}: {e}"
+    if result.returncode != 0:
+        return None, f"{' '.join(cmd)} exited {result.returncode}:\n{(result.stderr + result.stdout).strip()}"
+    return binary, None
 
 
 def _run_energy_measurement(
@@ -1398,10 +1478,22 @@ def _run_energy_measurement(
     - Python: run directly with runtime module
     - C/C++: compile instrumented code, run binary
     - Java: compile with javac, run with java
+    --sensors selects NEMB providers in the child through CODEGREEN_PROVIDERS (measurement.sensor_providers).
     """
     env = os.environ.copy()
     runtime_path = _get_runtime_path()
     binary_to_cleanup = None
+    instrumented_path = instrumented_path.resolve()
+    vcfg = _measurement_cfg()
+
+    def _not_run(code: str, detail: str) -> Dict[str, Any]:
+        if not json_output:
+            console.print(f"[red]{code}: {detail}[/red]")
+        return {'success': False, 'error': code, 'output': detail, 'checkpoints': [], 'sampler': None,
+                'validity': _validity({code: detail})}
+    if sensors:
+        env["CODEGREEN_PROVIDERS"] = ",".join(dict.fromkeys(p for s in sensors for p in vcfg["sensor_providers"][s.value]))
+    sensors_explicit = "CODEGREEN_PROVIDERS" in env
 
     if runtime_path:
         pythonpath = str(runtime_path)
@@ -1414,9 +1506,9 @@ def _run_energy_measurement(
         if args:
             cmd.extend(args)
     elif language in (Language.c, Language.cpp):
-        binary = _compile_instrumented(instrumented_path, language, verbose)
-        if not binary or not binary.exists():
-            return {'success': False, 'error': 'Compilation failed'}
+        binary, diag = _compile_instrumented(instrumented_path, language)
+        if binary is None:
+            return _not_run("COMPILE_FAILED", diag)
         binary_to_cleanup = binary
         # Set LD_LIBRARY_PATH for NEMB library
         _, lib_path = _get_c_runtime_paths(language.value)
@@ -1428,9 +1520,9 @@ def _run_energy_measurement(
         if args:
             cmd.extend(args)
     elif language == Language.java:
-        binary = _compile_instrumented(instrumented_path, language, verbose)
-        if not binary:
-            return {'success': False, 'error': 'Java compilation failed'}
+        binary, diag = _compile_instrumented(instrumented_path, language)
+        if binary is None:
+            return _not_run("COMPILE_FAILED", diag)
         class_name = instrumented_path.stem
         build_dir = instrumented_path.parent
         java_runtime = _get_runtime_source_dir() / "java"
@@ -1445,47 +1537,46 @@ def _run_energy_measurement(
     else:
         return {'success': False, 'error': f'Unsupported language: {language}'}
     
-    def _run_with_output_capture(cmd, timeout, env):
-        """Run subprocess and capture ALL output including atexit handlers."""
+    def _run_with_output_capture(cmd, timeout_s, env):
+        """Run subprocess and capture ALL output including atexit handlers: (output, returncode, timed_out)."""
         env = env.copy()
         env['PYTHONUNBUFFERED'] = '1'
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        # Bytes, not text: workloads may write binary stdout (mandelbrot's PBM image).
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
         try:
-            stdout, _ = proc.communicate(timeout=timeout or 300)
-            return stdout
+            stdout, timed_out = proc.communicate(timeout=timeout_s)[0], False
         except subprocess.TimeoutExpired:
             proc.terminate()
             try:
-                stdout, _ = proc.communicate(timeout=5)
-                return stdout
+                stdout = proc.communicate(timeout=5)[0]
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
-                return ""
+                stdout = proc.communicate()[0]
+            timed_out = True
+        return stdout.decode("utf-8", errors="replace"), proc.returncode, timed_out
 
+    timeout_s = timeout or 300
     try:
         if verbose and not json_output:
             console.print(f"Command: [dim]{' '.join(cmd)}[/dim]")
         # No spinner/progress bar during measurement - avoid CPU noise
-        output = _run_with_output_capture(cmd, timeout, env)
-        measurements = _parse_runtime_measurements(output)
-        success = "--- CODEGREEN_RESULT_END ---" in output
-        if json_output:
-            return {
-                'success': success,
-                'output': output,
-                'error': None if success else 'incomplete',
-                'checkpoints': measurements
-            }
-        if success:
-            return {'success': True, 'output': output, 'checkpoints': measurements}
-        else:
+        try:
+            output, returncode, timed_out = _run_with_output_capture(cmd, timeout_s, env)
+        except OSError as e:
+            return _not_run("INCOMPLETE_CRASH", f"could not launch {cmd[0]}: {e}")
+        block = _nemb_result_block(output)
+        measurements, sampler = block.get("measurements", []), block.get("sampler")
+        init_failed = next((ln.strip() for ln in output.splitlines() if "NEMB init failed" in ln), None)
+        validity = measurement_validity(
+            measurements, sampler,
+            {"timed_out": timed_out, "timeout_s": timeout_s, "returncode": returncode,
+             "failure": _extract_failure_reason(output) if returncode else "", "init_failed": init_failed},
+            sensors_explicit, vcfg)
+        success = _NEMB_RESULT_END in output
+        if not success and not json_output:
             console.print("[yellow]Warning: Measurement may be incomplete[/yellow]")
-            return {'success': False, 'error': 'incomplete', 'output': output}
-    except Exception as e:
-        if not json_output:
-            console.print(f"[red]Energy measurement failed: {e}[/red]")
-        return {'success': False, 'error': str(e)}
+        return {'success': success, 'output': output, 'error': None if success else 'incomplete',
+                'checkpoints': measurements, 'sampler': sampler, 'validity': validity, 'returncode': returncode}
     finally:
         if not no_cleanup and binary_to_cleanup and binary_to_cleanup.exists():
             try:
@@ -2882,6 +2973,8 @@ def run_command(
         payload.update(extra)
         return json.dumps(payload, indent=2)
 
+    run_sampler_ms = (backend.slow_sampler(_measurement_cfg()["run_sampler_interval_ms"])
+                      if isinstance(backend, _NEMBBackend) else None)
     measurement_pairs: List[tuple] = []
     warmup_pairs: List[tuple] = []
     domain_runs: List[Dict[str, float]] = []
@@ -2985,6 +3078,16 @@ def run_command(
         avg_domains_power = {d: j / t_stats.mean for d, j in avg_domains.items()}
 
     budget_exceeded = budget is not None and e_stats.mean > budget
+    vcfg = _measurement_cfg()
+    floor_s = vcfg["min_run_updates"] * vcfg["rapl_update_ms"] / 1e3
+    run_reasons: Dict[str, str] = {}
+    if t_stats.mean < floor_s:
+        run_reasons["RUN_BELOW_RESOLUTION"] = (f"mean duration {t_stats.mean:.6f} s < {vcfg['min_run_updates']} "
+                                               f"RAPL updates ({floor_s} s)")
+    if zero_energy_dropped:
+        run_reasons["ZERO_ENERGY_RUNS"] = f"{zero_energy_dropped} of {len(measurement_pairs)} runs read no energy"
+    run_validity = _validity(run_reasons, checks={"affinity_cpus": _cpuset_size("")})
+    run_error = f"invalid_measurement: {','.join(run_reasons)}" if run_reasons else ""
 
     if json_output:
         _meta_ended_at = datetime.now(_tz.utc).isoformat(timespec="microseconds")
@@ -3002,7 +3105,8 @@ def run_command(
             domain_support="full" if avg_domains else ("scalar_only" if energies else "none"),
             domains=avg_domains,
             record_time_series=False,
-            extras={"include_warmup": bool(include_warmup), "warmup_runs_configured": warmup},
+            extras={"include_warmup": bool(include_warmup), "warmup_runs_configured": warmup,
+                    "run_sampler_interval_ms": run_sampler_ms},
         )
         out = {
             "meta": meta_obj,
@@ -3036,7 +3140,10 @@ def run_command(
                 "computation": "mean_of_per_run_e_over_t",
             },
             "budget_exceeded": budget_exceeded,
+            "validity": run_validity,
         }
+        if run_error:
+            out.update(success=False, error=run_error)
         if budget is not None:
             out["budget_j"] = budget
         if avg_domains:
@@ -3044,6 +3151,8 @@ def run_command(
             out["domains_power_w"] = {d: round(w, 4) for d, w in
                                       sorted(avg_domains_power.items(), key=lambda x: -x[1])}
         print(json.dumps(out, indent=2))
+        if run_error and vcfg["fail_on_invalid"]:
+            raise typer.Exit(3)
         if budget_exceeded:
             raise typer.Exit(1)
     else:
@@ -3084,6 +3193,12 @@ def run_command(
 
         if cv > 20:
             console.print(f"[yellow]  Tip: high variance -- try --repeat 30 or reduce background load[/yellow]")
+        if run_error:
+            console.print(f"[red]{run_error}[/red]")
+            for code, text in run_reasons.items():
+                console.print(f"  [red]{code}[/red]: {text}")
+            if vcfg["fail_on_invalid"]:
+                raise typer.Exit(3)
         if budget is not None:
             if e_stats.mean > budget:
                 console.print(f"[red]BUDGET EXCEEDED: {e_stats.mean:.4f}J > {budget}J[/red]")
@@ -3205,6 +3320,21 @@ class _NEMBBackend(_EnergyBackend):
         except Exception:
             pass
         return (energy.value if ok and energy.value > 0 else None, elapsed)
+
+    def slow_sampler(self, interval_ms: int) -> Optional[int]:
+        """Run path: sessions are synchronous boundary reads, so the background sampler only adds wakeups and NVML
+        polls to the measured energy (about 5 W at idle). Probe one session and widen the sampler period unless a GPU
+        domain reports: GPU energy is power-integrated from the samples. Returns the period set, or None."""
+        import ctypes
+        self.measure(["true"])
+        if any("gpu" in d for d in self.get_last_domain_breakdown()):
+            return None
+        lib = self._load()
+        lib.nemb_set_measurement_interval_ms.argtypes = [ctypes.c_int]
+        lib.nemb_set_measurement_interval_ms.restype = ctypes.c_int
+        if lib.nemb_set_measurement_interval_ms(interval_ms) != 1:
+            raise RuntimeError("nemb_set_measurement_interval_ms refused the run-path sampler interval")
+        return interval_ms
 
     def get_last_domain_breakdown(self) -> dict:
         return getattr(self, '_last_domains', {})
@@ -3430,14 +3560,17 @@ _NEMB_RESULT_START = "--- CODEGREEN_RESULT_START ---"
 _NEMB_RESULT_END = "--- CODEGREEN_RESULT_END ---"
 
 
-def _stderr_checkpoint_events(path: str, func_data: dict):
+def _stderr_checkpoint_events(path: str, func_data: dict, meta: Optional[list] = None):
     """Yield `CG_CP|type|name|id|ts|energy_uj|tid` events from a checkpoint file.
     Pre-aggregated `CG_CP_SUM|tid|name|calls|incl_uj|excl_uj|time_ns` records
-    (Java standalone runtime) are folded straight into func_data."""
+    (Java standalone runtime) are folded straight into func_data; its poller's
+    `CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns` lines go to meta."""
     with open(path) as cf:
         for line in cf:
             parts = line.rstrip("\n").split("|")
-            if parts[0] == "CG_CP_SUM" and len(parts) >= 7:
+            if parts[0] == "CG_CP_META" and meta is not None:
+                meta.append([int(x) for x in parts[1:6]])
+            elif parts[0] == "CG_CP_SUM" and len(parts) >= 7:
                 d = func_data.setdefault(parts[2], {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
                 d["calls"] += int(parts[3])
                 d["inclusive_uj"] += int(parts[4])
@@ -3447,14 +3580,47 @@ def _stderr_checkpoint_events(path: str, func_data: dict):
                 yield parts[1], parts[2], parts[3], int(parts[4]), int(parts[5]), parts[6] if len(parts) > 6 else "0"
 
 
-def _nemb_checkpoint_events(stdout: str, known_ids) -> list:
-    """Per-event checkpoints from the NEMB result block on stdout (C/C++/Python runtimes).
-    Markers are `type:name:id#inv_N_t<thread>` with cumulative joules. The language
-    runtime and NEMB's own atexit may both print the same data, so the largest block
-    is used, never a sum. Names may contain ':' (C++ scopes), so the id is the
-    suffix that matches an instrumented checkpoint id."""
+def _nemb_result_block(stdout: str) -> Dict[str, Any]:
+    """The NEMB result block on stdout ({} when there is none). The language runtime and NEMB's own atexit may
+    both print the same data, so the block with the most measurements is used, never a sum. Malformed JSON raises."""
     blocks = [json.loads(chunk.split(_NEMB_RESULT_END, 1)[0]) for chunk in stdout.split(_NEMB_RESULT_START)[1:]]
-    measurements = max((b.get("measurements", []) for b in blocks), key=len, default=[])
+    return max(blocks, key=lambda b: len(b.get("measurements", [])), default={})
+
+
+def _java_meta_sampler(meta: List[List[int]], cpus: int) -> Optional[Dict[str, Any]]:
+    """Sampler statistics in the NEMB contract shape from the Java standalone poller's
+    `CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns` lines (one per JVM). The poller keeps no gap
+    distribution, so median_gap_ns carries the worst JVM's mean gap (gap_statistic: mean)."""
+    if not meta:
+        return None
+    poll_ns = {m[4] for m in meta}
+    if len(poll_ns) != 1:
+        raise ValueError(f"JVMs of one run polled RAPL at different periods: {sorted(poll_ns)} ns")
+    return {"interval_ms": poll_ns.pop() / 1e6, "buffer_capacity": None, "readings": sum(m[0] for m in meta),
+            "wrapped": False, "rejected_readings": 0, "first_ns": min(m[1] for m in meta),
+            "last_ns": max(m[2] for m in meta),
+            "median_gap_ns": max(((m[2] - m[1]) / (m[0] - 1) for m in meta if m[0] > 1), default=0),
+            "max_gap_ns": max(m[3] for m in meta), "affinity_cpus": cpus, "providers": ["java_rapl_poller"],
+            "dropped_checkpoints": 0,
+            "config_path": None, "jvms": len(meta), "gap_statistic": "mean"}
+
+
+def _cpuset_size(cores: str) -> int:
+    """CPUs in a taskset -c list ("0-7", "2,3"); the inherited affinity when empty."""
+    if not cores:
+        return len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    return sum(int(hi or lo) - int(lo) + 1 for lo, _, hi in (p.partition("-") for p in cores.split(",")))
+
+
+def _nemb_checkpoint_events(stdout: str, known_ids) -> list:
+    """Per-event checkpoints from the NEMB result block on stdout (C/C++/Python runtimes)."""
+    return _checkpoint_events(_nemb_result_block(stdout).get("measurements", []), known_ids)
+
+
+def _checkpoint_events(measurements: List[Dict], known_ids) -> list:
+    """Replay events from NEMB measurements. Markers are `type:name:id#inv_N_t<thread>` with cumulative
+    joules. Names may contain ':' (C++ scopes), so the id is the suffix that matches an instrumented
+    checkpoint id. The 7th element is the sampler reading index (ri, ABI 4) or None."""
     splits, events = {}, []
     for m in measurements:
         marker, sep, inv = m["checkpoint_id"].rpartition("#inv_")
@@ -3465,7 +3631,8 @@ def _nemb_checkpoint_events(stdout: str, known_ids) -> list:
             splits[rest] = next(((rest[:i], rest[i + 1:]) for i, c in enumerate(rest)
                                  if c == ":" and rest[i + 1:] in known_ids), rest.rpartition(":")[::2])
         name, cp_id = splits[rest]
-        events.append((cp_type, name, cp_id, int(m["timestamp"]), round(m["joules"] * 1e6), inv.rpartition("_t")[2]))
+        events.append((cp_type, name, cp_id, int(m["timestamp"]), round(m["joules"] * 1e6), inv.rpartition("_t")[2],
+                       m.get("ri")))
     events.sort(key=lambda e: e[3])
     return events
 
@@ -3479,15 +3646,19 @@ def _device_sync_count(stdout: str) -> int:
 def _replay_checkpoint_events(events, func_data: dict) -> set:
     """Replay enter/exit events on per-thread call stacks into func_data
     (name -> inclusive_uj, exclusive_uj, time_ns, calls). Exits without a
-    matching frame are ignored; abandoned inner frames are unwound. Returns the
-    (name, checkpoint_id) pairs seen."""
+    matching frame are ignored; abandoned inner frames are unwound. Every matched
+    exit counts and energies stay signed: a decreasing counter is NEGATIVE_ENERGY in
+    measurement_validity, never dropped here. Events carrying
+    sampler reading indices (7th element) also record min_window_samples, the fewest
+    readings inside any call. Returns the (name, checkpoint_id) pairs seen."""
     stacks, seen = {}, set()
-    for cp_type, name, cp_id, ts, energy, tid in events:
+    for cp_type, name, cp_id, ts, energy, tid, *ri in events:
+        ri = ri[0] if ri else None
         seen.add((name, cp_id))
         d = func_data.setdefault(name, {"inclusive_uj": 0, "exclusive_uj": 0, "time_ns": 0, "calls": 0})
         stack = stacks.setdefault(tid, [])
         if cp_type == "enter":
-            stack.append([name, ts, energy, 0])
+            stack.append([name, ts, energy, 0, ri])
             continue
         if cp_type != "exit":
             continue
@@ -3496,14 +3667,15 @@ def _replay_checkpoint_events(events, func_data: dict) -> set:
             continue
         frame = stack[idx]
         del stack[idx:]
-        dt, inclusive = ts - frame[1], energy - frame[2]
-        if dt > 0 and inclusive >= 0:
-            d["inclusive_uj"] += inclusive
-            d["exclusive_uj"] += max(inclusive - frame[3], 0)
-            d["time_ns"] += dt
-            d["calls"] += 1
-            if stack:
-                stack[-1][3] += inclusive
+        inclusive = energy - frame[2]
+        d["inclusive_uj"] += inclusive
+        d["exclusive_uj"] += inclusive - frame[3]
+        d["time_ns"] += ts - frame[1]
+        d["calls"] += 1
+        if ri is not None and frame[4] is not None:
+            d["min_window_samples"] = min(d.get("min_window_samples", ri - frame[4]), ri - frame[4])
+        if stack:
+            stack[-1][3] += inclusive
     return seen
 
 
@@ -3794,7 +3966,7 @@ def project_energy(
             Path(fpath).write_text((_backup_dir / copy).read_text(encoding="utf-8"), encoding="utf-8")
         injected = (json.loads((_backup_dir / "runtime.json").read_text())
                     if (_backup_dir / "runtime.json").exists() else [])
-        for rf in map(Path, reversed(injected)):
+        for rf in map(Path, injected):  # recorded files first, then their dirs deepest first
             _remove_injected(rf)
         shutil.rmtree(_backup_dir)
         if not json_output and manifest:
@@ -4070,13 +4242,18 @@ def project_energy(
             # Checkpoints arrive on stderr as CG_CP / CG_CP_SUM (Java standalone
             # runtime) or on stdout as the NEMB result block (C/C++/Python).
             func_data = {}  # name -> {inclusive_uj, exclusive_uj, time_ns, calls}
+            java_meta: list = []
+            nemb_cps = None
             try:
                 seen = _replay_checkpoint_events(itertools.chain(
-                    _stderr_checkpoint_events(checkpoint_file, func_data),
-                    _stderr_checkpoint_events(sum_file, func_data)), func_data)
-                if not func_data:
-                    seen = _replay_checkpoint_events(
-                        _nemb_checkpoint_events(run_result.stdout, checkpoint_id_to_file), func_data)
+                    _stderr_checkpoint_events(checkpoint_file, func_data, java_meta),
+                    _stderr_checkpoint_events(sum_file, func_data, java_meta)), func_data)
+                if func_data:
+                    sampler = _java_meta_sampler(java_meta, _cpuset_size(cores))
+                else:
+                    block = _nemb_result_block(run_result.stdout)
+                    nemb_cps, sampler = block.get("measurements", []), block.get("sampler")
+                    seen = _replay_checkpoint_events(_checkpoint_events(nemb_cps, checkpoint_id_to_file), func_data)
                 stderr_tail = Path(checkpoint_file).read_text(errors="replace")[-500:]
             finally:
                 if no_cleanup and output_dir:
@@ -4096,6 +4273,16 @@ def project_energy(
                 console.print(f"[red]--sync-device {sync_device}: no device synchronisation ran in the profiled run "
                               f"(the workload never initialised {sync_device}); attribution would be unsynchronised.[/red]")
                 raise typer.Exit(1)
+
+            # Project totals include accelerators by design (--sync-device attributes device work to frames),
+            # so GPU_IN_TOTAL does not apply; every other reason is the measure-path rule.
+            vcfg = _measurement_cfg()
+            validity = measurement_validity(
+                nemb_cps, sampler, {"returncode": run_result.returncode,
+                                    "failure": _extract_failure_reason(stderr_tail) if run_result.returncode else ""},
+                False, {**vcfg, "gpu_in_total": "allow"})
+            res_ns = max(vcfg["rapl_update_ms"] * 1e6, sampler["interval_ms"] * 1e6 if sampler else 0,
+                         sampler["max_gap_ns"] if "SAMPLER_GAP" in validity["warnings"] else 0)
 
             # Compute per-function metrics (inclusive + exclusive)
             func_energy = {}
@@ -4134,6 +4321,8 @@ def project_energy(
                     "avg_power_w": round(inc_j / time_s, 2) if time_s > 0 else 0,
                     "calls": calls,
                     "energy_per_call_uj": round(data["inclusive_uj"] / calls, 2) if calls > 0 else 0,
+                    "resolution": ("measured" if calls and data["time_ns"] / calls >= res_ns else "aggregate_only"
+                                   if data["time_ns"] >= vcfg["aggregate_min_factor"] * res_ns else "invalid"),
                 }
 
             attribution_pct = round(total_exclusive / 1e6 / total_energy_j * 100, 1) if total_energy_j > 0 else 0
@@ -4153,6 +4342,11 @@ def project_energy(
                                "per-function shares are relative to the attributed energy only"},
                 "functions": func_energy,
                 "total_checkpoints": sum(d["calls"] * 2 for d in func_data.values()),
+                "sampler": sampler,
+                "validity": validity,
+                "resolution_ns": res_ns,
+                "overlapping_threads": _thread_overlap(sorted(nemb_cps, key=lambda m: m["timestamp"]))
+                if nemb_cps else None,
             })
 
             if not json_output:
@@ -4191,6 +4385,7 @@ def project_energy(
                     "sync_device": sync_device,
                     "attribution_pct": all_runs[-1]["attribution_pct"],
                     "attribution_warning": all_runs[-1]["attribution_warning"],
+                    "validity": all_runs[-1]["validity"],
                     "runs": all_runs,
                     "hotspots": [{"rank": i+1, "function": name, **data}
                                  for i, (name, data) in enumerate(hotspots[:20])],
@@ -4202,6 +4397,8 @@ def project_energy(
                 console.print(f"  Functions profiled: {len(last_funcs)}")
                 if all_runs[-1]["attribution_warning"]:
                     console.print(f"  [yellow]WARNING {all_runs[-1]['attribution_warning']['message']}[/yellow]")
+                for code, text in all_runs[-1]["validity"]["detail"].items():
+                    console.print(f"  [red]INVALID {code}: {text}[/red]")
                 console.print(f"\n[bold]Top hotspots by exclusive energy:[/bold]")
                 console.print(f"  {'Rank':<5} {'Function':<35} {'Excl%':>7} {'Incl%':>7} {'Self':>6} "
                               f"{'Verdict':>8} {'Calls':>8} {'uJ/call':>10}")
@@ -4238,7 +4435,7 @@ def project_energy(
                       f"{backup_dir}: {unrestored[:3]}", file=sys.stderr)
             else:
                 shutil.rmtree(backup_dir, ignore_errors=True)
-            for rf in reversed(runtime_files_created):
+            for rf in runtime_files_created:  # files first, then their dirs deepest first
                 try:
                     _remove_injected(rf)
                 except OSError as e:

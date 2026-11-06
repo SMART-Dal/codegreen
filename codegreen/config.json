@@ -71,6 +71,7 @@
       "schema_version": "1",
       "iso_timestamp_format": "rfc3339_utc",
       "run_id_bytes": 6,
+      "max_checkpoints": 2000000,
       "outlier_method": "iqr_1.5",
       "timeseries_clock_override": "",
       "noise_warning": {
@@ -79,7 +80,37 @@
         "quality_excellent_below_cv_pct": 2.0,
         "quality_good_below_cv_pct": 5.0,
         "quality_moderate_below_cv_pct": 10.0
+      },
+      "validity": {
+        "_comment": "Measurement validity gate (codegreen.cli.cli.measurement_validity). Windows and gaps are in sampler intervals (sampler.interval_ms) or RAPL updates (rapl_update_ms). gpu_in_total: invalid = a GPU provider summed into the total without --sensors is a fatal reason; allow = accepted. java_max_gap_factor: the Java standalone poller gap that raises the non-fatal SAMPLER_GAP warning and widens per-function resolution to the max gap (its markers read the last polled counter). Per-function resolution in `project`: per-call time below one resolution is aggregate_only when the function's total time spans aggregate_min_factor resolutions, invalid below that.",
+        "min_window_samples": 2,
+        "max_gap_factor": 3.0,
+        "java_max_gap_factor": 3.0,
+        "median_gap_factor": 1.5,
+        "min_affinity_cpus": 2,
+        "rapl_update_ms": 1,
+        "min_run_updates": 10,
+        "aggregate_min_factor": 10,
+        "fail_on_invalid": true,
+        "gpu_in_total": "invalid",
+        "gpu_providers": ["nvidia_gpu", "amd_gpu"]
       }
+    },
+    "run_path": {
+      "_comment": "codegreen run reads energy synchronously at each run boundary; the NEMB background sampler only has to outpace counter wrap there, so it is slowed to sampler_interval_ms to cut its wakeups (kept at the coordinator interval when a GPU domain reports, since GPU energy is power-integrated from the samples).",
+      "sampler_interval_ms": 1000
+    },
+    "toolchain": {
+      "_comment": "Compilers for instrumented C/C++ (codegreen measure). Env CC/CXX override c/cpp; names resolve in prefer_dirs before PATH, and the compile runs with the compiler's directory first on PATH so its own ld/as are used.",
+      "c": "gcc",
+      "cpp": "g++",
+      "prefer_dirs": ["/usr/bin"]
+    },
+    "sensor_providers": {
+      "rapl": ["intel_rapl", "amd_rapl"],
+      "amd_cpu": ["amd_rapl"],
+      "nvidia": ["nvidia_gpu"],
+      "amd_gpu": ["amd_gpu"]
     }
   },
   "instrumentation": {
