@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -71,6 +72,8 @@ static void test_correlate() {
     CHECK(threw);
 }
 
+static std::atomic<int> pause_next_read_ms{0};  // the next read of any fake provider sleeps this long (a sampler stall)
+
 // ok: readings carry energy; init: initialize()/self_test() succeed; group: counter_group; hold: every read is a held value;
 // boundary: session boundaries read a separate counter series (energy_source integrated_power, boundary_source counter);
 // stall: reads succeed but the cumulative energy never changes.
@@ -84,6 +87,7 @@ public:
         return init_;
     }
     EnergyReading get_reading() override {
+        if (int ms = pause_next_read_ms.exchange(0)) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         EnergyReading r; r.provider_id = "fake"; r.timestamp_ns = utils::PrecisionTimer::monotonic_timestamp_ns();
         r.energy_joules = ok_ ? (j_ += stall_ ? 0.0 : 0.5) : -1.0;
         r.average_power_watts = ok_ ? j_ : 0.0;  // rising power: an EMA lags behind it
@@ -337,6 +341,25 @@ static void test_meter_sampler() {
               st.providers[0].rejected == 0 && st.providers[0].held == 0 && st.providers[0].boundary_held == 0 &&
               st.failed_reads == 0);
         CHECK(st.providers[0].readings >= 2 && st.providers[0].last_ns >= st.last_ns && st.providers[0].max_stall_ns == 0);
+    }
+    {   // gap statistics cover the readings bracketing the markers: a stall before the first marker is outside them
+        EnergyMeter m;
+        EnergyMeter::SamplerStats st;
+        const uint64_t stall = 60000000;
+        pause_next_read_ms = 60;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        m.get_checkpoint_measurements(&st);
+        CHECK(st.max_gap_ns >= stall);  // no markers: the whole sampler life
+        m.mark_checkpoint("a");
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        m.mark_checkpoint("b");
+        m.get_checkpoint_measurements(&st);
+        CHECK(st.last_ns - st.first_ns >= stall && st.max_gap_ns < stall && st.median_gap_ns > 0);
+        pause_next_read_ms = 60;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        m.mark_checkpoint("c");
+        m.get_checkpoint_measurements(&st);
+        CHECK(st.max_gap_ns >= stall);  // a stall inside the window counts
     }
     setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_stall", 1);
     {

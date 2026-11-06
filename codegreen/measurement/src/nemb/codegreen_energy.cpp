@@ -308,8 +308,17 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
         st->rejected_readings = coordinator_->rejected_readings() + (sampled && !last_ok ? 1 : 0);
         uint64_t calls = checkpoint_calls_.load();
         st->dropped_checkpoints = calls > max_checkpoints_ ? calls - max_checkpoints_ : 0;
+        // Gaps over the readings bracketing the root window (first to last marker); the whole sampler life without
+        // markers. Setup before the window or a pause after it does not starve the window's interpolation.
+        size_t lo = 0, hi = readings.empty() ? 0 : readings.size() - 1;
+        if (!cps.empty()) {
+            auto [f, l] = std::minmax_element(cps.begin(), cps.end(),
+                [](const auto& a, const auto& b) { return a.timestamp_ns < b.timestamp_ns; });
+            lo = f->ri - (f->ri == readings.size() || (f->ri > 0 && readings[f->ri].common_timestamp_ns > f->timestamp_ns));
+            hi = std::min(l->ri, hi);
+        }
         std::vector<uint64_t> gaps;
-        for (size_t i = 1; i < readings.size(); ++i)
+        for (size_t i = lo + 1; i <= hi; ++i)
             gaps.push_back(readings[i].common_timestamp_ns - readings[i - 1].common_timestamp_ns);
         if (!readings.empty()) { st->first_ns = readings.front().common_timestamp_ns; st->last_ns = readings.back().common_timestamp_ns; }
         if (!gaps.empty()) {

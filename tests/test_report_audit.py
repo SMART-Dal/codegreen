@@ -2631,3 +2631,22 @@ class TestValidityReplication:
     def test_unavailable_sensor_fails_init(self, tmp_path):
         rc, out = self._measure(tmp_path, "--sensors", "amd_gpu", "100")
         assert rc == 3 and "NEMB_INIT_FAILED" in out["validity"]["reasons"]
+
+    def test_sampler_stall_before_the_root_window_is_not_starvation(self, tmp_path):
+        """Gap statistics cover the readings bracketing the markers: a stall of the whole process before the first
+        marker (setup, a GC pause) made a good window SAMPLER_STARVED."""
+        (tmp_path / "w.py").write_text(
+            "import json, os, signal, subprocess, time\n"
+            "from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt\n"
+            "c = rt._get_nemb_client()\n"
+            "subprocess.Popen(['sh', '-c', f'sleep 0.3; kill -CONT {os.getpid()}'])\n"
+            "os.kill(os.getpid(), signal.SIGSTOP)\n"
+            "c.mark_checkpoint('enter:w:a#inv_1_t1')\nt = time.perf_counter()\n"
+            "while time.perf_counter() - t < 0.2:\n    pass\n"
+            "c.mark_checkpoint('exit:w:b#inv_1_t1')\nr = c.get_final_measurements()\n"
+            "print(json.dumps([r['sampler'], rt.measurement_validity(r['measurements'], r['sampler'], {}, rt._measurement_cfg())]))\n")
+        p = subprocess.run([sys.executable, "w.py"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "PYTHONPATH": str(_CG_REPO), "CODEGREEN_PROVIDERS": "intel_rapl|amd_rapl"})
+        sampler, v = json.loads(p.stdout.splitlines()[-1])
+        assert sampler["last_ns"] - sampler["first_ns"] > 4e8 and sampler["max_gap_ns"] < 1e8
+        assert v["reasons"] == [], v["detail"]

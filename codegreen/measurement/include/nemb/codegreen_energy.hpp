@@ -319,7 +319,7 @@ public:
         size_t buffer_capacity{0}, readings{0};
         bool wrapped{false};
         uint64_t rejected_readings{0}, failed_reads{0}, provider_restarts{0}, dropped_checkpoints{0};
-        uint64_t first_ns{0}, last_ns{0}, median_gap_ns{0}, max_gap_ns{0};
+        uint64_t first_ns{0}, last_ns{0}, median_gap_ns{0}, max_gap_ns{0};  // gaps: readings bracketing the markers
         int affinity_cpus{0}, sampler_affinity_cpus{0};
         std::string marker_reads{"interpolated"};  // markers are interpolated between bracketing readings
         std::vector<ProviderInfo> providers;

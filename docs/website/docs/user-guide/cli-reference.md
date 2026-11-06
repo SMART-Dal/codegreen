@@ -633,7 +633,9 @@ the same functions (`codegreen_runtime.measurement_validity`).
 `sampler` (`measure`, `run`, and each `project` run) describes the sampler for
 that run: `interval_ms` (configured), `interval_ms_min`, `interval_ms_max`,
 `buffer_capacity`, `readings`, `wrapped`, `rejected_readings`, `failed_reads`,
-`dropped_checkpoints`, `first_ns`, `last_ns`, `median_gap_ns`, `max_gap_ns`,
+`dropped_checkpoints`, `first_ns`, `last_ns`, `median_gap_ns`, `max_gap_ns`
+(NEMB: over the readings bracketing the markers, so setup before the root
+window does not count; the whole sampler life when there are no markers),
 `affinity_cpus` (CPUs the measured process may run on),
 `sampler_affinity_cpus`, `marker_reads` (`interpolated` for NEMB, `last_poll`
 for the Java standalone poller), `config_path` and `providers`: one object per
