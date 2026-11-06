@@ -208,7 +208,7 @@ def _deep_merge(base: Dict, over: Dict) -> Dict:
     return base
 
 
-def _load_config() -> Dict:
+def load_config() -> Dict:
     """The bundled config.json deep-merged with the active one (_config_path), so an older user config cannot drop
     a key. A missing or unparsable file raises, naming it; there are no silent defaults."""
     out: Dict = {}
@@ -222,7 +222,7 @@ def _load_config() -> Dict:
 
 def _report_config() -> Dict:
     """Report/quality thresholds (measurement.report in config.json)."""
-    return _load_config()["measurement"]["report"]
+    return load_config()["measurement"]["report"]
 
 
 # --- Measurement validity policy ---------------------------------------------
@@ -232,7 +232,7 @@ def _report_config() -> Dict:
 
 def _measurement_cfg() -> Dict[str, Any]:
     """measurement.report.validity plus the measurement keys the CLI resolves sensors and toolchains from."""
-    m = _load_config()["measurement"]
+    m = load_config()["measurement"]
     return {**m["report"]["validity"], "sensor_providers": m["sensor_providers"],
             "default_sensors": m["default_sensors"], "run_sampler_interval_ms": m["run_path"]["sampler_interval_ms"],
             "toolchain": m["toolchain"], "outlier_method": m["report"]["outlier_method"],
@@ -1052,12 +1052,12 @@ _BYTES_PER_SAMPLE_EST = 800
 
 def _bundled_sample_interval_ms() -> int:
     """The NEMB sampler period, measurement.nemb.coordinator.measurement_interval_ms."""
-    return int(_load_config()["measurement"]["nemb"]["coordinator"]["measurement_interval_ms"])
+    return int(load_config()["measurement"]["nemb"]["coordinator"]["measurement_interval_ms"])
 
 
 def _monitor_config() -> Dict:
     """Monitor knobs (config.json `monitor.*`). An unreadable config raises; SIGHUP reload keeps the old values."""
-    return _load_config()["monitor"]
+    return load_config()["monitor"]
 
 
 def _quality_label(cv_percent: float) -> str:

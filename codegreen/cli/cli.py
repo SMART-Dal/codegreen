@@ -43,7 +43,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
-    _config_path, _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
+    _config_path, load_config as _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
     measurement_validity, run_validity, resolution_ns, function_quality, providers_env, _poller_sampler,
     _checkpoint_events, _replay_checkpoint_events, _read_nemb_json,
 )
