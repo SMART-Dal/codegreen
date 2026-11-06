@@ -309,5 +309,20 @@
     "_comment": "CPU hardware counters (codegreen.analysis.hwcounters); perf: the perf binary every counter and event-sampler run uses. Perf event names per architecture live in codegreen/hw_events/*.json. attribution: logical events sampled with call stacks, one extra non-measured run each; the value is the number of events between samples (a prime, so samples do not lock step with loops).",
     "perf": "perf",
     "attribution": {"cache_misses": 10007}
+  },
+  "gpu_metrics": {
+    "_comment": "codegreen.analysis.gpu_metrics on profiled runs only: series_interval_ms of the device series, ncu replay counters (launch_count kernels), roofline.latency_pct set a priori (a kernel whose DRAM and SM speed-of-light shares both stay under it is latency/launch bound). peaks: per-device datasheet values {device name: {dram_gbps, fp32_tflops, source}}, host data declared in the user config; none ship here.",
+    "series_interval_ms": 50,
+    "ncu": {
+      "launch_count": 200,
+      "metrics": {
+        "dram_pct": "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+        "sm_pct": "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+        "occupancy_pct": "sm__warps_active.avg.pct_of_peak_sustained_active",
+        "duration_ns": "gpu__time_duration.sum"
+      }
+    },
+    "roofline": {"latency_pct": 30.0},
+    "peaks": {}
   }
 }
