@@ -578,7 +578,7 @@ CodeGreen supports environment variables in config values:
 | `CODEGREEN_DEBUG` | Enable debug output |
 | `CODEGREEN_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `CODEGREEN_CHECKPOINT_THROTTLE_MS` | Minimum interval (ms) between checkpoint recordings; reduces overhead for high-frequency checkpoints |
-| `CODEGREEN_PROVIDERS` | Comma-separated NEMB provider names (`intel_rapl`, `amd_rapl`, `nvidia_gpu`, `amd_gpu`, ...). Only these are initialized; an unknown or failing one is an error. Set by `measure --sensors` |
+| `CODEGREEN_PROVIDERS` | Comma-separated NEMB provider names (`intel_rapl`, `amd_rapl`, `nvidia_gpu`, `amd_gpu`, ...). Only these are initialized; an unknown or failing one is an error. Set from `--sensors` (`measure`, `run`, `project`) or `measurement.default_sensors` |
 | `CC` / `CXX` | Compiler for instrumented C / C++ in `measure` (overrides `measurement.toolchain`) |
 
 ---

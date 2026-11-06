@@ -12,7 +12,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - `measure`, `run` and `project` exit 3 on an invalid measurement, with `success: false` and `error: "invalid_measurement: CODE[,CODE]"` in `--json` output. Set `measurement.report.validity.fail_on_invalid` to `false` to keep exit 0 and only report.
 - One policy: the rules live in `codegreen_runtime` (stdlib only). The Python runtime embeds the verdict in its result block; the CLI adds process-level reasons and computes the same verdict for NEMB's C, C++ and Java blocks. `Session`, `Monitor`, `run` and `measure-workload` use the same block.
 - Gaps are judged by the sampler's `marker_reads` (`measurement.report.validity.gap_policy`): `interpolated` (NEMB) markers make a starved sampler fatal (`SAMPLER_STARVED`); `last_poll` (Java standalone poller) markers make a gap the warning `SAMPLER_GAP` and a failed read fatal (`PROVIDER_READ_FAILED`). Resolutions come from provider facts (`update_interval_ms`) and the sampler interval, not a RAPL constant.
-- `--sensors` (on `measure` and `run`) and `measurement.default_sensors` (default `"all"`; also used by `project`) select the NEMB providers through `measurement.sensor_providers` and `CODEGREEN_PROVIDERS`, one group per sensor with alternatives (`intel_rapl|amd_rapl`). A requested sensor that cannot initialize is `NEMB_INIT_FAILED`. A total mixing GPU and CPU providers carries the warning `GPU_IN_TOTAL`.
+- `--sensors` (on `measure`, `run` and `project`) and `measurement.default_sensors` (default `"all"`) select the NEMB providers through `measurement.sensor_providers` and `CODEGREEN_PROVIDERS`, one group per sensor with alternatives (`intel_rapl|amd_rapl`). A requested sensor that cannot initialize is `NEMB_INIT_FAILED`. A total mixing GPU and CPU providers carries the warning `GPU_IN_TOTAL`.
 - `CODEGREEN_PROVIDERS` (comma-separated items, each a registry name or `a|b` alternatives) restricts NEMB to those providers and fails loud on an unknown one or an item with no working provider. Without it every provider that initializes is used, one per counter group (`intel_rapl` and `amd_rapl` read the same package counter).
 - Config: the CLI, the runtime and the native library read one file (`CODEGREEN_CONFIG`, else `~/.codegreen/config.json`, else the bundled one); a file that does not parse raises. `measurement.nemb.providers` is keyed by registry name.
 
@@ -54,6 +54,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 
 - Each run carries `sampler`, `validity` and `resolution_ns`; the top-level `validity` merges every run, and an invalid result exits 3.
 - Each function has `quality`: `measured`, `aggregate_only` (summed time at least `aggregate_min_factor` resolutions) or `below_resolution`.
+- New `--sensors` option (no short form: `-s` is `--source-glob`).
 - Java standalone runs build `sampler` from the JVMs' `CG_CP_META` records; a poller gap (GC safepoint) is the warning `SAMPLER_GAP` and widens the resolution to the largest gap, a failed poller read is `PROVIDER_READ_FAILED`.
 
 ### Python API

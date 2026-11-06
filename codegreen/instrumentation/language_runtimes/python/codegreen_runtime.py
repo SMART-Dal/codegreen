@@ -311,7 +311,7 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
     names = [p["name"] for p in sampler["providers"]]
     gpu = [p["name"] for p in sampler["providers"] if p["hardware_type"] == "gpu"]
     if gpu and len(gpu) < len(names):
-        w["GPU_IN_TOTAL"] = (f"total sums GPU provider(s) {gpu} with {sorted(set(names) - set(gpu))}; select providers "
+        w["GPU_IN_TOTAL"] = (f"total sums GPU provider(s) {gpu} with {sorted(set(names) - set(gpu))}; select sensors "
                              "with --sensors or measurement.default_sensors")
     held = {p["name"]: p["held"] for p in sampler["providers"] if p["held"]}
     if held:
@@ -456,7 +456,7 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
     elif mean_s < (slow_s := cfg["min_run_updates"] * resolution_ns(sampler, boundary=True) / 1e9):
         coarse = [p["name"] for p in sampler["providers"] if p["update_interval_ms"] * 1e-3 * cfg["min_run_updates"] > mean_s]
         w["COARSE_PROVIDER_RESOLUTION"] = (f"mean duration {mean_s:.6f} s < {cfg['min_run_updates']} update intervals of "
-                                           f"{coarse} ({slow_s} s): their share of the total is not resolved; select providers with --sensors")
+                                           f"{coarse} ({slow_s} s): their share of the total is not resolved; select sensors with --sensors")
     return _validity(r, w)
 
 

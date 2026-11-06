@@ -70,8 +70,8 @@ initializes). Only those providers are summed. A requested sensor whose
 providers all fail to initialize makes the run invalid (`NEMB_INIT_FAILED`).
 With the default `"all"`, every provider that initializes is summed; a total
 that mixes GPU and CPU providers carries the warning `GPU_IN_TOTAL`. Use
-`--sensors rapl` for CPU-only energy. The same option exists on `run`, and
-`project` uses `measurement.default_sensors`.
+`--sensors rapl` for CPU-only energy. The same option exists on `run` and
+`project`.
 
 **JSON output.** Besides `instrumentation_audit` and `error`:
 
@@ -278,6 +278,7 @@ codegreen project [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} PROJECT_DIR
 | `-o, --output PATH` | Output directory for results |
 | `--sync-device TEXT` | Accelerator to synchronise at every probe (Python: `cuda`). Runs `torch.cuda.synchronize()` before each enter/exit timestamp so a frame owns the device work it launched. Costs one device drain per probe (no CPU/GPU overlap). Fails if no synchronisation ran. Off by default |
 | `--min-attribution-pct FLOAT` | Floor for `attribution_pct` (exclusive function energy / total run energy; default: 25.0). Below it the result carries an `attribution_warning` |
+| `--sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors summed into the energy, as on `measure` (default: `measurement.default_sensors`) |
 
 `--source-glob` is repeatable. If an explicit glob matches no files, or no
 checkpoint records are captured, the command exits 1. JSON output includes

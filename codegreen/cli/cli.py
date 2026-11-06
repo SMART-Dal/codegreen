@@ -3600,6 +3600,7 @@ def project_energy(
     min_attribution_pct: Annotated[float, typer.Option("--min-attribution-pct", help=(
         "Floor for attribution_pct (exclusive function energy / total run energy). Below it the result carries an "
         "attribution_warning: per-function shares are relative to the attributed energy only and are not meaningful."))] = 25.0,
+    sensors: Annotated[Optional[List[SensorType]], typer.Option("--sensors", help="Sensors summed into the energy (default: measurement.default_sensors)")] = None,
 ):
     """Profile a project's energy consumption with per-function attribution.
 
@@ -3623,7 +3624,7 @@ def project_energy(
         raise typer.Exit(1)
 
     vcfg = _measurement_cfg()
-    _select_providers(os.environ, None, vcfg)  # measurement.default_sensors, for the run session and the children
+    _select_providers(os.environ, sensors, vcfg)  # for the run session and the children
     # Load project config from language JSON config (config-driven, not hardcoded)
     _lang_config = _load_language_config(language.value)
     proj_cfg = _lang_config.get("project_config", {})

@@ -593,6 +593,16 @@ class TestCLI:
         _, out, _, _ = _cli_run("run", "-n", "2", "-w", "0", "--", *self.SMALL_WORKLOAD)
         assert verdict.search(out)
 
+    def test_project_sensors_select_providers(self, tmp_path: Path) -> None:
+        """project --sensors selects the measured providers like measure and run (CODEGREEN_PROVIDERS)."""
+        (tmp_path / "main.py").write_text("def spin(n):\n    return sum(i * i for i in range(n))\n\n\n"
+                                          "if __name__ == '__main__':\n    spin(3_000_000)\n")
+        out, _, err, _ = _cli_run("project", "python", str(tmp_path), "--run-cmd", "python3 main.py",
+                                  "--sensors", "rapl", "--json")
+        assert out is not None, err
+        assert {p["hardware_type"] for p in out["runs"][0]["sampler"]["providers"]} == {"cpu"}
+        assert "GPU_IN_TOTAL" not in out["validity"]["warnings"]
+
     def test_include_warmup_separates_counts(self) -> None:
         out, _, _, _ = _cli_run("run", "--json", "-n", "3", "-w", "2", "--include-warmup",
                                 "--", *self.SMALL_WORKLOAD)
