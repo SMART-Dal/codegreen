@@ -351,6 +351,163 @@ def test_python_same_named_methods_get_distinct_checkpoint_names():
     assert "'forward', 'enter'" in out
 
 
+JAVA_OVERLOADS = """\
+class Util {
+    static int highbits(int x) {
+        return x >>> 16;
+    }
+
+    static int highbits(long x) {
+        return (int) (x >>> 48);
+    }
+
+    static int solo(int x) {
+        return x;
+    }
+
+    static void many(java.util.List<String> a, int... xs) {
+        a.size();
+    }
+
+    void recv(Util this, /* c */ final int y[], @Deprecated long... zs) {
+        y[0] = 1;
+    }
+}
+"""
+
+JAVA_OVERLOADS_ONE_LINE = """\
+class V {
+    static int hb(int x) { return x >>> 16; }
+    static int hb(long x) { return (int) (x >>> 48); }
+    static int one(int x) { return x; }
+}
+"""
+
+
+def _enter_points(code, lang):
+    from codegreen.instrumentation.language_engine import LanguageEngine
+    engine = LanguageEngine()
+    result = engine.analyze_code(code, lang)
+    assert result.success, result.error
+    return engine, result, {p.metadata["record_name"]: p for p in result.instrumentation_points if p.type == "function_enter"}
+
+
+def test_java_overloads_are_separate_records_with_line_and_signature():
+    """`Util.highbits(int)` and `(long)` were one record `Util.highbits`; the runtime aggregates by emitted name."""
+    engine, result, enters = _enter_points(JAVA_OVERLOADS, "java")
+    def line(text):
+        return next(i for i, ln in enumerate(JAVA_OVERLOADS.splitlines(), 1) if text in ln)
+
+    l_int, l_long = line("highbits(int"), line("highbits(long")
+    assert set(enters) == {f"Util.highbits@{l_int}", f"Util.highbits@{l_long}", "Util.solo", "Util.many", "Util.recv"}
+    assert [enters[f"Util.highbits@{n}"].metadata["decl_line"] for n in (l_int, l_long)] == [l_int, l_long]
+    assert enters[f"Util.highbits@{l_int}"].metadata["signature"] == "(int)"
+    assert enters[f"Util.highbits@{l_long}"].metadata["signature"] == "(long)"
+    assert enters["Util.solo"].metadata["decl_line"] == line("solo(int") and enters["Util.solo"].metadata["signature"] == "(int)"
+    assert enters["Util.many"].metadata["signature"] == "(java.util.List<String>, int...)"
+    assert enters["Util.recv"].metadata["signature"] == "(int[], long...)"
+    out = engine.instrument_code(JAVA_OVERLOADS, result.instrumentation_points, "java",
+                                 pre_normalised_source=result.metadata["normalised_source"])
+    for name in enters:
+        assert f'"{name}", "enter"' in out and f'"{name}", "exit"' in out
+    assert '"Util.highbits", ' not in out
+
+
+def test_java_overload_lines_refer_to_the_original_source_after_normalisation():
+    """One-line bodies are split onto several lines before analysis; reported lines must still be the file's."""
+    _, result, enters = _enter_points(JAVA_OVERLOADS_ONE_LINE, "java")
+    assert result.metadata["normalised_source"] != JAVA_OVERLOADS_ONE_LINE
+    assert {n: p.metadata["decl_line"] for n, p in enters.items()} == {"V.hb@2": 2, "V.hb@3": 3, "V.one": 4}
+
+
+def test_python_same_named_nested_functions_get_line_suffix_and_no_signature():
+    code = ("def a():\n    def helper():\n        return 1\n    return helper()\n\n"
+            "def b():\n    def helper():\n        return 2\n    return helper()\n")
+    _, _, enters = _enter_points(code, "python")
+    assert set(enters) == {"a", "b", "helper@2", "helper@7"}
+    assert all("signature" not in p.metadata for p in enters.values())
+
+
+JAVA_OVERLOAD_BODIES = """\
+class K {
+    static int side(String t, int v) { return v; }
+    int x;
+    K(int a) {
+        x = side("ctor-int", a);
+    }
+    K(long a) {
+        x = side("ctor-long", (int) a);
+    }
+    int m(int a) {
+        int t = side("m-int", a);
+        return side("m-int-ret", t + 1);
+    }
+    int m(long a) {
+        int t = side("m-long", (int) a);
+        return side("m-long-ret", t + 2);
+    }
+}
+"""
+
+
+def test_java_overload_probes_inside_each_function_share_its_renamed_frame_name():
+    import re
+    engine, result, enters = _enter_points(JAVA_OVERLOAD_BODIES, "java")
+    out = engine.instrument_code(JAVA_OVERLOAD_BODIES, result.instrumentation_points, "java",
+                                 pre_normalised_source=result.metadata["normalised_source"])
+    def at(text):
+        return next(i for i, ln in enumerate(JAVA_OVERLOAD_BODIES.splitlines(), 1) if text in ln)
+
+    names = {"ctor-int": f"K.K@{at('K(int a)')}", "ctor-long": f"K.K@{at('K(long a)')}",
+             "m-int": f"K.m@{at('m(int a)')}", "m-long": f"K.m@{at('m(long a)')}"}
+    names |= {"m-int-ret": names["m-int"], "m-long-ret": names["m-long"]}
+    assert len(set(names.values())) == 4 and set(enters) == set(names.values()) | {"K.side"}
+    rec = {p.metadata["function_start"]: p.metadata["record_name"] for p in enters.values()}
+    assert all(p.metadata["qualified_name"] == rec[p.metadata["function_start"]] for p in result.instrumentation_points)
+    stack, entered = [], []
+    for m in re.finditer(r'checkpoint\("[^"]*", "([^"]+)", "(enter|exit)"\)|\bside\("([a-z-]+)"', out):
+        if m.group(3):
+            assert stack and stack[-1] == names[m.group(3)], f"{m.group(3)} outside its frame, stack {stack}"
+        elif m.group(2) == "enter":
+            stack.append(m.group(1))
+            entered.append(m.group(1))
+        else:
+            assert stack and stack.pop() == m.group(1), f"unbalanced exit {m.group(1)}"
+    assert not stack and sorted(entered) == sorted(set(names.values()) | {"K.side"})
+
+
+def test_signature_only_where_the_language_configures_parameter_signature():
+    _, _, java = _enter_points("class Z {\n    static int z() {\n        return 1;\n    }\n}\n", "java")
+    assert java["Z.z"].metadata["signature"] == "()"
+    _, _, py = _enter_points("def z():\n    return 1\n\ndef y(a):\n    return a\n", "python")
+    assert all("signature" not in p.metadata for p in py.values())
+
+
+def test_unlocated_overloads_stay_one_flagged_record(caplog):
+    """Without declaration lines (normalisation changed the function count) overloads keep the shared name and are
+    flagged with their count instead of taking a line from the normalised source."""
+    from codegreen.instrumentation.language_engine import LanguageEngine
+    engine = LanguageEngine()
+    normalise = engine._normalise
+    engine._normalise = lambda src, lang: normalise(src, lang).replace("class Util {\n", "class Util {\n    void extra() {\n    }\n", 1)
+    result = engine.analyze_code(JAVA_OVERLOADS, "java")
+    enters = {p.metadata["record_name"]: p for p in result.instrumentation_points if p.type == "function_enter"}
+    assert {n: (p.metadata["decl_line"], p.metadata.get("merged_declarations"), "signature" in p.metadata)
+            for n, p in enters.items() if n.startswith("Util.highbits")} == {"Util.highbits": (None, 2, False)}
+    assert "2 functions share the record Util.highbits" in caplog.text
+
+
+def test_bare_name_records_are_flagged_and_emitted_unchanged():
+    code = "int f(int x) {\n    return x;\n}\n\nint f(long x) {\n    return 1;\n}\n"
+    engine, result, _ = _enter_points(code, "cpp")
+    enters = [p for p in result.instrumentation_points if p.type == "function_enter"]
+    assert [(p.metadata["record_name"], p.metadata["merged_declarations"]) for p in enters] == [("f", 2), ("f", 2)]
+    assert all("signature" not in p.metadata for p in enters)
+    out = engine.instrument_code(code, result.instrumentation_points, "cpp",
+                                 pre_normalised_source=result.metadata["normalised_source"])
+    assert out.count('"f");') == 2 and "@" not in out
+
+
 # --- Function frames: every exit path closes the frame with the qualified name, after the return value ---
 
 def _instrument(lang, code):
@@ -371,6 +528,11 @@ def _drop_helpers(lines):
     return [ln for ln in lines if ln.partition(" ")[2] not in HELPER_FRAMES]
 
 
+def _base(name):
+    """Overloads are emitted as `Cls.m@<line>`; the programs' own `eval` tags name the function without the suffix."""
+    return name.partition("@")[0]
+
+
 def _verify_trace(lines):
     """`enter F`/`exit F` frames nest; `eval F` (work inside F's return expression) runs while F is innermost."""
     stack, seen = [], []
@@ -382,7 +544,7 @@ def _verify_trace(lines):
         elif kind == "exit":
             assert stack and stack.pop() == name, f"unbalanced exit: {ln} with stack {stack}"
         elif kind == "eval":
-            assert stack and stack[-1] == name, f"{ln} ran outside its frame, stack {stack}"
+            assert stack and _base(stack[-1]) == name, f"{ln} ran outside its frame, stack {stack}"
     assert not stack, f"frames left open: {stack}"
     return seen
 
@@ -407,7 +569,7 @@ def _check_program(tmp_path, lang, files, main_file, build, run, expect_frames, 
             _run(cmd, d)
         stdout[tag] = _run(run, d)
     assert [ln for ln in stdout["inst"] if not ln.startswith(("enter ", "exit "))] == stdout["plain"], "instrumentation changed program output"
-    frames = _verify_trace(stdout["inst"])
+    frames = [_base(f) for f in _verify_trace(stdout["inst"])]
     assert set(expect_frames) <= set(frames), f"missing frames: {set(expect_frames) - set(frames)}"
     assert skipped == set(expect_skipped)
     assert not (set(expect_skipped) & set(frames))
