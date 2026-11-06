@@ -43,7 +43,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
-    _config_path, _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
+    _config_path, load_config as _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
     measurement_validity, run_validity, resolution_ns, function_quality, providers_env, _poller_sampler,
     _checkpoint_events, _replay_checkpoint_events, _read_nemb_json,
 )
@@ -1972,6 +1972,27 @@ def show_info(
         config_table.add_row("Validation Enabled", str(pmt_config.get("validation_enabled", True)))
         
         console.print(config_table)
+
+def capability_report(kinds: Optional[List[str]] = None) -> dict:
+    """Availability of every registered metric provider, GPU provider and language sampler on this host, or of the
+    registries named in kinds."""
+    from codegreen.analysis import gpu_metrics, hwcounters, languages, line_sampling  # noqa: F401 (registration)
+    from codegreen.analysis.metrics import PROVIDERS
+    hwcounters.provider()
+    regs = {"metric": PROVIDERS, "gpu_series": gpu_metrics.GPU_SERIES, "gpu_replay": gpu_metrics.GPU_REPLAY,
+            "gpu_framework": gpu_metrics.GPU_FRAMEWORKS, "language": languages.LANGUAGES}
+    unknown = sorted(set(kinds or []) - set(regs))
+    if unknown:
+        raise typer.BadParameter(f"unknown registries {unknown}; known: {sorted(regs)}")
+    return {k: [a.to_dict() for a in regs[k].probe()] for k in kinds or regs}
+
+
+@app.command("capabilities", rich_help_panel="Diagnostics")
+def capabilities(kinds: Annotated[Optional[List[str]], typer.Argument(
+        help="registries to probe (metric = hardware counters, gpu_series, gpu_replay, gpu_framework, language); default all")] = None):
+    """Report, as JSON, which metrics, GPU providers and language samplers this host supports (capability probes only)."""
+    print(json.dumps(capability_report(kinds), indent=2, default=str))
+
 
 @app.command("doctor", rich_help_panel="Diagnostics")
 def diagnose(

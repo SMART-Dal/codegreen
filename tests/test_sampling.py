@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from codegreen.analysis.sampling import java_agent_command, java_agent_option, parse_collapsed
+from codegreen.analysis.sampling import java_agent_command, java_agent_option, jfr_to_collapsed, parse_collapsed
 
 
 def test_collapsed_shares_self_total_and_inlining(tmp_path):
@@ -50,7 +50,67 @@ def test_jmh_forks_get_the_agent_once_other_jvms_via_tool_options(tmp_path):
     assert argv[-2:] == ["-jvmArgsAppend", "-agentpath:x"] and "JAVA_TOOL_OPTIONS" not in env
     argv, env = java_agent_command(["java", "-jar", str(app)], "-agentpath:x", {"JAVA_TOOL_OPTIONS": "-Xmx1g"})
     assert argv == ["java", "-jar", str(app)] and env["JAVA_TOOL_OPTIONS"] == "-Xmx1g -agentpath:x"
+    argv, _ = java_agent_command(["java", "-jar", str(jmh), "Bench", "-jvmArgsAppend", "-Xms4g -Xmx4g", "-rf", "json"], "-agentpath:x", {})
+    assert argv == ["java", "-jar", str(jmh), "Bench", "-jvmArgsAppend", "-Xms4g -Xmx4g -agentpath:x", "-rf", "json"]
 
+
+
+def _release(tmp_path):
+    (tmp_path / "ap" / "lib").mkdir(parents=True)
+    (tmp_path / "ap" / "lib" / "libasyncProfiler.so").write_text("")
+    return str(tmp_path / "ap")
+
+
+LINES = ("java/lang/Thread.run:829;org/rb/Bitmap.add:10;org/rb/Util.low:5 30\n"
+         "java.lang.Thread.run:829;org.rb.Bitmap.add:10;org.rb.Util.low:5 20\n"
+         "java.lang.Thread.run:829;org.rb.Bitmap.add:12 25\n"
+         "java.lang.Thread.run:829;org.rb.Bitmap.add:12;org.rb.Bitmap$Node.lambda$add$0:0 15\n"
+         "java.lang.Thread.run:829;org.rb.Bitmap.add:10;org.rb.Util.low:5;libjvm.so 6\n"
+         "JavaThread::thread_main_inner 4\n")
+
+
+def test_jfr_agent_option_and_converter_command(tmp_path, monkeypatch):
+    root = _release(tmp_path)
+    jfr = java_agent_option(tmp_path / "o", 997, root=root, fmt="jfr")
+    assert jfr.endswith(f"event=cpu,interval=997us,jfr,file={tmp_path}/o/%p.jfr")
+    assert java_agent_option(tmp_path / "o", 997, root=root).endswith(f"interval=997us,ann,collapsed,file={tmp_path}/o/%p.collapsed")
+    with pytest.raises(ValueError, match="unknown async-profiler output"):
+        java_agent_option(tmp_path / "o", 997, root=root, fmt="flamegraph")
+    seen = []
+
+    def fake(cmd, **kw):
+        import subprocess
+        seen.append(cmd)
+        Path(cmd[-1]).write_text("a.B.m:1 1\n")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr("subprocess.run", fake)
+    outs = jfr_to_collapsed([tmp_path / "o" / "42.jfr"], tmp_path / "c", root=root)
+    assert outs == [tmp_path / "c" / "42.collapsed"]
+    assert seen == [[f"{root}/bin/jfrconv", "--cpu", "--lines", "-o", "collapsed", str(tmp_path / "o" / "42.jfr"), str(outs[0])]]
+
+
+def test_jfrconv_failures_carry_the_command_and_stderr(tmp_path, monkeypatch):
+    import subprocess
+    root = _release(tmp_path)
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 3, "", "bad jfr\n"))
+    with pytest.raises(RuntimeError, match=r"jfrconv --cpu --lines .* exited 3: bad jfr"):
+        jfr_to_collapsed([tmp_path / "1.jfr"], tmp_path / "c", root=root)
+
+    def missing(cmd, **kw):
+        raise FileNotFoundError(2, "No such file")
+    monkeypatch.setattr("subprocess.run", missing)
+    with pytest.raises(FileNotFoundError, match=r"jfrconv --cpu --lines .*No such file"):
+        jfr_to_collapsed([tmp_path / "1.jfr"], tmp_path / "c", root=root)
+
+
+def test_method_shares_accept_line_suffixed_frames_and_leave_inlining_unknown(tmp_path):
+    f = tmp_path / "1.collapsed"
+    f.write_text(LINES)
+    m = parse_collapsed([f], annotated=False)["methods"]
+    assert m["org.rb.Util.low"]["self_pct"] == 50.0 and m["org.rb.Util.low"]["total_pct"] == 56.0
+    assert m["org.rb.Bitmap.add"]["self_pct"] == 25.0 and m["org.rb.Bitmap.add"]["total_pct"] == 96.0
+    assert all(v["inlined_pct"] is None for v in m.values())
+    assert parse_collapsed([f])["methods"]["org.rb.Util.low"]["inlined_pct"] == 0.0
 
 def test_energy_by_method_splits_each_interval_across_its_samples():
     from codegreen.analysis.sampling import energy_by_method
@@ -70,3 +130,12 @@ def test_energy_by_method_refuses_misaligned_clocks():
     with pytest.raises(ValueError, match="clocks not aligned"):
         energy_by_method([(10**18, ("m",))], [(0, 0.0), (10, 1.0)])
     assert isinstance(monotonic_minus_realtime_ns(), int)
+
+
+def test_energy_by_method_keeps_a_decreasing_series_signed_and_flags_it_invalid():
+    from codegreen.analysis.sampling import energy_by_method
+    r = energy_by_method([(5, ("m",)), (15, ("m",))], [(0, 2.0), (10, 1.0), (20, 4.0)])
+    assert r["methods"]["m"]["self_j"] == pytest.approx(2.0) and r["energy_j"] == 2.0
+    assert (r["valid"], r["invalid_reason"], r["negative_intervals"]) == (False, "negative_energy", 1)
+    ok = energy_by_method([(5, ("m",))], [(0, 0.0), (10, 1.0)])
+    assert (ok["valid"], ok["invalid_reason"], ok["negative_intervals"]) == (True, None, 0)

@@ -150,6 +150,7 @@ setup(
             "bin/codegreen",
             "bin/codegreen.exe",
             "config.json",
+            "hw_events/*.json",
         ],
     },
     zip_safe=False,

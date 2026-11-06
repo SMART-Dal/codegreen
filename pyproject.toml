@@ -123,6 +123,7 @@ find = {where = ["."], include = [
 # declare them here so setuptools knows the wheel is platform-specific.
 "codegreen" = [
     "config.json",
+    "hw_events/*.json",
     "lib/*.so",
     "lib/*.dylib",
     "lib/*.dll",

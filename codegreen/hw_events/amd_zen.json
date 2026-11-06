@@ -1,0 +1,2 @@
+{"name": "amd_zen", "priority": 10, "match": {"vendor_id": "AuthenticAMD", "cpu family": {"min": 23}},
+ "events": {"l1i_misses": "L1-icache-load-misses", "dtlb_misses": "dTLB-load-misses"}}
