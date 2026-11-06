@@ -194,7 +194,7 @@ std::map<std::string, MeasurementCoordinator::ProviderCounts> MeasurementCoordin
     std::map<std::string, ProviderCounts> counts;
     for (const auto& [name, state] : providers_)
         counts[name] = {state.rejected, state.provider->get_held_readings(), state.provider->get_boundary_held(),
-                        state.provider->get_boundary_held_max_ns(), state.restarts};
+                        state.provider->get_boundary_held_max_ns(), state.restarts, state.provider->counter_checks()};
     return counts;
 }
 

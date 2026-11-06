@@ -311,6 +311,26 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
                                    f"interval (longest span {stale}): that energy is missing beyond its resolution")
 
 
+def _counter_divergence(sampler: Dict, cfg: Dict[str, Any], r: Dict[str, str], w: Dict[str, str]) -> None:
+    """providers[].counter_check: per domain, the energy of a provider's boundary counter and of its power integral
+    over the same span, and the counter reads in it. Another reader of the counter (nvidia-smi power.draw.instant,
+    DCGM) makes the counter lose energy. They may differ by counter_check.tolerance of the integral plus, per counter
+    read and at the span's end, one update interval of the span's mean power (a read returns the value of the last
+    update and discards what accrued since: the counter's own resolution); beyond that the boundary energies are
+    corrupted."""
+    cc, bad = cfg["counter_check"], {}
+    for p in sampler["providers"]:
+        res_s = (p["update_interval_ms"] or sampler["interval_ms_max"]) / 1e3
+        for dom, k in p["counter_check"].items():
+            slack = (k["reads"] + 1) * res_s * 1e9 / k["span_ns"] if k["span_ns"] else 0
+            if k["span_ns"] and abs(k["counter_j"] - k["integral_j"]) > (cc["tolerance"] + slack) * k["integral_j"]:
+                bad[f"{p['name']}.{dom}"] = f"counter {k['counter_j']:.3f} J, integral {k['integral_j']:.3f} J over {k['span_ns'] / 1e9:.3f} s"
+    if bad:
+        {"fatal": r, "warning": w}[cc["severity"]]["COUNTER_INTEGRAL_DIVERGED"] = (
+            f"boundary energy counter and power integral disagree beyond tolerance {cc['tolerance']}: {bad}; another "
+            "process reading the counter or instant power (nvidia-smi power.draw.instant, DCGM) discards counter energy")
+
+
 def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False, finest: bool = False) -> float:
     """Smallest energy window the run can resolve: per provider its update interval, and, unless the provider reads a
     counter synchronously at the window boundaries (boundary=True and its boundary_source is a counter), the sampler
@@ -355,6 +375,7 @@ def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Di
     if sampler["rejected_readings"]:
         w["READINGS_REJECTED"] = f"{sampler['rejected_readings']} reading(s) rejected; markers interpolate across them"
     _provider_warnings(sampler, w)
+    _counter_divergence(sampler, cfg, r, w)
     if sampler["dropped_checkpoints"]:
         r["CHECKPOINT_CAP"] = (f"{sampler['dropped_checkpoints']} checkpoint(s) dropped at "
                                "measurement.report.max_checkpoints")
@@ -395,6 +416,7 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
         w["RESOLUTION_UNKNOWN"] = "the backend reports no provider update interval; RUN_BELOW_RESOLUTION not checked"
         return _validity(r, w)
     _provider_warnings(sampler, w)
+    _counter_divergence(sampler, cfg, r, w)
     integrated = [p["name"] for p in sampler["providers"] if p["boundary_source"] == "integrated_power"]
     if integrated:
         w["RUN_POWER_INTEGRATED"] = (f"run energy of {integrated} integrates sampled power (no energy counter at the run "
@@ -434,7 +456,11 @@ def _merge_samplers(samplers: List[Dict]) -> Optional[Dict]:
     for k in ("interval_ms_min", "first_ns", "affinity_cpus", "sampler_affinity_cpus"):
         out[k] = min(s[k] for s in samplers)
     for p in (p for s in samplers for p in s["providers"]):
-        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0, "boundary_held": 0})
+        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0, "boundary_held": 0, "counter_check": {}})
+        for d, k in p["counter_check"].items():
+            c = q["counter_check"].setdefault(d, dict.fromkeys(k, 0))
+            for f, v in k.items():
+                c[f] += v
         q.update(rejected=q["rejected"] + p["rejected"], held=q["held"] + p["held"],
                  boundary_held=q["boundary_held"] + p["boundary_held"],
                  boundary_held_max_ns=max(q["boundary_held_max_ns"], p["boundary_held_max_ns"]),
@@ -447,14 +473,15 @@ def _poller_sampler(records: List[Dict]) -> Optional[Dict]:
     """Sampler block of a run from in-process pollers' `CG_CP_META|<json>` records (one per JVM of the Java standalone
     runtime). A poller keeps no ring buffer, no gap distribution and no rejected readings, so those keys take what it
     does know: the configured interval for interval_ms_min/max, the mean gap for median_gap_ns (gap_statistic mean).
-    It takes no boundary reads, so its providers report no boundary holds."""
+    It takes no boundary reads, so its providers report no boundary holds and no counter_check."""
     if len({r["interval_ms"] for r in records}) > 1:
         raise ValueError(f"processes of one run polled at different periods: {sorted({r['interval_ms'] for r in records})} ms")
     return _merge_samplers([{"interval_ms_min": r["interval_ms"], "interval_ms_max": r["interval_ms"],
                              "median_gap_ns": (r["last_ns"] - r["first_ns"]) / (r["readings"] - 1) if r["readings"] > 1 else 0,
                              "gap_statistic": "mean", "rejected_readings": 0, "wrapped": False, "buffer_capacity": None,
                              "dropped_checkpoints": 0, **r,
-                             "providers": [{"boundary_held": 0, "boundary_held_max_ns": 0, **p} for p in r["providers"]]}
+                             "providers": [{"boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {}, **p}
+                                           for p in r["providers"]]}
                             for r in records])
 
 

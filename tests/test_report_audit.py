@@ -1817,7 +1817,7 @@ def _jprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", m
 
 
 def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
-    return {**_jprov(name, hw, source, ms), "boundary_held": 0, "boundary_held_max_ns": 0, **kw}
+    return {**_jprov(name, hw, source, ms), "boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {}, **kw}
 
 
 def _vsampler(**kw) -> Dict:
@@ -1885,6 +1885,33 @@ class TestValidity:
                      boundary_held_max_ns=span_ns)
         v = run_validity([5.0], 2.0, _vsampler(providers=[gpu]), _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == (["BOUNDARY_READ_HELD"] if warned else [])
+
+    @pytest.mark.parametrize("counter_j,span_s,reads,reasons", [
+        (135.4, 6.0, 4, []),            # measured without another reader: counter/integral 0.99
+        (11.9, 6.0, 4, ["COUNTER_INTEGRAL_DIVERGED"]),  # nvidia-smi power.draw.instant every 10 ms: 0.07
+        (124.0, 6.0, 4, []),            # 9 % off over 6 s: within tolerance 0.05 plus five 100 ms update intervals
+        (110.0, 6.0, 4, ["COUNTER_INTEGRAL_DIVERGED"]),
+        (110.0, 6.0, 10, []),           # each counter read may discard up to one update interval of energy
+        (110.0, 1.0, 4, []),
+    ])
+    def test_counter_integral_divergence(self, counter_j, span_s, reads, reasons):
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        k = {"gpu0": {"counter_j": counter_j, "integral_j": 136.5, "span_ns": int(span_s * 1e9), "reads": reads}}
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter", counter_check=k)
+        v = run_validity([45.0] * 3, 2.0, _vsampler(providers=[gpu]), _measurement_cfg())
+        assert v["reasons"] == reasons and v["warnings"] == {}
+        assert self._check(sampler=_vsampler(providers=[gpu]))["reasons"] == reasons
+        cfg = _measurement_cfg()
+        cfg["counter_check"] = {**cfg["counter_check"], "severity": "warning"}
+        assert list(run_validity([45.0] * 3, 2.0, _vsampler(providers=[gpu]), cfg)["warnings"]) == reasons
+
+    def test_counter_check_merges_across_processes(self):
+        from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import _merge_samplers
+        k = {"gpu0": {"counter_j": 1.0, "integral_j": 2.0, "span_ns": 3, "reads": 2}}
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, counter_check=k)
+        out = _merge_samplers([_vsampler(providers=[gpu]), _vsampler(providers=[gpu])])
+        assert out["providers"][0]["counter_check"] == {"gpu0": {"counter_j": 2.0, "integral_j": 4.0, "span_ns": 6, "reads": 4}}
+        assert k == {"gpu0": {"counter_j": 1.0, "integral_j": 2.0, "span_ns": 3, "reads": 2}}
 
     def test_gap_policy_is_config(self):
         from codegreen.cli.cli import _measurement_cfg
@@ -1981,6 +2008,7 @@ class TestValidity:
         assert (s["readings"], s["interval_ms_max"], s["median_gap_ns"], s["affinity_cpus"], s["processes"]) == \
             (1012, 1.0, 1_100_000, 4, 2)
         assert s["providers"][0]["update_interval_ms"] == 2.0 and s["providers"][0]["boundary_held"] == 0
+        assert s["providers"][0]["counter_check"] == {}
         v = measurement_validity(None, s, {}, _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
         v = measurement_validity(None, _poller_sampler([meta(5, 4_000_000, 1_000_000, failed=1)]), {}, _measurement_cfg())

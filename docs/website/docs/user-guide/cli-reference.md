@@ -571,6 +571,7 @@ warnings are not.
 | `ZERO_ENERGY` | measure, project | Root window measured 0 J |
 | `NEGATIVE_ENERGY` | measure, project, Session | Cumulative energy decreases between markers, or a task's energy is negative |
 | `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` resolutions |
+| `COUNTER_INTEGRAL_DIVERGED` | measure, run, project | A provider's boundary energy counter and its power integral (`providers[].counter_check`) differ by more than `counter_check.tolerance` of the integral plus one update interval of energy per counter read and at the end (a counter read discards what accrued since its last update). Another process reading the counter or instant power (`nvidia-smi --query-gpu=power.draw.instant`, DCGM) makes the NVML counter lose energy. Severity `counter_check.severity` (default fatal) |
 | `ZERO_ENERGY_RUNS` | run | At least one run read 0 J |
 | `NEGATIVE_ENERGY_RUNS` | run | At least one run read negative energy |
 | `AFFINITY_SINGLE_CPU` (warning) | measure, project | Measured process allowed on fewer than `min_affinity_cpus` CPUs; `SAMPLER_STARVED` is the fatal symptom |
@@ -604,7 +605,11 @@ with a total-energy counter read it there), `update_interval_ms`,
 `counter_group`, `rejected`, `held` (failed reads that kept the last good
 value), `boundary_held` (boundary reads answered from the previous read, since a
 fresh counter read within one update period would discard energy) and
-`boundary_held_max_ns` (the longest span such an answer covered). Runs of several processes (JVM forks) merge their records (counts add,
+`boundary_held_max_ns` (the longest span such an answer covered) and
+`counter_check` (per domain, `counter_j` and `integral_j`: the energy of the
+boundary counter and of the power integral from the first to the last counter
+read, `span_ns` apart, and `reads`, the counter reads in that span; empty for a
+provider with one energy source). Runs of several processes (JVM forks) merge their records (counts add,
 gaps take the worst, `processes` counts them; `gap_statistic: "mean"` marks a
 poller that keeps only the mean gap).
 

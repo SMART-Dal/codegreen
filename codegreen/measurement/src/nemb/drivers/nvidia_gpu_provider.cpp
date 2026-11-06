@@ -303,7 +303,7 @@ EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
         if (!gs.counter.due(t)) {
             record_boundary_hold(t - gs.counter.t_ns());
         } else if (nvmlReturn_t r = nvml().DeviceGetTotalEnergyConsumption(gs.device_handle, &mj); r == NVML_SUCCESS) {
-            gs.counter.add(mj, t);
+            gs.counter.add(mj, t, integrator_.joules(i));
         } else {
             handle_nvml_error("get_total_energy", r);
             reading.domain_energy_joules[dom] = reading.energy_joules = -1.0;
@@ -313,6 +313,14 @@ EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
         reading.energy_joules += gs.counter.joules();
     }
     return reading;
+}
+
+std::map<std::string, CounterCheck> NVIDIAGPUProvider::counter_checks() const {
+    std::lock_guard<std::mutex> lock(reading_mutex_);
+    std::map<std::string, CounterCheck> out;
+    for (uint32_t i = 0; counters_ && i < gpu_count_; ++i)
+        if (gpu_states_[i].available && gpu_states_[i].monitoring_enabled) out["gpu" + std::to_string(i)] = gpu_states_[i].counter.check();
+    return out;
 }
 
 EnergyReading NVIDIAGPUProvider::get_reading() {

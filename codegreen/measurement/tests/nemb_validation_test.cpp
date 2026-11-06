@@ -88,6 +88,9 @@ public:
         if (boundary_) { r.energy_joules = b_ += 10; record_boundary_hold(static_cast<uint64_t>(b_ - 1e6)); }
         return r;
     }
+    std::map<std::string, CounterCheck> counter_checks() const override {
+        return boundary_ ? std::map<std::string, CounterCheck>{{"dev0", {b_ - 1e6, 9.5, 1000, 3}}} : std::map<std::string, CounterCheck>{};
+    }
     EnergyProviderSpec get_specification() const override {
         EnergyProviderSpec s;
         s.hardware_type = "cpu";
@@ -200,10 +203,12 @@ static void test_power_integrator() {
 static void test_gpu_energy_counter() {
     drivers::GPUEnergyCounter c(100, 1000);  // update period 100 ns, primed at 1000 mJ
     CHECK(c.due(1) && c.joules() == 0);      // the first read is due
-    c.add(3500, 1000);
+    c.add(3500, 1000, 7.0);
     CHECK(c.joules() == 2.5 && !c.due(1099) && c.due(1100));  // within one period the last read answers (held)
-    c.add(200, 1100);                                         // driver counter reset counts from zero
+    CHECK(c.check().counter_j == 0 && c.check().integral_j == 0 && c.check().span_ns == 0 && c.check().reads == 1);  // spans start at the first read
+    c.add(200, 1100, 7.5);                                    // driver counter reset counts from zero
     CHECK(std::fabs(c.joules() - 2.7) < 1e-12);
+    CHECK(std::fabs(c.check().counter_j - 0.2) < 1e-12 && c.check().integral_j == 0.5 && c.check().span_ns == 100 && c.check().reads == 2);
     CHECK(drivers::GPUEnergyCounter().period_ns() == 0);
 }
 
@@ -316,6 +321,8 @@ static void test_meter_sampler() {
         for (const auto& c : m.get_checkpoint_measurements(&st)) CHECK(c.cumulative_energy_joules < 1e6);
         CHECK(st.providers[0].energy_source == "integrated_power" && st.providers[0].boundary_source == "counter");
         CHECK(st.providers[0].held == 0 && st.providers[0].boundary_held == 2 && st.providers[0].boundary_held_max_ns == 20);
+        const auto& k = st.providers[0].counter_check.at("dev0");
+        CHECK(st.providers[0].counter_check.size() == 1 && k.counter_j == 20 && k.integral_j == 9.5 && k.span_ns == 1000 && k.reads == 3);
     }
     setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_bad,fake_hold", 1);
     {
@@ -407,7 +414,7 @@ static void test_result_fd() {
         CHECK(out.find("\"marker_reads\": \"interpolated\"", s) < e);
         CHECK(out.find("\"providers\": [{\"name\": \"fake_ok\", \"hardware_type\": \"cpu\", \"energy_source\": \"counter\", "
                        "\"boundary_source\": \"counter\"", s) < e);
-        CHECK(out.find("\"held\": 0, \"boundary_held\": 0, \"boundary_held_max_ns\": 0}", s) < e);
+        CHECK(out.find("\"held\": 0, \"boundary_held\": 0, \"boundary_held_max_ns\": 0, \"counter_check\": {}}", s) < e);
         if (std::string(mode) == "keep") CHECK(out.find("workload output") < s);
     }
     auto out = run_child("close_before");

@@ -99,6 +99,13 @@ struct EnergyProviderSpec {
     std::vector<std::string> supported_metrics;        ///< List of available metrics beyond energy
 };
 
+/** @brief Energy of a provider's boundary counter and of its power integral over the same span (first to last counter
+ *  read), and the counter reads in it. */
+struct CounterCheck {
+    double counter_j{0}, integral_j{0};
+    uint64_t span_ns{0}, reads{0};
+};
+
 /**
  * @brief Abstract base class for all energy measurement providers
  * 
@@ -127,6 +134,12 @@ public:
      * (spec boundary_source); its cumulative values are then comparable only with other boundary readings.
      */
     virtual EnergyReading get_boundary_reading() { return get_reading(); }
+
+    /**
+     * @brief Per domain, a provider with both a boundary counter and a power integral reports their energies over the
+     * same span; another reader of the counter makes them diverge. Empty for a provider with one energy source.
+     */
+    virtual std::map<std::string, CounterCheck> counter_checks() const { return {}; }
 
     /**
      * @brief Get provider specification and capabilities

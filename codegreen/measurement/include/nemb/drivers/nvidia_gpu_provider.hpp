@@ -80,23 +80,28 @@ struct GPUPowerState {
  * read discards what it accumulated since its last update, so session boundaries read it at most once per period:
  * due() is false within one period of the previous read and the caller answers with joules() (a held value).
  * Deltas accumulate, so a driver counter reset counts from zero. period_ns 0 = no counter; the first read is due.
+ * Each read also records the provider's power integral at that time: check() compares both from the first read on.
  */
 class GPUEnergyCounter {
 public:
     GPUEnergyCounter(uint64_t period_ns = 0, unsigned long long total_mj = 0) : period_ns_(period_ns), last_mj_(total_mj) {}
     bool due(uint64_t t_ns) const { return !t_ns_ || t_ns - t_ns_ >= period_ns_; }
-    void add(unsigned long long total_mj, uint64_t t_ns) {
+    void add(unsigned long long total_mj, uint64_t t_ns, double integral_j) {
         j_ += (total_mj >= last_mj_ ? total_mj - last_mj_ : total_mj) / 1000.0;
+        if (!t_ns_) { j0_ = j_; i0_ = integral_j; t0_ = t_ns; }
+        ++reads_;
         last_mj_ = total_mj;
         t_ns_ = t_ns;
+        i_ = integral_j;
     }
+    CounterCheck check() const { return {j_ - j0_, i_ - i0_, t_ns_ - t0_, reads_}; }
     double joules() const { return j_; }
     uint64_t period_ns() const { return period_ns_; }
     uint64_t t_ns() const { return t_ns_; }  // time of the last counter read; 0 = none yet
 private:
-    uint64_t period_ns_, t_ns_{0};
+    uint64_t period_ns_, t_ns_{0}, t0_{0}, reads_{0};
     unsigned long long last_mj_;
-    double j_{0};
+    double j_{0}, j0_{0}, i_{0}, i0_{0};
 };
 
 /**
@@ -124,6 +129,7 @@ public:
     bool initialize() override;
     EnergyReading get_reading() override;
     EnergyReading get_boundary_reading() override;
+    std::map<std::string, CounterCheck> counter_checks() const override;
     EnergyProviderSpec get_specification() const override;
     bool self_test() override;
     bool is_available() const override;

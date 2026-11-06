@@ -441,7 +441,7 @@ object is returned by `nemb_get_checkpoints_json`):
              "marker_reads": "interpolated", "config_path": "/.../codegreen/config.json",
              "providers": [{"name": "intel_rapl", "hardware_type": "cpu", "energy_source": "counter",
                             "boundary_source": "counter", "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0,
-                            "boundary_held": 0, "boundary_held_max_ns": 0}]},
+                            "boundary_held": 0, "boundary_held_max_ns": 0, "counter_check": {}}]},
  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}}
 --- CODEGREEN_RESULT_END ---
 ```
