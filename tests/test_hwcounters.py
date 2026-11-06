@@ -179,8 +179,12 @@ def test_capability_report_covers_every_registry_through_their_probes(monkeypatc
         monkeypatch.setattr(reg, "probe", lambda reg=reg: [metrics.Availability(n, False, "stubbed") for n in reg.names()])
     monkeypatch.setattr(hw, "provider", lambda: None)
     monkeypatch.setattr(metrics.PROVIDERS, "probe", lambda: [metrics.Availability("hw_counters", True, details={"arch": "amd_zen"})])
+    monkeypatch.setattr(cli, "detect_hardware_sensors", lambda: {"intel_rapl": {"available": True, "details": "initialized"},
+                                                                 "amd_rapl": {"available": False, "details": "msr: denied"}})
     rep = cli.capability_report()
-    assert set(rep) == {"metric", "gpu_series", "gpu_replay", "gpu_framework", "language"}
+    assert set(rep) == {"metric", "gpu_series", "gpu_replay", "gpu_framework", "language", "energy"}
+    assert [(a["provider"], a["available"], a["reason"]) for a in rep["energy"]] == [("intel_rapl", True, ""),
+                                                                                    ("amd_rapl", False, "msr: denied")]
     assert rep["metric"][0]["details"]["arch"] == "amd_zen" and [a["provider"] for a in rep["gpu_series"]] == ["nvml"]
     assert {"java", "python", "native"} <= {a["provider"] for a in rep["language"]}
     assert set(cli.capability_report(["metric"])) == {"metric"}

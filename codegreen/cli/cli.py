@@ -26,6 +26,7 @@ import json
 import tempfile
 import ctypes
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, List, Dict, Any, Annotated, Union
 from enum import Enum
 from datetime import datetime, timezone
@@ -355,118 +356,17 @@ def detect_environment() -> Dict[str, Any]:
     return env_info
 
 def detect_hardware_sensors() -> Dict[str, Dict[str, Any]]:
-    """Detect available hardware sensors and their capabilities."""
-    sensors = {}
-    
-    # CPU Energy (RAPL) Detection
-    rapl_info = {"available": False, "details": "Not detected"}
-    rapl_paths = [
-        "/sys/class/powercap/intel-rapl:0/energy_uj",
-        "/sys/class/powercap/intel-rapl:0",
-        "/sys/devices/virtual/powercap/intel-rapl"
-    ]
-    
-    for path in rapl_paths:
-        if Path(path).exists():
-            try:
-                # Try to read energy file to verify accessibility
-                if str(path).endswith("energy_uj"):
-                    with open(path, 'r') as f:
-                        energy_val = f.read().strip()
-                        if energy_val.isdigit():
-                            rapl_info = {
-                                "available": True,
-                                "details": f"Intel RAPL accessible at {path}",
-                                "domains": ["package", "pp0", "pp1", "dram"]
-                            }
-                            break
-                else:
-                    # Check for energy files in directory
-                    energy_files = list(Path(path).rglob("energy_uj"))
-                    if energy_files:
-                        rapl_info = {
-                            "available": True, 
-                            "details": f"Intel RAPL domains found: {len(energy_files)}",
-                            "domains": [f.parent.name for f in energy_files[:4]]
-                        }
-                        break
-            except (PermissionError, FileNotFoundError):
-                rapl_info["details"] = "Intel RAPL detected but permission denied"
-                rapl_info["permission_issue"] = True
-    
-    sensors["intel_rapl"] = rapl_info
-    
-    # AMD CPU Energy Detection
-    amd_rapl_info = {"available": False, "details": "Not detected"}
-    amd_paths = ["/sys/class/powercap/amd-rapl:0", "/sys/class/hwmon"]
-    
-    for path in amd_paths:
-        if Path(path).exists():
-            amd_rapl_info = {"available": True, "details": f"AMD energy monitoring at {path}"}
-            break
-    
-    sensors["amd_rapl"] = amd_rapl_info
-    
-    # NVIDIA GPU Detection
-    nvidia_info = {"available": False, "details": "Not detected"}
-    
-    # Check for nvidia-smi tool
-    if shutil.which("nvidia-smi"):
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,power.draw", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                gpu_info = result.stdout.strip().split('\n')
-                nvidia_info = {
-                    "available": True,
-                    "details": f"NVIDIA GPUs detected: {len(gpu_info)}",
-                    "gpus": [line.split(',')[0].strip() for line in gpu_info if ',' in line]
-                }
-            else:
-                nvidia_info["details"] = "NVIDIA driver installed but no GPUs detected"
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            nvidia_info["details"] = "NVIDIA tools timeout/error"
-    
-    sensors["nvidia_gpu"] = nvidia_info
-    
-    # AMD GPU Detection
-    amd_gpu_info = {"available": False, "details": "Not detected"}
-    
-    # Check for ROCm tools
-    rocm_tools = ["rocm-smi", "rocminfo"]
-    for tool in rocm_tools:
-        if shutil.which(tool):
-            try:
-                result = subprocess.run([tool], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    amd_gpu_info = {
-                        "available": True,
-                        "details": f"AMD ROCm detected via {tool}",
-                        "tool": tool
-                    }
-                    break
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-                pass
-    
-    sensors["amd_gpu"] = amd_gpu_info
-    
-    # External sensors (USB power meters, etc.)
-    external_info = {"available": False, "details": "Not detected"}
-    
-    # Check for PowerSensor devices (if drivers available)
-    usb_devices = Path("/dev").glob("ttyUSB*")
-    if any(usb_devices):
-        external_info = {
-            "available": False,  # Requires specific driver detection
-            "details": "USB devices present - may support external sensors",
-            "requires_setup": True
-        }
-    
-    sensors["external_sensors"] = external_info
-    
-    return sensors
+    """Per NEMB provider of measurement.nemb.providers, probed alone by the library that measures: whether it
+    initializes on this host, else NEMB's reason (the provider's own message). `init` enables exactly these."""
+    names, nemb = _measurement_cfg()["nemb_providers"], _NEMBBackend()
+    if not nemb._load():
+        return {n: {"available": False, "details": "NEMB native library not found"} for n in names}
+    out = {}
+    for n in names:
+        st = nemb.provider_status(n)
+        p = st["providers"][0] if st["providers"] else {"status": "unavailable", "detail": st["error"]}
+        out[n] = {"available": p["status"] == "initialized", "details": p["detail"] or p["status"]}
+    return out
 
 def check_energy_permissions() -> Dict[str, Dict[str, Any]]:
     """Check permissions for energy monitoring resources."""
@@ -1859,8 +1759,11 @@ def capability_report(kinds: Optional[List[str]] = None) -> dict:
     from codegreen.analysis import gpu_metrics, hwcounters, languages, line_sampling  # noqa: F401 (registration)
     from codegreen.analysis.metrics import PROVIDERS
     hwcounters.provider()
+    from codegreen.analysis.metrics import Availability
+    energy = SimpleNamespace(probe=lambda: [Availability(n, d["available"], "" if d["available"] else d["details"])
+                                            for n, d in detect_hardware_sensors().items()])
     regs = {"metric": PROVIDERS, "gpu_series": gpu_metrics.GPU_SERIES, "gpu_replay": gpu_metrics.GPU_REPLAY,
-            "gpu_framework": gpu_metrics.GPU_FRAMEWORKS, "language": languages.LANGUAGES}
+            "gpu_framework": gpu_metrics.GPU_FRAMEWORKS, "language": languages.LANGUAGES, "energy": energy}
     unknown = sorted(set(kinds or []) - set(regs))
     if unknown:
         raise typer.BadParameter(f"unknown registries {unknown}; known: {sorted(regs)}")
@@ -1869,8 +1772,9 @@ def capability_report(kinds: Optional[List[str]] = None) -> dict:
 
 @app.command("capabilities", rich_help_panel="Diagnostics")
 def capabilities(kinds: Annotated[Optional[List[str]], typer.Argument(
-        help="registries to probe (metric = hardware counters, gpu_series, gpu_replay, gpu_framework, language); default all")] = None):
-    """Report, as JSON, which metrics, GPU providers and language samplers this host supports (capability probes only)."""
+        help="registries to probe (metric = hardware counters, gpu_series, gpu_replay, gpu_framework, language, energy = NEMB "
+         "providers); default all")] = None):
+    """Report, as JSON, which metrics, GPU providers, language samplers and NEMB energy providers this host supports (capability probes only)."""
     print(json.dumps(capability_report(kinds), indent=2, default=str))
 
 
@@ -1943,6 +1847,19 @@ def diagnose(
         issues.append(f"No energy backend available (time-only fallback)")
     else:
         console.print(f"[green][ok][/green] Energy backend: {backend.name}")
+
+    # What NEMB does with the configured sensor selection, provider by provider
+    if lib:
+        selection = providers_env(None, _measurement_cfg())
+        status = nemb.provider_status(selection)
+        console.print(f"Sensor selection: {selection or 'all (every provider that initializes)'}")
+        note = {"unavailable": "did not initialize: {}", "counter_already_read": "not read again: {} reads its counter",
+                "not_tried": "not tried: an earlier alternative initialized"}
+        for p in status["providers"]:
+            console.print(f"  [green][ok][/green] {p['name']}: initialized" if p["status"] == "initialized" else
+                          f"  [yellow]-[/yellow] {p['name']}: {escape(note[p['status']].format(p['detail']))}")
+        if status["error"]:
+            issues.append(f"Sensor selection {selection}: {status['error']}")
 
     # Check GPU (NVIDIA)
     gpu_detected = False
@@ -3013,6 +2930,20 @@ class _NEMBBackend(_EnergyBackend):
         probe = lib.nemb_probe if hasattr(lib, "nemb_probe") else lib.nemb_initialize
         probe.restype = ctypes.c_int
         return probe() > 0  # nemb_probe: usable provider count; nemb_initialize: 1 on success
+
+    def provider_status(self, selection: Optional[str]) -> Dict[str, Any]:
+        """NEMB's account of a provider selection (CODEGREEN_PROVIDERS syntax; None: every registered provider), made
+        like nemb_probe without a sampler: {"providers": [{name, status, counter_group, detail}], "error"}."""
+        lib, saved = self._load(), os.environ.pop("CODEGREEN_PROVIDERS", None)
+        try:
+            if selection:
+                os.environ["CODEGREEN_PROVIDERS"] = selection
+            lib.nemb_provider_status_json.argtypes = [ctypes.c_char_p, ctypes.c_int]
+            return json.loads(_read_nemb_json(lib.nemb_provider_status_json, 4096))
+        finally:
+            os.environ.pop("CODEGREEN_PROVIDERS", None)
+            if saved is not None:
+                os.environ["CODEGREEN_PROVIDERS"] = saved
 
     def _init(self):
         lib = self._load()

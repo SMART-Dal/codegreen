@@ -79,7 +79,10 @@ public:
     explicit FakeProvider(bool ok, std::string group = "", bool init = true, bool hold = false, bool boundary = false,
                           bool stall = false)
         : ok_(ok), init_(init), hold_(hold), boundary_(boundary), stall_(stall), group_(std::move(group)) {}
-    bool initialize() override { return init_; }
+    bool initialize() override {
+        if (!init_) std::cerr << "fake: no device\n";
+        return init_;
+    }
     EnergyReading get_reading() override {
         EnergyReading r; r.provider_id = "fake"; r.timestamp_ns = utils::PrecisionTimer::monotonic_timestamp_ns();
         r.energy_joules = ok_ ? (j_ += stall_ ? 0.0 : 0.5) : -1.0;
@@ -260,6 +263,22 @@ static void test_provider_selection() {
     CHECK(throws_with("fake_ok,,fake_grp_a"));
     auto all = detect_available_providers();
     CHECK(all.count("fake_grp_a") && !all.count("fake_grp_b") && !all.count("fake_noinit"));
+    // Every provider asked for is accounted for: its outcome, the reason it logged, the provider reading its counter.
+    std::vector<ProviderOutcome> out;
+    setenv("CODEGREEN_PROVIDERS", "fake_noinit|fake_grp_a|fake_ok,fake_grp_b,fake_hold", 1);
+    detect_available_providers(&out);
+    auto is = [&](size_t i, const char* name, const char* status, const char* detail) {
+        return i < out.size() && out[i].name == name && out[i].status == status && out[i].detail == detail;
+    };
+    CHECK(out.size() == 5 && is(0, "fake_noinit", "unavailable", "fake: no device") && is(1, "fake_grp_a", "initialized", "") &&
+          is(2, "fake_ok", "not_tried", "") && is(3, "fake_grp_b", "counter_already_read", "fake_grp_a") &&
+          is(4, "fake_hold", "initialized", "") && out[3].counter_group == "g");
+    out.clear();
+    setenv("CODEGREEN_PROVIDERS", "fake_noinit,fake_ok", 1);  // a failed item is reported after every item was tried
+    bool threw = false;
+    try { detect_available_providers(&out); } catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw && out.size() == 2 && is(1, "fake_ok", "initialized", ""));
+    unsetenv("CODEGREEN_PROVIDERS");
     CHECK(!(all.count("intel_rapl") && all.count("amd_rapl")));
 }
 

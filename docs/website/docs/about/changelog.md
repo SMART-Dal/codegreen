@@ -31,6 +31,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - A provider that stops reporting mid-run (no successful read, or cumulative energy unchanged or unread for more than `measurement.report.validity.provider_stall_resolutions` resolutions) is `PROVIDER_STALLED`, from its own `readings`, `last_ns` and `max_stall_ns`; it is counted, never filled.
 - Java standalone runtime: each JVM writes one `CG_CP_META|<sampler json>` record (`marker_reads: "last_poll"`); the CLI merges the JVMs of a run. Its RAPL settings come from `java.json` `project_config.runtime_injection.env`.
 - The CLI checks NEMB availability with `nemb_probe()` (no background sampler in the CLI process while a measured child runs).
+- `nemb_provider_status_json` reports, per provider of a selection, `initialized`, `unavailable` (with the provider's own message, e.g. `amd_rapl: /dev/cpu/0/msr: Permission denied`), `counter_already_read` (naming the provider that reads its counter group) or `not_tried`; an item with no working provider fails after every item was tried. `init` enables exactly the providers NEMB initializes (it enabled `amd_rapl` whenever `/sys/class/hwmon` existed), `doctor` lists the outcome for the configured selection and `capabilities energy` reports each provider.
 
 ### `codegreen measure`
 

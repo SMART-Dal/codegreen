@@ -225,15 +225,24 @@ protected:
  */
 std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provider_type);
 
+/** @brief What detect_available_providers did with one provider it was asked for. */
+struct ProviderOutcome {
+    std::string name;
+    std::string status;         ///< initialized | unavailable | counter_already_read | not_tried (an earlier alternative is used)
+    std::string counter_group;
+    std::string detail;         ///< unavailable: the provider's last log line; counter_already_read: the provider reading it
+};
+
 /**
  * @brief Create, initialize and self-test energy providers, keyed by registry name.
  * CODEGREEN_PROVIDERS (the only place it is read) is a comma-separated list of items, each a
  * registry name or alternatives `a|b` (the first that initializes and self-tests is used); it
- * makes unknown names, empty names and items with no working alternative throw. Unset: every
- * registered provider that works. Either way only the first working provider of each
- * EnergyProviderSpec::counter_group is kept.
+ * makes unknown names and empty names throw, and items with no working alternative throw after
+ * every item was tried. Unset: every registered provider that works. Either way only the first
+ * working provider of each EnergyProviderSpec::counter_group is kept. outcomes, when given,
+ * receives one entry per provider named (or registered), in selection order.
  */
-std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers();
+std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers(std::vector<ProviderOutcome>* outcomes = nullptr);
 
 /**
  * @brief Integrates per-device power samples into cumulative joules (trapezoid rule).

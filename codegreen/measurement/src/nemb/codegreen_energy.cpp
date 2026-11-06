@@ -579,8 +579,39 @@ extern "C" {
 
     static std::string json_str(const std::string& s) {
         std::string o = "\"";
-        for (char c : s) { if (c == '"' || c == '\\') o += '\\'; o += c; }
+        for (char c : s) {
+            if (static_cast<unsigned char>(c) < 0x20) { char u[8]; std::snprintf(u, sizeof(u), "\\u%04x", c); o += u; continue; }
+            if (c == '"' || c == '\\') o += '\\';
+            o += c;
+        }
         return o + "\"";
+    }
+
+    // The selection nemb_probe makes, per provider asked for (CODEGREEN_PROVIDERS, else every registered one):
+    // {"providers": [{"name", "status", "counter_group", "detail"}], "error"}, status and detail as in
+    // nemb::ProviderOutcome, error the reason the selection failed (else null). -required size when m is too small.
+    int nemb_provider_status_json(char* b, int m) {
+        if (c_api_is_forked_child) return 0;
+        std::vector<codegreen::nemb::ProviderOutcome> out;
+        std::string err;
+        try {
+            codegreen::nemb::ConfigLoader::load_config();
+            codegreen::QuietStreams quiet(!codegreen::debug_logging(false));
+            codegreen::nemb::detect_available_providers(&out);
+        } catch (const std::exception& e) {
+            err = e.what();
+        }
+        std::ostringstream ss;
+        ss << "{\"providers\": [";
+        for (size_t i = 0; i < out.size(); ++i)
+            ss << (i ? ", " : "") << "{\"name\": " << json_str(out[i].name) << ", \"status\": " << json_str(out[i].status)
+               << ", \"counter_group\": " << json_str(out[i].counter_group) << ", \"detail\": " << json_str(out[i].detail) << "}";
+        ss << "], \"error\": " << (err.empty() ? "null" : json_str(err)) << "}";
+        const std::string s = ss.str();
+        if (s.size() >= static_cast<size_t>(m)) return -static_cast<int>(s.size() + 1);
+        std::copy(s.begin(), s.end(), b);
+        b[s.size()] = '\0';
+        return static_cast<int>(s.size());
     }
 
     // ABI 4 checkpoint payload shared by nemb_report_at_exit and nemb_get_checkpoints_json.

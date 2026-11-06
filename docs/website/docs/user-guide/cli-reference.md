@@ -391,6 +391,8 @@ codegreen analyze python app.py --save-instrumented --output-dir ./instrumented
 ### `init`
 
 Comprehensive system initialization: detects the environment and hardware, validates permissions, and merges the detected providers (`measurement.nemb.providers.<name>.enabled`) and their sensors (`measurement.default_sensors`) into `--config`, else `CODEGREEN_CONFIG`, else `~/.codegreen/config.json`; the bundled config is never written.
+A provider is detected when NEMB initializes it, probed alone; the sensor table shows NEMB's reason for every
+other one (for `amd_rapl` without MSR access: `/dev/cpu/0/msr: Permission denied`).
 
 ```bash
 codegreen init [OPTIONS]
@@ -443,8 +445,9 @@ codegreen capabilities [KIND...]
 
 `KIND` is any of `metric` (CPU hardware counters), `gpu_series` (device time
 series, e.g. NVML), `gpu_replay` (per-kernel replay counters, e.g. Nsight
-Compute), `gpu_framework` (framework traces mapped to kernels, e.g. torch) and `language` (event and line samplers per
-language); none prints every registry, an unknown name exits with an error.
+Compute), `gpu_framework` (framework traces mapped to kernels, e.g. torch), `language` (event and line samplers per
+language) and `energy` (NEMB providers of `measurement.nemb.providers`, each probed alone; `reason` is the provider's
+own message); none prints every registry, an unknown name exits with an error.
 Each registry maps to a list of `{provider, available, reason, device,
 details}`; `details` lists per-event or per-component availability (for
 `hw_counters`: `arch` and each logical event).
@@ -460,6 +463,12 @@ codegreen doctor [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--test-sensors` | Run a live energy measurement test |
+
+`doctor` also lists what NEMB does with the configured sensor selection, per
+provider: `initialized`, did not initialize (with the provider's reason), not
+read again because another provider reads the same counter group (`intel_rapl`
+and `amd_rapl` both read the AMD package counter), or not tried because an
+earlier alternative initialized. A sensor with no working provider is an issue.
 
 ### `benchmark`
 

@@ -7,6 +7,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstdlib>
+#include <sstream>
 #include <stdexcept>
 
 namespace codegreen::nemb {
@@ -74,7 +75,23 @@ static std::vector<std::string> split(const std::string& s, char sep) {
     return out;
 }
 
-std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers() {
+namespace {
+// Collects what a provider logs while it initializes (its reason when it fails) and passes it on unchanged.
+struct LogCapture {
+    std::ostringstream log;
+    std::streambuf* prev;
+    LogCapture() : prev(std::cerr.rdbuf(log.rdbuf())) {}
+    ~LogCapture() { std::cerr.rdbuf(prev); std::cerr << log.str(); }
+    std::string last_line() const {
+        std::string line, last;
+        for (std::istringstream in(log.str()); std::getline(in, line);)
+            if (line.find_first_not_of(" \t") != std::string::npos) last = line.substr(line.find_first_not_of(" \t"));
+        return last;
+    }
+};
+}  // namespace
+
+std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers(std::vector<ProviderOutcome>* outcomes) {
     const char* env = std::getenv("CODEGREEN_PROVIDERS");
     const bool strict = env && *env;
     const auto registered = EnergyProvider::get_registered_providers();
@@ -92,33 +109,52 @@ std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_provider
         for (const auto& name : registered) items.push_back({name});
     }
     std::map<std::string, std::unique_ptr<EnergyProvider>> providers;
-    std::set<std::string> groups;
+    std::map<std::string, std::string> readers;  // counter_group -> the provider reading it
+    std::string missing;
+    auto record = [&](const std::string& name, const char* status, const std::string& group, const std::string& detail) {
+        if (outcomes) outcomes->push_back({name, status, group, detail});
+    };
     for (const auto& alts : items) {
         bool found = false;
         for (const auto& name : alts) {
             auto provider = EnergyProvider::create(name);
             const std::string group = provider->get_specification().counter_group;
-            if (providers.count(name) || (!group.empty() && groups.count(group))) {
-                std::cerr << "  " << name << " skipped: counter already read by another provider" << std::endl;
-                found = true;
-                break;
+            if (found) {
+                record(name, "not_tried", group, "");
+                continue;
             }
-            if (!provider->initialize() || !provider->self_test()) {
+            found = true;
+            const std::string reader = providers.count(name) ? name : group.empty() || !readers.count(group) ? "" : readers[group];
+            if (!reader.empty()) {
+                std::cerr << "  " << name << " skipped: counter already read by " << reader << std::endl;
+                record(name, "counter_already_read", group, reader);
+                continue;
+            }
+            bool ok;
+            std::string why;
+            {
+                LogCapture capture;
+                ok = provider->initialize() && provider->self_test();
+                why = capture.last_line();
+            }
+            if (!ok) {
                 std::cerr << "  " << name << " unavailable" << std::endl;
+                record(name, "unavailable", group, why.empty() ? "initialize or self_test failed; the provider logged no reason" : why);
+                found = false;
                 continue;
             }
             std::cerr << "  " << name << " initialized" << std::endl;
-            if (!group.empty()) groups.insert(group);
+            record(name, "initialized", group, "");
+            if (!group.empty()) readers[group] = name;
             providers[name] = std::move(provider);
-            found = true;
-            break;
         }
         if (strict && !found) {
             std::string item;
             for (const auto& name : alts) item += (item.empty() ? "" : "|") + name;
-            throw std::runtime_error("CODEGREEN_PROVIDERS: no working provider for '" + item + "'");
+            missing += (missing.empty() ? "'" : ", '") + item + "'";
         }
     }
+    if (!missing.empty()) throw std::runtime_error("CODEGREEN_PROVIDERS: no working provider for " + missing);
     return providers;
 }
 

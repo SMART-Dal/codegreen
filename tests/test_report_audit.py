@@ -1826,6 +1826,34 @@ def test_init_merges_detected_providers_into_the_user_config_on_every_environmen
     assert bundled.read_text() == before
 
 
+def test_init_enables_the_providers_nemb_initializes(monkeypatch):
+    """init enabled amd_rapl because /sys/class/hwmon exists on every Linux host, although NEMB could not open the MSR,
+    and listed amd_cpu in default_sensors; that strict selection then passed only because intel_rapl reads the same
+    counter. Each provider is now probed alone by NEMB and reported with its own reason."""
+    import codegreen.cli.cli as cli
+    outcome = {"intel_rapl": ("initialized", ""), "amd_rapl": ("unavailable", "amd_rapl: /dev/cpu/0/msr: Permission denied"),
+               "nvidia_gpu": ("initialized", "")}
+    monkeypatch.setattr(cli._NEMBBackend, "_load", lambda self: True)
+    monkeypatch.setattr(cli._NEMBBackend, "provider_status", lambda self, sel: (
+        {"providers": [{"name": sel, "status": outcome[sel][0], "counter_group": "", "detail": outcome[sel][1]}], "error": None}
+        if sel in outcome else {"providers": [], "error": f"CODEGREEN_PROVIDERS: unknown provider '{sel}'"}))
+    sensors = cli.detect_hardware_sensors()
+    assert sensors["amd_rapl"] == {"available": False, "details": "amd_rapl: /dev/cpu/0/msr: Permission denied"}
+    assert sensors["amd_gpu"] == {"available": False, "details": "CODEGREEN_PROVIDERS: unknown provider 'amd_gpu'"}
+    entries = cli.generate_optimized_config({"type": "personal"}, sensors)["measurement"]
+    assert entries["default_sensors"] == ["rapl", "nvidia"] and not entries["nemb"]["providers"]["amd_rapl"]["enabled"]
+
+
+@pytest.mark.needs_energy
+def test_nemb_reports_each_selected_provider():
+    """Every provider named in a selection is accounted for; a provider whose counter group another reads names it."""
+    import codegreen.cli.cli as cli
+    st = cli._NEMBBackend().provider_status("intel_rapl|amd_rapl,amd_rapl")
+    assert [p["name"] for p in st["providers"]] == ["intel_rapl", "amd_rapl", "amd_rapl"]
+    used = next(p["name"] for p in st["providers"][:2] if p["status"] == "initialized")
+    assert st["providers"][2]["status"] == "counter_already_read" and st["providers"][2]["detail"] == used
+
+
 def test_config_search_order_matches_the_docs(tmp_path, monkeypatch):
     """Docs listed codegreen.json search paths (./, config/, ~/.codegreen/, /etc/codegreen/) that no resolver reads.
     The one resolver: CODEGREEN_CONFIG, else ~/.codegreen/config.json when it exists, else the bundled config.json."""

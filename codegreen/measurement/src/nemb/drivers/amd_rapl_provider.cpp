@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cerrno>
+#include <cstring>
 
 namespace codegreen::nemb::drivers {
 
@@ -33,15 +35,23 @@ public:
                 break;
             }
         }
-        if (family < 23) return false; // 23 = 17h (Zen)
+        if (family < 23) {  // 23 = 17h (Zen)
+            std::cerr << "amd_rapl: cpu family " << family << " is not AMD family 17h (Zen) or newer" << std::endl;
+            return false;
+        }
 
         // Try to open MSR device for CPU 0
         msr_fd_ = open("/dev/cpu/0/msr", O_RDONLY);
-        if (msr_fd_ < 0) return false;
+        if (msr_fd_ < 0) {
+            std::cerr << "amd_rapl: /dev/cpu/0/msr: " << std::strerror(errno)
+                      << " (needs the msr module, read access to the device and CAP_SYS_RAWIO)" << std::endl;
+            return false;
+        }
 
         // Query energy unit (MSR_AMD_RAPL_POWER_UNIT 0xC0010299)
         uint64_t units;
         if (pread(msr_fd_, &units, sizeof(units), 0xC0010299) != sizeof(units)) {
+            std::cerr << "amd_rapl: MSR 0xC0010299 (RAPL power unit): " << std::strerror(errno) << std::endl;
             close(msr_fd_);
             msr_fd_ = -1;
             return false;
