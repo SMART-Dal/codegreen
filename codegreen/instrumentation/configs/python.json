@@ -36,11 +36,13 @@
         },
         "insertion_rules": {
             "function_enter": {
+                "boundary": "enter",
                 "mode": "inside_start",
                 "find_first_statement": true,
                 "skip_docstrings": true
             },
             "function_exit": {
+                "boundary": "exit",
                 "mode": "inside_end",
                 "find_last_statement": true
             },
@@ -85,6 +87,7 @@
         }
     },
     "instrumentation_config": {
+        "entry_points": ["main", "__main__"],
         "import_statement": "import codegreen_runtime as _codegreen_rt",
         "exit_strategy": "try_finally",
         "templates": {

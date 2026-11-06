@@ -2,17 +2,19 @@
     "name": "template",
     "extensions": [".ext"],
     "tree_sitter_name": "example",
-    "_comment_ast": "ast_config defines the structural navigation rules.",
+    "_comment_ast": "ast_config defines the structural navigation rules. insertion_rules.<type>.boundary (enter | exit) marks the point types that open or close a function frame; coarse granularity keeps only those.",
     "ast_config": {
         "body_field": "body",
         "block_type": "block",
         "insertion_rules": {
             "function_enter": {
+                "boundary": "enter",
                 "mode": "inside_start",
                 "find_first_statement": true,
                 "skip_docstrings": true
             },
             "function_exit": {
+                "boundary": "exit",
                 "mode": "inside_end",
                 "find_last_statement": true
             },
@@ -34,8 +36,9 @@
             "method.definition"
         ]
     },
-    "_comment_inst": "instrumentation_config defines the code snippets to be injected.",
+    "_comment_inst": "instrumentation_config defines the code snippets to be injected. entry_points: function names whose frame is the whole program at coarse granularity.",
     "instrumentation_config": {
+        "entry_points": ["main"],
         "import_statement": "import codegreen_runtime as _cg_rt",
         "templates": {
             "function_enter": "_cg_rt.checkpoint('{checkpoint_id}', '{name}', 'enter')",

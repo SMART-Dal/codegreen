@@ -35,15 +35,18 @@
         "docstring_types": [],
         "insertion_rules": {
             "function_enter": {
+                "boundary": "enter",
                 "mode": "inside_start",
                 "find_first_statement": false,
                 "skip_docstrings": false,
                 "skip_comments": true
             },
             "function_exit": {
+                "boundary": "exit",
                 "mode": "inside_end"
             },
             "function_return": {
+                "boundary": "exit",
                 "mode": "immediately_before"
             },
             "before": {
@@ -84,6 +87,7 @@
         }
     },
     "instrumentation_config": {
+        "entry_points": ["main"],
         "import_statement": "import codegreen.runtime.CodeGreenRuntime;",
         "exit_strategy": "try_finally",
         "templates": {
