@@ -166,8 +166,8 @@ Use `--` before commands that have their own flags; otherwise flags such as
 Energy is read synchronously at each run boundary. During the runs the NEMB
 background sampler is slowed to `measurement.run_path.sampler_interval_ms`
 (reported as `meta.run_sampler_interval_ms`; `null` when unchanged, which
-happens when a selected provider has `energy_source: integrated_power`, since
-its energy is integrated from the samples). For short commands use `--repeat`
+happens when a selected provider has `boundary_source: integrated_power`, since
+its run energy is integrated from the samples). For short commands use `--repeat`
 and `--warmup` rather than one long-tailed run.
 
 **Examples:**
@@ -578,7 +578,8 @@ warnings are not.
 | `PROVIDER_READ_FAILED` (warning) | measure, project | `failed_reads` where `failed_read_severity` is `warning` (`interpolated` markers skip the failed reading) |
 | `READINGS_REJECTED` (warning) | measure, project | Readings rejected by the sampler; markers interpolate across them |
 | `GPU_IN_TOTAL` (warning) | measure, run, project | The total sums GPU and non-GPU providers (scope label; choose with `--sensors` or `default_sensors`) |
-| `GPU_READ_HELD` (warning) | measure, run, project | A GPU power read failed and the last good value was held (`providers[].held`) |
+| `GPU_READ_HELD` (warning) | measure, run, project | A read was answered with a held value (`providers[].held`): a failed power read kept the last good value, or an energy counter read within one update period of the previous read (which would discard energy) returned that read |
+| `RUN_POWER_INTEGRATED` (warning) | run | A provider's run energy is integrated from sampled power (`boundary_source: integrated_power`), so it depends on the sampler interval |
 | `OVERLAPPING_THREADS` (warning) | measure, project | Several threads inside instrumented frames at once; each is charged the whole package energy |
 | `RESOLUTION_UNKNOWN` (warning) | run | The backend reports no provider facts, so `RUN_BELOW_RESOLUTION` is not checked |
 | `SAMPLES_INVALID` (warning) | Monitor | Sample reads failed; the next valid sample's delta spans each gap |
@@ -596,8 +597,10 @@ that run: `interval_ms` (configured), `interval_ms_min`, `interval_ms_max`,
 `sampler_affinity_cpus`, `marker_reads` (`interpolated` for NEMB, `last_poll`
 for the Java standalone poller), `config_path` and `providers`: one object per
 provider with `name`, `hardware_type`, `energy_source` (`counter` or
-`integrated_power`), `update_interval_ms`, `counter_group`, `rejected` and
-`held`. Runs of several processes (JVM forks) merge their records (counts add,
+`integrated_power`: how sampled and marker readings get energy),
+`boundary_source` (the same for `run` and `Session` boundary reads; NVIDIA GPUs
+with a total-energy counter read it there), `update_interval_ms`,
+`counter_group`, `rejected` and `held`. Runs of several processes (JVM forks) merge their records (counts add,
 gaps take the worst, `processes` counts them; `gap_statistic: "mean"` marks a
 poller that keeps only the mean gap).
 
