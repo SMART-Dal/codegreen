@@ -410,7 +410,7 @@ codegreen measure-workload --duration 3
 **Error: Provider name mismatch**
 ```json
 // WRONG (pre-0.5 names, ignored)
-"nvidia_nvml": { "enabled": true }
+"nvidia_gpu": { "enabled": true }
 
 // CORRECT (NEMB registry names)
 "nvidia_gpu": { "enabled": true }

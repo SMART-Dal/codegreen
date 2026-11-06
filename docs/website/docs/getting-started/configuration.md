@@ -31,10 +31,10 @@ every key (env vars, paths, language plumbing, migration from older configs).
           "enabled": true,
           "domains": ["package", "pp0", "dram"]
         },
-        "nvidia_nvml": {
+        "nvidia_gpu": {
           "enabled": true
         },
-        "amd_rocm": {
+        "amd_gpu": {
           "enabled": false
         }
       }
@@ -65,11 +65,11 @@ every key (env vars, paths, language plumbing, migration from older configs).
   - Interface: `/sys/class/powercap/intel-rapl:*`
   - Platforms: Linux (Intel/AMD x86_64)
 
-- **nvidia_nvml**: NVIDIA GPU monitoring via NVML
+- **nvidia_gpu**: NVIDIA GPU monitoring via NVML
   - Requires: NVIDIA drivers and CUDA toolkit
   - Platforms: Linux
 
-- **amd_rocm**: AMD GPU via ROCm
+- **amd_gpu**: AMD GPU via ROCm
   - Requires: ROCm drivers and libraries
   - Platforms: Linux only
 
@@ -84,11 +84,11 @@ every key (env vars, paths, language plumbing, migration from older configs).
           "enabled": true,
           "domains": ["package", "pp0", "pp1", "dram", "psys"]
         },
-        "nvidia_nvml": {
+        "nvidia_gpu": {
           "enabled": true,
           "device_indices": [0]
         },
-        "amd_rocm": {
+        "amd_gpu": {
           "enabled": false
         }
       }
@@ -99,8 +99,8 @@ every key (env vars, paths, language plumbing, migration from older configs).
 
 **Sensor Details:**
 - **intel_rapl**: Reads `/sys/class/powercap/intel-rapl:*` (requires permissions)
-- **nvidia_nvml**: Uses NVIDIA Management Library (requires CUDA drivers)
-- **amd_rocm**: AMD GPU via ROCm (Linux only)
+- **nvidia_gpu**: Uses NVIDIA Management Library (requires CUDA drivers)
+- **amd_gpu**: AMD GPU via ROCm (Linux only)
 
 ## Measurement Settings
 

@@ -50,14 +50,14 @@
           ],
           "validation_enabled": true
         },
-        "nvidia_nvml": {
+        "nvidia_gpu": {
           "enabled": true,
           "device_indices": [
             0
           ],
           "validation_enabled": true
         },
-        "amd_rocm": {
+        "amd_gpu": {
           "enabled": false
         }
       },

@@ -105,12 +105,12 @@ sudo cp config/codegreen.json /etc/codegreen/
           "domains": ["package", "pp0", "dram"],
           "validation_enabled": true
         },
-        "nvidia_nvml": {
+        "nvidia_gpu": {
           "enabled": true,
           "device_indices": [0],
           "validation_enabled": true
         },
-        "amd_rocm": {
+        "amd_gpu": {
           "enabled": false
         }
       },
@@ -270,7 +270,7 @@ sudo cp config/codegreen.json /etc/codegreen/
 
 **NVIDIA NVML:**
 ```json
-"nvidia_nvml": {
+"nvidia_gpu": {
   "enabled": true,
   "device_indices": [0],
   "validation_enabled": true
@@ -279,7 +279,7 @@ sudo cp config/codegreen.json /etc/codegreen/
 
 **AMD ROCm:**
 ```json
-"amd_rocm": {
+"amd_gpu": {
   "enabled": false
 }
 ```
@@ -394,7 +394,7 @@ codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'
 "nvidia_gpu": { "enabled": true }
 
 // ✅ Correct
-"nvidia_nvml": { "enabled": true }
+"nvidia_gpu": { "enabled": true }
 ```
 
 **Error: Missing required fields**
@@ -439,7 +439,7 @@ codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'
       },
       "providers": {
         "intel_rapl": { "enabled": true },
-        "nvidia_nvml": { "enabled": true }
+        "nvidia_gpu": { "enabled": true }
       }
     }
   }

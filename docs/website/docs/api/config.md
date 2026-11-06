@@ -26,7 +26,7 @@ codegreen config --reset      # Reset to defaults
 | `measurement.nemb.coordinator.measurement_buffer_size` | 100000 | Circular buffer size |
 | `measurement.nemb.timing.precision` | high | Clock precision (low/medium/high) |
 | `measurement.nemb.providers.intel_rapl.enabled` | true | Enable RAPL |
-| `measurement.nemb.providers.nvidia_nvml.enabled` | true | Enable NVML |
+| `measurement.nemb.providers.nvidia_gpu.enabled` | true | Enable NVML |
 | `measurement.nemb.accuracy.target_uncertainty_percent` | 1.0 | Target measurement accuracy |
 
 ## Environment Variables
