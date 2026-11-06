@@ -309,7 +309,7 @@ public:
     struct ProviderInfo {
         std::string name, hardware_type, energy_source, boundary_source, counter_group;  // boundary_source: session start/stop reads
         double update_interval_ms{0};  // 0 = unknown
-        uint64_t rejected{0}, held{0};
+        uint64_t rejected{0}, held{0}, boundary_held{0}, boundary_held_max_ns{0};
     };
     struct SamplerStats {
         int64_t interval_ms{0}, interval_ms_min{0}, interval_ms_max{0};

@@ -578,7 +578,8 @@ warnings are not.
 | `PROVIDER_READ_FAILED` (warning) | measure, project | `failed_reads` where `failed_read_severity` is `warning` (`interpolated` markers skip the failed reading) |
 | `READINGS_REJECTED` (warning) | measure, project | Readings rejected by the sampler; markers interpolate across them |
 | `GPU_IN_TOTAL` (warning) | measure, run, project | The total sums GPU and non-GPU providers (scope label; choose with `--sensors` or `default_sensors`) |
-| `GPU_READ_HELD` (warning) | measure, run, project | A read was answered with a held value (`providers[].held`): a failed power read kept the last good value, or an energy counter read within one update period of the previous read (which would discard energy) returned that read |
+| `GPU_READ_HELD` (warning) | measure, run, project | A failed power read kept the last good value (`providers[].held`) |
+| `BOUNDARY_READ_HELD` (warning) | measure, run, project | A boundary read answered from a previous read (`providers[].boundary_held`) spanned more than the provider's update interval (`boundary_held_max_ns`), so it misses energy beyond the counter's resolution. Holds within one update period (back-to-back `run --repeat` boundaries) are counted, not warned |
 | `RUN_POWER_INTEGRATED` (warning) | run | A provider's run energy is integrated from sampled power (`boundary_source: integrated_power`), so it depends on the sampler interval |
 | `OVERLAPPING_THREADS` (warning) | measure, project | Several threads inside instrumented frames at once; each is charged the whole package energy |
 | `RESOLUTION_UNKNOWN` (warning) | run | The backend reports no provider facts, so `RUN_BELOW_RESOLUTION` is not checked |
@@ -600,7 +601,10 @@ provider with `name`, `hardware_type`, `energy_source` (`counter` or
 `integrated_power`: how sampled and marker readings get energy),
 `boundary_source` (the same for `run` and `Session` boundary reads; NVIDIA GPUs
 with a total-energy counter read it there), `update_interval_ms`,
-`counter_group`, `rejected` and `held`. Runs of several processes (JVM forks) merge their records (counts add,
+`counter_group`, `rejected`, `held` (failed reads that kept the last good
+value), `boundary_held` (boundary reads answered from the previous read, since a
+fresh counter read within one update period would discard energy) and
+`boundary_held_max_ns` (the longest span such an answer covered). Runs of several processes (JVM forks) merge their records (counts add,
 gaps take the worst, `processes` counts them; `gap_statistic: "mean"` marks a
 poller that keeps only the mean gap).
 

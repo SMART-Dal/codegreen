@@ -85,7 +85,7 @@ public:
     }
     EnergyReading get_boundary_reading() override {  // a separate counter series, far above the sampled one
         EnergyReading r = get_reading();
-        if (boundary_) r.energy_joules = b_ += 10;
+        if (boundary_) { r.energy_joules = b_ += 10; record_boundary_hold(static_cast<uint64_t>(b_ - 1e6)); }
         return r;
     }
     EnergyProviderSpec get_specification() const override {
@@ -303,7 +303,8 @@ static void test_meter_sampler() {
         CHECK(st.providers.size() == 1 && st.providers[0].name == "fake_ok" && st.providers[0].hardware_type == "cpu" &&
               st.providers[0].energy_source == "counter" && st.providers[0].boundary_source == "counter" &&
               st.providers[0].update_interval_ms == 2.5 &&
-              st.providers[0].rejected == 0 && st.providers[0].held == 0 && st.failed_reads == 0);
+              st.providers[0].rejected == 0 && st.providers[0].held == 0 && st.providers[0].boundary_held == 0 &&
+              st.failed_reads == 0);
     }
     setenv("CODEGREEN_PROVIDERS", "fake_boundary", 1);
     {
@@ -314,6 +315,7 @@ static void test_meter_sampler() {
         EnergyMeter::SamplerStats st;
         for (const auto& c : m.get_checkpoint_measurements(&st)) CHECK(c.cumulative_energy_joules < 1e6);
         CHECK(st.providers[0].energy_source == "integrated_power" && st.providers[0].boundary_source == "counter");
+        CHECK(st.providers[0].held == 0 && st.providers[0].boundary_held == 2 && st.providers[0].boundary_held_max_ns == 20);
     }
     setenv("CODEGREEN_PROVIDERS", "fake_ok,fake_bad,fake_hold", 1);
     {
@@ -405,6 +407,7 @@ static void test_result_fd() {
         CHECK(out.find("\"marker_reads\": \"interpolated\"", s) < e);
         CHECK(out.find("\"providers\": [{\"name\": \"fake_ok\", \"hardware_type\": \"cpu\", \"energy_source\": \"counter\", "
                        "\"boundary_source\": \"counter\"", s) < e);
+        CHECK(out.find("\"held\": 0, \"boundary_held\": 0, \"boundary_held_max_ns\": 0}", s) < e);
         if (std::string(mode) == "keep") CHECK(out.find("workload output") < s);
     }
     auto out = run_child("close_before");

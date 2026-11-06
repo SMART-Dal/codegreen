@@ -301,7 +301,7 @@ EnergyReading NVIDIAGPUProvider::get_boundary_reading() {
         uint64_t t = nemb::utils::PrecisionTimer::monotonic_timestamp_ns();
         unsigned long long mj = 0;
         if (!gs.counter.due(t)) {
-            held_readings_++;
+            record_boundary_hold(t - gs.counter.t_ns());
         } else if (nvmlReturn_t r = nvml().DeviceGetTotalEnergyConsumption(gs.device_handle, &mj); r == NVML_SUCCESS) {
             gs.counter.add(mj, t);
         } else {
@@ -363,7 +363,7 @@ EnergyProviderSpec NVIDIAGPUProvider::get_specification() const {
     spec.power_resolution_watts = 1e-3;
     uint64_t period_ns = 0;
     for (const auto& g : gpu_states_) if (g.available) period_ns = std::max(period_ns, g.counter.period_ns());
-    spec.update_interval = counters_ && period_ns ? std::chrono::microseconds(period_ns / 1000) : NVML_UPDATE_NOMINAL;
+    spec.update_interval = counters_ && period_ns ? std::chrono::microseconds((period_ns + 999) / 1000) : NVML_UPDATE_NOMINAL;
     spec.counter_bits = 32;
     spec.energy_source = "integrated_power";
     spec.boundary_source = counters_ ? "counter" : "integrated_power";

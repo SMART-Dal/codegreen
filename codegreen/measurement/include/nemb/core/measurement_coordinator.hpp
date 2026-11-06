@@ -169,6 +169,7 @@ public:
     struct ProviderCounts {
         uint64_t rejected{0};   ///< sampler readings rejected because this provider's read failed
         uint64_t held{0};       ///< device reads the provider answered with a held value
+        uint64_t boundary_held{0}, boundary_held_max_ns{0};  ///< boundary reads answered from the previous one; longest span
         uint64_t restarts{0};   ///< re-initializations; each is a discontinuity in its cumulative energy
     };
     std::map<std::string, ProviderCounts> provider_counts() const;

@@ -292,9 +292,10 @@ def _run_reasons(run: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
-    """Scope labels from the providers' hardware facts (sampler.providers[].hardware_type, .held). held counts device
-    reads answered with a held value: a failed power read keeps the last good value, and a cumulative counter read
-    within one update period of the previous read (which would discard energy) answers with that read."""
+    """Scope labels from the providers' hardware facts (sampler.providers[]). held counts failed power reads that kept
+    the last good value. boundary_held counts boundary reads of a cumulative counter answered with the previous read
+    (a fresh read within one update period would discard energy); such an answer misses at most the energy of the span
+    it covers, which stays within the counter's own resolution unless boundary_held_max_ns exceeds its update interval."""
     names = [p["name"] for p in sampler["providers"]]
     gpu = [p["name"] for p in sampler["providers"] if p["hardware_type"] == "gpu"]
     if gpu and len(gpu) < len(names):
@@ -302,7 +303,12 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
                              "with --sensors or measurement.default_sensors")
     held = {p["name"]: p["held"] for p in sampler["providers"] if p["held"]}
     if held:
-        w["GPU_READ_HELD"] = f"reads answered with a held value (failed read, or counter read within its period): {held}"
+        w["GPU_READ_HELD"] = f"failed reads replaced by the last good power value: {held}"
+    stale = {p["name"]: f"{p['boundary_held_max_ns'] / 1e6:.3f} ms" for p in sampler["providers"]
+             if p["boundary_held_max_ns"] > (p["update_interval_ms"] or sampler["interval_ms_max"]) * 1e6}
+    if stale:
+        w["BOUNDARY_READ_HELD"] = (f"boundary reads answered from a previous read older than the provider's update "
+                                   f"interval (longest span {stale}): that energy is missing beyond its resolution")
 
 
 def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False, finest: bool = False) -> float:
@@ -428,8 +434,10 @@ def _merge_samplers(samplers: List[Dict]) -> Optional[Dict]:
     for k in ("interval_ms_min", "first_ns", "affinity_cpus", "sampler_affinity_cpus"):
         out[k] = min(s[k] for s in samplers)
     for p in (p for s in samplers for p in s["providers"]):
-        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0})
+        q = prov.setdefault(p["name"], {**p, "rejected": 0, "held": 0, "boundary_held": 0})
         q.update(rejected=q["rejected"] + p["rejected"], held=q["held"] + p["held"],
+                 boundary_held=q["boundary_held"] + p["boundary_held"],
+                 boundary_held_max_ns=max(q["boundary_held_max_ns"], p["boundary_held_max_ns"]),
                  update_interval_ms=max(q["update_interval_ms"], p["update_interval_ms"]))
     out.update(wrapped=any(s["wrapped"] for s in samplers), providers=list(prov.values()), processes=len(samplers))
     return out
@@ -438,13 +446,16 @@ def _merge_samplers(samplers: List[Dict]) -> Optional[Dict]:
 def _poller_sampler(records: List[Dict]) -> Optional[Dict]:
     """Sampler block of a run from in-process pollers' `CG_CP_META|<json>` records (one per JVM of the Java standalone
     runtime). A poller keeps no ring buffer, no gap distribution and no rejected readings, so those keys take what it
-    does know: the configured interval for interval_ms_min/max, the mean gap for median_gap_ns (gap_statistic mean)."""
+    does know: the configured interval for interval_ms_min/max, the mean gap for median_gap_ns (gap_statistic mean).
+    It takes no boundary reads, so its providers report no boundary holds."""
     if len({r["interval_ms"] for r in records}) > 1:
         raise ValueError(f"processes of one run polled at different periods: {sorted({r['interval_ms'] for r in records})} ms")
     return _merge_samplers([{"interval_ms_min": r["interval_ms"], "interval_ms_max": r["interval_ms"],
                              "median_gap_ns": (r["last_ns"] - r["first_ns"]) / (r["readings"] - 1) if r["readings"] > 1 else 0,
                              "gap_statistic": "mean", "rejected_readings": 0, "wrapped": False, "buffer_capacity": None,
-                             "dropped_checkpoints": 0, **r} for r in records])
+                             "dropped_checkpoints": 0, **r,
+                             "providers": [{"boundary_held": 0, "boundary_held_max_ns": 0, **p} for p in r["providers"]]}
+                            for r in records])
 
 
 def _checkpoint_events(measurements: List[Dict], known_ids) -> list:

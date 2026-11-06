@@ -92,6 +92,7 @@ public:
     }
     double joules() const { return j_; }
     uint64_t period_ns() const { return period_ns_; }
+    uint64_t t_ns() const { return t_ns_; }  // time of the last counter read; 0 = none yet
 private:
     uint64_t period_ns_, t_ns_{0};
     unsigned long long last_mj_;

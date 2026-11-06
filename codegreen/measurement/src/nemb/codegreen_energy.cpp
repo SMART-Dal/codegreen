@@ -325,7 +325,8 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
             const auto& c = counts[name];
             st->providers.push_back({name, spec.hardware_type, spec.energy_source,
                                      spec.boundary_source.empty() ? spec.energy_source : spec.boundary_source,
-                                     spec.counter_group, spec.update_interval.count() / 1000.0, c.rejected, c.held});
+                                     spec.counter_group, spec.update_interval.count() / 1000.0, c.rejected, c.held,
+                                     c.boundary_held, c.boundary_held_max_ns});
             st->failed_reads += c.rejected;
             st->provider_restarts += c.restarts;
         }
@@ -610,7 +611,8 @@ extern "C" {
                << ", \"energy_source\": " << json_str(p.energy_source) << ", \"boundary_source\": " << json_str(p.boundary_source)
                << ", \"update_interval_ms\": " << p.update_interval_ms
                << ", \"counter_group\": " << json_str(p.counter_group) << ", \"rejected\": " << p.rejected
-               << ", \"held\": " << p.held << "}";
+               << ", \"held\": " << p.held << ", \"boundary_held\": " << p.boundary_held
+               << ", \"boundary_held_max_ns\": " << p.boundary_held_max_ns << "}";
         }
         ss << "], \"config_path\": " << json_str(st.config_path) << "}}";
         return ss.str();

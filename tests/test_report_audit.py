@@ -1810,9 +1810,14 @@ def _vcp(cid: str, ts: int, joules: float, ri: int, clamp: str = "none", tid: st
             "clamp": clamp, "provider_j": {"intel_rapl": joules}}
 
 
-def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
+def _jprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0) -> Dict:
+    """A provider record as the Java standalone poller writes it (no boundary reads)."""
     return {"name": name, "hardware_type": hw, "energy_source": source, "boundary_source": source, "update_interval_ms": ms,
-            "counter_group": "cpu_package" if hw == "cpu" else "", "rejected": 0, "held": 0, **kw}
+            "counter_group": "cpu_package" if hw == "cpu" else "", "rejected": 0, "held": 0}
+
+
+def _vprov(name: str = "intel_rapl", hw: str = "cpu", source: str = "counter", ms: float = 1.0, **kw) -> Dict:
+    return {**_jprov(name, hw, source, ms), "boundary_held": 0, "boundary_held_max_ns": 0, **kw}
 
 
 def _vsampler(**kw) -> Dict:
@@ -1871,6 +1876,15 @@ class TestValidity:
         v = run_validity([5.0], 2.0, _vsampler(providers=[{**gpu, "boundary_source": "counter", "held": 2}]),
                          _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["GPU_READ_HELD"]
+
+    @pytest.mark.parametrize("span_ns,warned", [(99_000_000, False), (100_000_000, False), (100_000_001, True)])
+    def test_boundary_holds_warn_only_beyond_the_update_interval(self, span_ns, warned):
+        """run --repeat chains stop/start within one counter period: those holds stay within the resolution."""
+        from codegreen.cli.cli import run_validity, _measurement_cfg
+        gpu = _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter", boundary_held=9,
+                     boundary_held_max_ns=span_ns)
+        v = run_validity([5.0], 2.0, _vsampler(providers=[gpu]), _measurement_cfg())
+        assert v["status"] == "valid" and list(v["warnings"]) == (["BOUNDARY_READ_HELD"] if warned else [])
 
     def test_gap_policy_is_config(self):
         from codegreen.cli.cli import _measurement_cfg
@@ -1956,7 +1970,7 @@ class TestValidity:
         def meta(readings, last, gap, failed=0, cpus=4, ms=1.0):
             return {"marker_reads": "last_poll", "interval_ms": 1.0, "readings": readings, "failed_reads": failed,
                     "first_ns": 0, "last_ns": last, "max_gap_ns": gap, "affinity_cpus": cpus,
-                    "sampler_affinity_cpus": cpus, "providers": [_vprov(ms=ms)]}
+                    "sampler_affinity_cpus": cpus, "providers": [_jprov(ms=ms)]}
         f = tmp_path / "sum"
         f.write_text(f"CG_CP_META|{json.dumps(meta(1001, 1_100_000_000, 2_000_000))}\nCG_CP_SUM|1|g|4|40|30|400\n"
                      f"CG_CP_META|{json.dumps(meta(11, 10_000_000, 9_000_000, cpus=5, ms=2.0))}\n")
@@ -1966,7 +1980,7 @@ class TestValidity:
         s = _poller_sampler(records)
         assert (s["readings"], s["interval_ms_max"], s["median_gap_ns"], s["affinity_cpus"], s["processes"]) == \
             (1012, 1.0, 1_100_000, 4, 2)
-        assert s["providers"][0]["update_interval_ms"] == 2.0
+        assert s["providers"][0]["update_interval_ms"] == 2.0 and s["providers"][0]["boundary_held"] == 0
         v = measurement_validity(None, s, {}, _measurement_cfg())
         assert v["status"] == "valid" and list(v["warnings"]) == ["SAMPLER_GAP"]
         v = measurement_validity(None, _poller_sampler([meta(5, 4_000_000, 1_000_000, failed=1)]), {}, _measurement_cfg())

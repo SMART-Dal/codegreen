@@ -193,7 +193,8 @@ std::map<std::string, MeasurementCoordinator::ProviderCounts> MeasurementCoordin
     std::shared_lock<std::shared_mutex> lock(providers_mutex_);
     std::map<std::string, ProviderCounts> counts;
     for (const auto& [name, state] : providers_)
-        counts[name] = {state.rejected, state.provider->get_held_readings(), state.restarts};
+        counts[name] = {state.rejected, state.provider->get_held_readings(), state.provider->get_boundary_held(),
+                        state.provider->get_boundary_held_max_ns(), state.restarts};
     return counts;
 }
 
