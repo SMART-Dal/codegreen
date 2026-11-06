@@ -3665,6 +3665,21 @@ def monitor_energy(
             console.print(f"  samples written: [cyan]{output}[/cyan]")
 
 
+def _function_meta(point_lists) -> Dict[str, dict]:
+    """Emitted function name -> {line, signature?, merged_declarations?} from function_enter points. A name emitted
+    by declarations in more than one file gets line None rather than one declaration's line."""
+    meta: Dict[str, dict] = {}
+    for points in point_lists:
+        for p in points:
+            if p.type != "function_enter" or not p.name:
+                continue
+            m = {"line": p.metadata.get("decl_line"),
+                 **{k: p.metadata[k] for k in ("signature", "merged_declarations") if k in p.metadata}}
+            name = p.metadata.get("record_name", p.name)
+            meta[name] = m if meta.get(name, m) == m else {"line": None}
+    return meta
+
+
 def _remove_injected(path: Path) -> None:
     """Remove an injected runtime file or empty dir, and a Python module's
     bytecode caches (__pycache__/<stem>.*.pyc): importing the injected
@@ -3915,6 +3930,7 @@ def project_energy(
     # even when multiple files have methods with the same name (e.g., update()).
     checkpoint_id_to_file = {}  # checkpoint_id -> file_path
     func_file_map = {}  # function_name -> file_path (best guess for single-name functions)
+    func_meta = _function_meta(d["points"] for d in analysis_results.values())
     for src_file, data in analysis_results.items():
         for point in data["points"]:
             if point.type == "function_enter" and point.name:
@@ -4119,6 +4135,7 @@ def project_energy(
                     "self_ratio": round(self_ratio, 3),
                     "verdict": verdict,
                     "file": func_file_map.get(name, ""),
+                    **func_meta.get(name, {"line": None}),
                     "wall_time_s": round(time_s, 6),
                     "avg_power_w": round(inc_j / time_s, 2) if time_s > 0 else 0,
                     "calls": calls,

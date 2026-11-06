@@ -495,6 +495,8 @@ def test_unlocated_overloads_stay_one_flagged_record(caplog):
     assert {n: (p.metadata["decl_line"], p.metadata.get("merged_declarations"), "signature" in p.metadata)
             for n, p in enters.items() if n.startswith("Util.highbits")} == {"Util.highbits": (None, 2, False)}
     assert "2 functions share the record Util.highbits" in caplog.text
+    from codegreen.cli.cli import _function_meta
+    assert _function_meta([result.instrumentation_points])["Util.highbits"] == {"line": None, "merged_declarations": 2}
 
 
 def test_bare_name_records_are_flagged_and_emitted_unchanged():
@@ -506,6 +508,30 @@ def test_bare_name_records_are_flagged_and_emitted_unchanged():
     out = engine.instrument_code(code, result.instrumentation_points, "cpp",
                                  pre_normalised_source=result.metadata["normalised_source"])
     assert out.count('"f");') == 2 and "@" not in out
+
+
+def test_function_meta_keeps_plain_names_and_marks_ambiguous_ones():
+    from codegreen.cli.cli import _function_meta
+    _, _, enters = _enter_points(JAVA_OVERLOADS, "java")
+    points = [p for p in enters.values()]
+    meta = _function_meta([points])
+    assert meta["Util.solo"] == {"line": 10, "signature": "(int)"}
+    assert sorted(m["line"] for n, m in meta.items() if n.startswith("Util.highbits@")) == [2, 6]
+    assert _function_meta([points, points]) == meta
+    _, _, other = _enter_points(JAVA_OVERLOADS.replace("class Util {\n", "class Util {\n\n"), "java")
+    assert _function_meta([points, list(other.values())])["Util.solo"] == {"line": None}
+
+
+def test_overload_records_are_separate_and_totals_unchanged(tmp_path):
+    """Replay is keyed by emitted name, so '@line' names give one record each and the sums match the merged ones."""
+    from codegreen.cli.cli import _stderr_checkpoint_events, _replay_checkpoint_events
+    f = tmp_path / "cp.txt"
+    f.write_text("CG_CP_SUM|1|Util.highbits@2|3|30|20|300\nCG_CP_SUM|1|Util.highbits@6|1|10|10|100\n"
+                 "CG_CP_SUM|1|Util.solo|2|8|8|80\n")
+    func = {}
+    _replay_checkpoint_events(_stderr_checkpoint_events(str(f), func), func)
+    assert func["Util.highbits@2"]["calls"] == 3 and func["Util.highbits@6"]["calls"] == 1
+    assert sum(d["inclusive_uj"] for d in func.values()) == 48 and sum(d["exclusive_uj"] for d in func.values()) == 38
 
 
 # --- Function frames: every exit path closes the frame with the qualified name, after the return value ---
