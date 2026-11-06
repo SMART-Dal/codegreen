@@ -64,7 +64,7 @@ public:
     
     bool is_available() const;
     std::vector<std::string> get_provider_info() const;
-    EnergyResult read();
+    EnergyResult read(bool boundary = false);
     uint64_t start_session(const std::string& name);
     EnergyDifference end_session(uint64_t session_id);
     void mark_checkpoint(const std::string& name);
@@ -323,8 +323,9 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
         st->providers.clear();
         for (const auto& [name, spec] : coordinator_->get_provider_specifications()) {
             const auto& c = counts[name];
-            st->providers.push_back({name, spec.hardware_type, spec.energy_source, spec.counter_group,
-                                     spec.update_interval.count() / 1000.0, c.rejected, c.held});
+            st->providers.push_back({name, spec.hardware_type, spec.energy_source,
+                                     spec.boundary_source.empty() ? spec.energy_source : spec.boundary_source,
+                                     spec.counter_group, spec.update_interval.count() / 1000.0, c.rejected, c.held});
             st->failed_reads += c.rejected;
             st->provider_restarts += c.restarts;
         }
@@ -333,11 +334,11 @@ std::vector<EnergyMeter::CorrelatedCheckpoint> EnergyMeter::Impl::get_checkpoint
     return cps;
 }
 
-EnergyResult EnergyMeter::Impl::read() {
+EnergyResult EnergyMeter::Impl::read(bool boundary) {
     if (!coordinator_ || coordinator_->get_active_providers().empty()) {
         EnergyResult res; res.is_valid = false; res.error_message = "Unavailable"; return res;
     }
-    auto sync_reading = coordinator_->get_synchronized_reading();
+    auto sync_reading = coordinator_->get_synchronized_reading(boundary);
     return convert_synchronized_reading(sync_reading);
 }
 
@@ -361,7 +362,7 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
 uint64_t EnergyMeter::Impl::start_session(const std::string& name) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     uint64_t id = next_session_id_++;
-    active_sessions_[id] = {name, read(), timer_.get_timestamp_ns(), true};
+    active_sessions_[id] = {name, read(true), timer_.get_timestamp_ns(), true};
     return id;
 }
 
@@ -369,7 +370,7 @@ EnergyDifference EnergyMeter::Impl::end_session(uint64_t id) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     auto it = active_sessions_.find(id);
     if (it == active_sessions_.end()) return {0,0,0,0,false};
-    auto diff = energy_utils::calculate_difference(read(), it->second.baseline);
+    auto diff = energy_utils::calculate_difference(read(true), it->second.baseline);
     active_sessions_.erase(it);
     return diff;
 }
@@ -606,7 +607,8 @@ extern "C" {
         for (size_t i = 0; i < st.providers.size(); ++i) {
             const auto& p = st.providers[i];
             ss << (i ? ", " : "") << "{\"name\": " << json_str(p.name) << ", \"hardware_type\": " << json_str(p.hardware_type)
-               << ", \"energy_source\": " << json_str(p.energy_source) << ", \"update_interval_ms\": " << p.update_interval_ms
+               << ", \"energy_source\": " << json_str(p.energy_source) << ", \"boundary_source\": " << json_str(p.boundary_source)
+               << ", \"update_interval_ms\": " << p.update_interval_ms
                << ", \"counter_group\": " << json_str(p.counter_group) << ", \"rejected\": " << p.rejected
                << ", \"held\": " << p.held << "}";
         }
