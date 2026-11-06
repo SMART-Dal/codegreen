@@ -157,6 +157,7 @@ ConfigLoader::NEMBConfig ConfigLoader::parse_json_config(const std::string& json
         config.coordinator.cross_validation_threshold = get_double("cross_validation_threshold", 0.05);
         config.coordinator.temporal_alignment_tolerance_ms = 0.1;
         config.coordinator.measurement_buffer_size = get_uint("measurement_buffer_size", 1000);
+        config.max_checkpoints = get_uint("max_checkpoints", config.max_checkpoints);
         config.coordinator.auto_restart_failed_providers = get_bool("auto_restart_failed_providers", true);
         uint32_t restart_ms = get_uint("provider_restart_interval", 30000);
         config.coordinator.provider_restart_interval = std::chrono::seconds(restart_ms / 1000);

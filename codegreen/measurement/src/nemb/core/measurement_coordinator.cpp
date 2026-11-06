@@ -9,6 +9,10 @@
 
 namespace codegreen::nemb {
 
+// A provider reading counts only when it carries an id and a non-negative cumulative energy.
+static bool reading_ok(const EnergyReading& r) { return !r.provider_id.empty() && r.energy_joules >= 0; }
+static bool sync_ok(const SynchronizedReading& r) { return r.providers_active > 0 && r.providers_failed == 0; }
+
 MeasurementCoordinator::MeasurementCoordinator(const CoordinatorConfig& config)
     : config_(config) {
     std::cerr << "[NEMB] measurement_interval=" << config_.measurement_interval.count()
@@ -112,9 +116,14 @@ bool MeasurementCoordinator::start_measurements() {
     }
     filtered_power_ = 0.0;
     filter_first_reading_ = true;
+    rejected_readings_.store(0);
 
     running_.store(true);
-    
+
+    // Seed the buffer synchronously so the first marker is bracketed by a real reading.
+    auto seed = align_measurements(collect_provider_readings());
+    if (sync_ok(seed)) buffer_reading(seed); else rejected_readings_++;
+
     // Start worker threads
     measurement_thread_ = std::thread(&MeasurementCoordinator::measurement_loop, this);
     provider_health_thread_ = std::thread(&MeasurementCoordinator::provider_health_loop, this);
@@ -284,20 +293,16 @@ void MeasurementCoordinator::measurement_loop() {
         auto start_time = std::chrono::steady_clock::now();
 
         try {
-            auto provider_readings = collect_provider_readings();
-            auto synchronized_reading = align_measurements(provider_readings);
-
-            if (config_.enable_real_time_filtering) {
-                apply_real_time_filtering(synchronized_reading);
+            auto synchronized_reading = align_measurements(collect_provider_readings());
+            if (!sync_ok(synchronized_reading)) {
+                rejected_readings_++;
+                update_statistics(synchronized_reading, false);
+            } else {
+                if (config_.enable_real_time_filtering) apply_real_time_filtering(synchronized_reading);
+                bool validation_passed = !config_.enable_outlier_detection || cross_validate_measurements(synchronized_reading);
+                buffer_reading(synchronized_reading);
+                update_statistics(synchronized_reading, validation_passed);
             }
-
-            bool validation_passed = true;
-            if (config_.enable_outlier_detection) {
-                validation_passed = cross_validate_measurements(synchronized_reading);
-            }
-
-            buffer_reading(synchronized_reading);
-            update_statistics(synchronized_reading, validation_passed);
 
         } catch (const std::exception& e) {
             std::cerr << "Error in measurement loop: " << e.what() << std::endl;
@@ -334,6 +339,7 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
     
     for (auto& [name, state] : providers_) {
         if (!state.active || state.failed) {
+            readings[name] = EnergyReading{};  // counted as failed so the provider set never silently shrinks
             continue;
         }
         
@@ -342,7 +348,7 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
             auto reading = state.provider->get_reading();
             readings[name] = reading;
             
-            if (!reading.provider_id.empty()) {
+            if (reading_ok(reading)) {
                 state.last_successful_reading = std::chrono::steady_clock::now();
                 state.consecutive_failures = 0;
             } else {
@@ -382,7 +388,7 @@ SynchronizedReading MeasurementCoordinator::align_measurements(
     // Use the most recent timestamp as the common timestamp
     uint64_t max_timestamp = 0;
     for (const auto& [name, reading] : provider_readings) {
-        if (!reading.provider_id.empty()) {
+        if (reading_ok(reading)) {
             max_timestamp = std::max(max_timestamp, reading.timestamp_ns);
         }
     }
@@ -397,7 +403,7 @@ SynchronizedReading MeasurementCoordinator::align_measurements(
     for (const auto& [name, reading] : provider_readings) {
         result.provider_readings.push_back(reading);
         
-        if (!reading.provider_id.empty()) {
+        if (reading_ok(reading)) {
             total_power += reading.average_power_watts;
             total_energy += reading.energy_joules;
             valid_count++;
@@ -517,7 +523,7 @@ void MeasurementCoordinator::update_statistics(const SynchronizedReading& readin
     for (const auto& provider_reading : reading.provider_readings) {
         const std::string& name = provider_reading.provider_id;
         
-        if (!provider_reading.provider_id.empty()) {
+        if (reading_ok(provider_reading)) {
             statistics_.provider_success_counts[name]++;
         } else {
             statistics_.provider_failure_counts[name]++;

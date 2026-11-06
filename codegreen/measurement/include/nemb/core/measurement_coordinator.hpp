@@ -182,6 +182,13 @@ public:
      * @return true if measurement coordination is active
      */
     bool is_running() const { return running_.load(); }
+
+    /** @brief True once the ring buffer has overwritten its oldest reading. */
+    bool buffer_wrapped() const { return buffer_full_.load(); }
+    /** @brief Sampler readings not buffered because a provider failed. */
+    uint64_t rejected_readings() const { return rejected_readings_.load(); }
+    std::chrono::milliseconds measurement_interval() const { std::lock_guard<std::mutex> l(readings_mutex_); return config_.measurement_interval; }
+    uint32_t buffer_capacity() const { std::lock_guard<std::mutex> l(readings_mutex_); return config_.measurement_buffer_size; }
     
 private:
     // Configuration
@@ -212,6 +219,7 @@ private:
     std::vector<SynchronizedReading> readings_buffer_;
     std::atomic<size_t> buffer_write_index_{0};
     std::atomic<bool> buffer_full_{false};
+    std::atomic<uint64_t> rejected_readings_{0};
 
     // Shutdown synchronization
     mutable std::mutex shutdown_mutex_;

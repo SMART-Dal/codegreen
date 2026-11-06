@@ -276,6 +276,7 @@ private:
     // Configuration
     double power_measurement_timeout_ms_{100.0};
     uint32_t max_consecutive_failures_{5};
+    uint32_t lost_gpus_{0};  // GPUs that stopped reporting mid-run; readings become invalid
     bool enable_advanced_metrics_{true};
     bool enable_workload_detection_{true};
 };

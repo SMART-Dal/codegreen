@@ -63,6 +63,7 @@ public:
         TimingConfig timing;
         CoordinatorConfig coordinator;
         std::map<std::string, ProviderConfig> providers;
+        uint32_t max_checkpoints{2000000};  // measurement.report.max_checkpoints; markers beyond it are dropped and counted
     };
     
     /**
@@ -84,8 +85,10 @@ public:
      */
     static NEMBConfig get_performance_optimized_config();
     
-private:
+    /** @brief Config file the loader resolves (empty when built-in defaults are used). */
     static std::string find_config_file();
+
+private:
     static NEMBConfig parse_json_config(const std::string& json_content);
     static std::string get_default_config_path();
 };

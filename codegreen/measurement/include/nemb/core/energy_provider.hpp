@@ -183,9 +183,10 @@ protected:
 std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provider_type);
 
 /**
- * @brief Auto-detect and create all available energy providers
- * @return Vector of all successfully initialized providers
+ * @brief Create and initialize energy providers, keyed by registry name.
+ * CODEGREEN_PROVIDERS (comma-separated registry names) restricts the set and makes
+ * unknown or failing providers throw; otherwise every registered provider that initializes.
  */
-std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers();
+std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers();
 
 } // namespace codegreen::nemb

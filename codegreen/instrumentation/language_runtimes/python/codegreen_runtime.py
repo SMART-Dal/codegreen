@@ -393,6 +393,7 @@ class NEMBClient:
     """Interface to the Native Energy Measurement Backend (C++)"""
 
     def __init__(self):
+        self.abi = 0
         lib_path = _find_nemb_library()
         if not lib_path:
             self.lib = None
@@ -425,7 +426,8 @@ class NEMBClient:
             self.lib.nemb_stop_session_v2.restype = c_int
             self.lib.nemb_abi_version.argtypes = []
             self.lib.nemb_abi_version.restype = c_int
-            if self.lib.nemb_abi_version() < 2:
+            self.abi = self.lib.nemb_abi_version()
+            if self.abi < 2:
                 raise RuntimeError(
                     "libcodegreen-nemb.so ABI < 2; rebuild required for Session API"
                 )
@@ -452,12 +454,15 @@ class NEMBClient:
         if self.lib:
             self.lib.nemb_mark_checkpoint(name.encode('utf-8'))
 
-    def get_final_measurements(self) -> List[Dict]:
-        """Retrieve correlated time-series measurements from C++ backend"""
+    def get_final_measurements(self) -> Dict:
+        """Correlated checkpoints and sampler statistics from the C++ backend:
+        {"measurements": [...], "sampler": {...}} (ABI 4 contract; sampler None without a library)."""
         if not self.lib:
-            return []
+            return {"measurements": [], "sampler": None}
+        if self.abi < 4:
+            raise RuntimeError(f"libcodegreen-nemb ABI {self.abi} < 4 reports no sampler statistics; rebuild it")
         payload = _read_nemb_json(self.lib.nemb_get_checkpoints_json, 1 << 20)
-        return json.loads(payload)["checkpoints"] if payload else []
+        return json.loads(payload) if payload else {"measurements": [], "sampler": None}
 
     def read_energy(self) -> tuple:
         """Returns (joules, watts) - kept for compatibility"""
@@ -518,7 +523,15 @@ def _report_at_exit():
     _output_reported = True
 
     client = _get_nemb_client()
-    measurements = client.get_final_measurements()
+    if client.lib is not None and client.abi < 4:
+        # Loud, not fatal at exit: NEMB's own atexit block still prints and the CLI rejects it as STALE_LIBRARY.
+        if _active_session is None:
+            print(f"CodeGreen: libcodegreen-nemb ABI {client.abi} < 4; checkpoint readback skipped (rebuild the library)",
+                  file=sys.stderr, flush=True)
+        final = {"measurements": [], "sampler": None}
+    else:
+        final = client.get_final_measurements()
+    measurements = final["measurements"]
 
     sess = _active_session
     if sess is not None:
@@ -558,11 +571,19 @@ def _report_at_exit():
             "measurements": measurements,
         }
 
+    payload["sampler"] = final["sampler"]
     if _SYNC_DEVICE:
         payload["device_sync"] = {"mode": _SYNC_DEVICE, "syncs": _device_syncs}
-    print("\n--- CODEGREEN_RESULT_START ---", flush=True)
-    print(json.dumps(payload), flush=True)
-    print("--- CODEGREEN_RESULT_END ---", flush=True)
+    if not sys.stdout.closed:
+        sys.stdout.flush()
+    block = memoryview(f"\n--- CODEGREEN_RESULT_START ---\n{json.dumps(payload)}\n--- CODEGREEN_RESULT_END ---\n".encode())
+    while block:
+        block = block[os.write(_RESULT_FD, block):]
+
+
+# The result block goes to a duplicate of fd 1 taken at import, so a workload that closes stdout (mandelbrot's
+# BufferedOutputStream(System.out).close() pattern) still delivers it; NEMB's C++ report uses the same scheme.
+_RESULT_FD = os.dup(1)
 
 import atexit
 import signal as _signal

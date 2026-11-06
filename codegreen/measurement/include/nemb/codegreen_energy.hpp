@@ -292,15 +292,30 @@ public:
     struct CorrelatedCheckpoint {
         std::string name;
         uint64_t timestamp_ns;
-        double cumulative_energy_joules;
-        double instantaneous_power_watts;
+        double cumulative_energy_joules{0};
+        double instantaneous_power_watts{0};
+        size_t ri{0};                       // index of the upper bracketing reading (== readings.size() after the last)
+        std::string clamp{"none"};          // none | before_first | after_last
+        std::map<std::string, double> provider_j;  // interpolated cumulative joules per provider; sums to cumulative_energy_joules
         // Per-checkpoint exact perf counters (macOS kpc only, zero on other platforms)
         uint64_t cycles{0};
         uint64_t instructions{0};
         uint64_t cache_misses{0};
         uint64_t branch_misses{0};
     };
-    std::vector<CorrelatedCheckpoint> get_checkpoint_measurements();
+    struct SamplerStats {
+        int64_t interval_ms{0};
+        size_t buffer_capacity{0}, readings{0};
+        bool wrapped{false};
+        uint64_t rejected_readings{0}, dropped_checkpoints{0}, first_ns{0}, last_ns{0}, median_gap_ns{0}, max_gap_ns{0};
+        int affinity_cpus{0};
+        std::vector<std::string> providers;
+        std::string config_path;
+    };
+    /** @brief Correlate checkpoints (name/timestamp set) with time-ordered readings; fills energy, ri, clamp, provider_j. */
+    static void correlate(const std::vector<nemb::SynchronizedReading>& readings, std::vector<CorrelatedCheckpoint>& cps);
+    /** @brief Buffered readings plus one final synchronous reading, correlated with all markers. */
+    std::vector<CorrelatedCheckpoint> get_checkpoint_measurements(SamplerStats* sampler = nullptr);
 
     /**
      * @brief Get measurement statistics and diagnostics

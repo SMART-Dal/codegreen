@@ -44,7 +44,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Output: appended to the file named by {@code CG_CP_CHECKPOINT_FILE}
  * (set by the CLI per run); {@code System.err} only when it is unset.
  *
- * Wire format (one line per (thread, method) on shutdown):
+ * Wire format on shutdown: one poller line, then one line per (thread, method):
+ *   CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns
  *   CG_CP_SUM|tid|name|calls|inclusive_uj|exclusive_uj|time_ns
  */
 public class CodeGreenStandaloneRuntime {
@@ -67,6 +68,10 @@ public class CodeGreenStandaloneRuntime {
     // checkpoints read the published value.
     private static final long POLL_NS = Long.getLong("codegreen.rapl.poll_us", 1000L) * 1000L;
     private static volatile long raplUj = 0L;
+    // Poller coverage, written by the poller only and reported as one
+    // CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns line per JVM, so the
+    // CLI can reject a run whose poller was starved (SAMPLER_STARVED).
+    private static volatile long polls = 0L, firstNs = 0L, lastNs = 0L, maxGapNs = 0L;
 
     // Per-method counters PER THREAD. Keeping the map thread-local
     // (no synchronization on the hot path) mirrors the C++ backend
@@ -174,6 +179,10 @@ public class CodeGreenStandaloneRuntime {
                     return;
                 }
                 raplUj = total;
+                long now = System.nanoTime();
+                if (polls == 0L) firstNs = now; else maxGapNs = Math.max(maxGapNs, now - lastNs);
+                lastNs = now;
+                polls = polls + 1L;
                 java.util.concurrent.locks.LockSupport.parkNanos(POLL_NS);
             }
         }, "cg-rapl");
@@ -257,6 +266,10 @@ public class CodeGreenStandaloneRuntime {
         // run, and that silently dropped the hot methods of whole forks.
         // O_APPEND keeps blocks from concurrent forks intact.
         StringBuilder sb = new StringBuilder(8 * 1024);
+        // The gap from the last poll to shutdown counts too: a poller that died
+        // or never ran shows as one large gap.
+        sb.append("CG_CP_META|").append(polls).append('|').append(firstNs).append('|').append(lastNs).append('|')
+          .append(Math.max(maxGapNs, System.nanoTime() - lastNs)).append('|').append(POLL_NS).append('\n');
         for (ThreadState ts : registry) {
             for (Map.Entry<String, long[]> e : ts.agg.entrySet()) {
                 long[] r = e.getValue();

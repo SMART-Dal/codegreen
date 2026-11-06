@@ -4,6 +4,10 @@
 #include <mutex>
 #include <vector>
 #include <functional>
+#include <algorithm>
+#include <cstdlib>
+#include <sstream>
+#include <stdexcept>
 
 namespace codegreen::nemb {
 
@@ -64,27 +68,37 @@ std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provid
     return nullptr;
 }
 
-std::vector<std::unique_ptr<EnergyProvider>> detect_available_providers() {
-    std::vector<std::unique_ptr<EnergyProvider>> providers;
-
-    std::cerr << "Detecting available energy providers..." << std::endl;
-
-    auto registered = EnergyProvider::get_registered_providers();
-    for (const auto& name : registered) {
-        auto provider = EnergyProvider::create(name);
-        if (!provider) continue;
-        if (provider->initialize()) {
-            std::cerr << "  " << provider->get_name() << " initialized" << std::endl;
-            providers.push_back(std::move(provider));
-        }
-    }
-
-    if (providers.empty()) {
-        std::cerr << "  No energy providers available" << std::endl;
+// Dedup rule: amd_rapl reads the same package counter (MSR 0xC001029B) that powercap
+// exposes as intel_rapl package-0, so amd_rapl is used only when intel_rapl does not initialize.
+std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers() {
+    std::map<std::string, std::unique_ptr<EnergyProvider>> providers;
+    const char* env = std::getenv("CODEGREEN_PROVIDERS");
+    bool strict = env && *env;
+    std::vector<std::string> names;
+    if (strict) {
+        std::stringstream ss(env);
+        for (std::string n; std::getline(ss, n, ',');) if (!n.empty()) names.push_back(n);
     } else {
-        std::cerr << "  Successfully initialized " << providers.size() << " energy provider(s)" << std::endl;
+        names = EnergyProvider::get_registered_providers();
     }
-    
+    std::stable_partition(names.begin(), names.end(), [](const std::string& n) { return n != "amd_rapl"; });
+    bool amd_requested = std::find(names.begin(), names.end(), "amd_rapl") != names.end();
+    for (const auto& name : names) {
+        if (name == "amd_rapl" && providers.count("intel_rapl")) continue;
+        auto provider = EnergyProvider::create(name);
+        if (!provider) {
+            if (strict) throw std::runtime_error("CODEGREEN_PROVIDERS: unknown provider '" + name + "'");
+            continue;
+        }
+        if (!provider->initialize()) {
+            if (strict && !(name == "intel_rapl" && amd_requested))
+                throw std::runtime_error("CODEGREEN_PROVIDERS: provider '" + name + "' failed to initialize");
+            continue;
+        }
+        std::cerr << "  " << name << " initialized" << std::endl;
+        providers[name] = std::move(provider);
+    }
+    if (strict && providers.empty()) throw std::runtime_error(std::string("CODEGREEN_PROVIDERS: no provider initialized from '") + env + "'");
     return providers;
 }
 

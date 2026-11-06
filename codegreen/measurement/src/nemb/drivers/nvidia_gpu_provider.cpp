@@ -321,9 +321,14 @@ EnergyReading NVIDIAGPUProvider::get_reading() {
             domain_power[dom] = gpu_power;
             gs.consecutive_failures = 0;
         } else {
+            // Transient miss: keep the GPU's cumulative value; the next sample integrates across the gap.
+            double held_j = gs.energy_integrator->get_accumulated_energy();
+            total_energy += held_j;
+            domain_energy["gpu" + std::to_string(i)] = held_j;
             gs.consecutive_failures++;
             if (gs.consecutive_failures > max_consecutive_failures_) {
                 gs.available = false;
+                lost_gpus_++;
                 std::cerr << "GPU " << i << " marked unavailable after " << max_consecutive_failures_ << " failures" << std::endl;
             }
         }
@@ -331,7 +336,7 @@ EnergyReading NVIDIAGPUProvider::get_reading() {
     }
 
     EnergyReading reading;
-    reading.energy_joules = total_energy;
+    reading.energy_joules = lost_gpus_ ? -1.0 : total_energy;
     reading.average_power_watts = total_power;
     reading.domain_energy_joules = std::move(domain_energy);
     reading.domain_power_watts = std::move(domain_power);
