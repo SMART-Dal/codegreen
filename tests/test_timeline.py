@@ -79,6 +79,12 @@ def test_a_decreasing_energy_series_marks_method_energy_invalid_without_aborting
     assert out["phases"] and not me["valid"] and me["invalid_reason"] == "negative_energy" and me["negative_intervals"] == 1
 
 
+def test_per_sample_metadata_does_not_disturb_the_nemb_importer():
+    series = [{**s, "source_type": "hardware_counter"} for s in _nemb()]
+    tr = tl.from_nemb(series)
+    assert len(tr.energy) == 21 and tr.counters["power_w/total"][0] == (0, 50.0)
+
+
 def test_malformed_inputs_fail_loud():
     with pytest.raises(ValueError, match="non-empty JSON list"):
         tl.from_nemb({})
