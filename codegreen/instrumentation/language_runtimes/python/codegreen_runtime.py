@@ -303,16 +303,17 @@ def _provider_warnings(sampler: Dict, w: Dict[str, str]) -> None:
         w["GPU_READ_HELD"] = f"failed reads replaced by the last good power value: {held}"
 
 
-def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False) -> float:
-    """Smallest energy window the run can resolve: the slowest selected provider's update interval and, unless every
-    provider is read synchronously at the window boundaries (boundary=True with counter providers), the sampler
-    interval. A non-fatal SAMPLER_GAP widens it to the largest gap (markers read the last polled value).
-    update_interval_ms 0 means the provider's update period is unknown: the sampler interval stands in."""
-    ms = [p["update_interval_ms"] or sampler["interval_ms_max"] for p in sampler["providers"]]
-    if not boundary or any(p["energy_source"] == "integrated_power" for p in sampler["providers"]):
-        ms.append(sampler["interval_ms_max"])
+def resolution_ns(sampler: Dict, validity: Optional[Dict] = None, boundary: bool = False, finest: bool = False) -> float:
+    """Smallest energy window the run can resolve: per provider its update interval, and, unless the provider is a
+    counter read synchronously at the window boundaries (boundary=True), the sampler interval. The slowest provider
+    bounds the total; finest=True returns the best-resolved provider instead. A non-fatal SAMPLER_GAP widens the
+    result to the largest gap (markers read the last polled value). update_interval_ms 0 means unknown: the sampler
+    interval stands in."""
+    iv = sampler["interval_ms_max"]
+    ms = [max(p["update_interval_ms"] or iv, iv) if not boundary or p["energy_source"] == "integrated_power"
+          else p["update_interval_ms"] or iv for p in sampler["providers"]]
     gap = sampler["max_gap_ns"] if validity and "SAMPLER_GAP" in validity["warnings"] else 0
-    return max(max(ms) * 1e6, gap)
+    return max((min if finest else max)(ms) * 1e6, gap)
 
 
 def measurement_validity(checkpoints: Optional[List[Dict]], sampler: Optional[Dict], run: Dict[str, Any],
@@ -386,9 +387,13 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
         w["RESOLUTION_UNKNOWN"] = "the backend reports no provider update interval; RUN_BELOW_RESOLUTION not checked"
         return _validity(r, w)
     _provider_warnings(sampler, w)
-    floor_s = cfg["min_run_updates"] * resolution_ns(sampler, boundary=True) / 1e9
+    floor_s = cfg["min_run_updates"] * resolution_ns(sampler, boundary=True, finest=True) / 1e9
     if mean_s < floor_s:
         r["RUN_BELOW_RESOLUTION"] = f"mean duration {mean_s:.6f} s < {cfg['min_run_updates']} resolutions ({floor_s} s)"
+    elif mean_s < (slow_s := cfg["min_run_updates"] * resolution_ns(sampler, boundary=True) / 1e9):
+        coarse = [p["name"] for p in sampler["providers"] if p["update_interval_ms"] * 1e-3 * cfg["min_run_updates"] > mean_s]
+        w["COARSE_PROVIDER_RESOLUTION"] = (f"mean duration {mean_s:.6f} s < {cfg['min_run_updates']} update intervals of "
+                                           f"{coarse} ({slow_s} s): their share of the total is not resolved; select providers with --sensors")
     return _validity(r, w)
 
 
@@ -818,6 +823,8 @@ def _report_at_exit():
         payload = dict(sess._finalized_report)
         payload["measurements"] = measurements
     else:
+        if not measurements and not os.environ.get("CODEGREEN_EMIT_RESULT"):
+            return  # nothing measured and no launcher waiting for a verdict: stay silent
         try:
             import socket as _sk, uuid as _u
             host = _sk.gethostname()

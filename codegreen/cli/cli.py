@@ -1358,6 +1358,7 @@ def _run_energy_measurement(
                 'validity': _validity({code: detail})}
     _select_providers(env, sensors, vcfg)
     env.setdefault("CODEGREEN_CONFIG", str(get_config_path()))
+    env["CODEGREEN_EMIT_RESULT"] = "1"
 
     if runtime_path:
         pythonpath = str(runtime_path)
@@ -3164,7 +3165,7 @@ class _NEMBBackend(_EnergyBackend):
             return False
         probe = lib.nemb_probe if hasattr(lib, "nemb_probe") else lib.nemb_initialize
         probe.restype = ctypes.c_int
-        return probe() == 1
+        return probe() > 0  # nemb_probe: usable provider count; nemb_initialize: 1 on success
 
     def _init(self):
         lib = self._load()
@@ -4036,6 +4037,7 @@ def project_energy(
         run_env = {**proj_cfg.get("runtime_injection", {}).get("env", {}), **os.environ}
         run_env.setdefault("CODEGREEN_INSTALL_DIR", str(Path(__file__).resolve().parents[2]))
         run_env.setdefault("CODEGREEN_CONFIG", str(get_config_path()))
+        run_env["CODEGREEN_EMIT_RESULT"] = "1"
         run_env.setdefault("CODEGREEN_LIB_PATH", str(nemb_lib_dir))
         run_env.pop("CODEGREEN_SYNC_DEVICE", None)
         if sync_device:
