@@ -76,7 +76,7 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - **ABI 4.** The result block's markers are under `measurements` (was `checkpoints` from `nemb_get_checkpoints_json`) and carry `ri`, `clamp` and `provider_j`; `sampler` is required. The Python runtime refuses checkpoint readback from an older `libcodegreen-nemb` (`STALE_LIBRARY`); rebuild the native library with the package.
 - **`TaskResult.valid`** (and `invalid_reason`): a task whose read failed is no longer 0 J; filter on `valid` and read `totals.invalid_tasks`.
 - **`Monitor` samples carry `valid`**; a failed read is a `valid: false` record with no energy fields. Exporters only receive valid samples.
-- **`codegreen run` statistics** are paired: `duration_s` and `power_w` use the runs the energy outlier filter kept, and `duration_s.outliers_removed` counts those runs. `energy_j.raw` is the unfiltered summary.
+- **`codegreen run --json` statistics** cover every ok run unfiltered. Filtering is opt-in with `measurement.report.outlier_method` (`iqr_<k>`) and appears in a separate `filtered` block. `energy_j.raw`, `energy_j.outlier_method`, `duration_s.outliers_removed` and `duration_s.paired_with` are removed, and `run --include-warmup` is removed.
 - **Config errors are fatal.** An unparsable config file raises instead of silently falling back to defaults.
 
 ### Changed behaviour and compatibility
