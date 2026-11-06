@@ -2,11 +2,11 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 #include <functional>
 #include <algorithm>
 #include <cstdlib>
-#include <sstream>
 #include <stdexcept>
 
 namespace codegreen::nemb {
@@ -68,37 +68,57 @@ std::unique_ptr<EnergyProvider> create_energy_provider(const std::string& provid
     return nullptr;
 }
 
-// Dedup rule: amd_rapl reads the same package counter (MSR 0xC001029B) that powercap
-// exposes as intel_rapl package-0, so amd_rapl is used only when intel_rapl does not initialize.
+static std::vector<std::string> split(const std::string& s, char sep) {
+    std::vector<std::string> out(1);
+    for (char c : s) if (c == sep) out.emplace_back(); else out.back() += c;
+    return out;
+}
+
 std::map<std::string, std::unique_ptr<EnergyProvider>> detect_available_providers() {
-    std::map<std::string, std::unique_ptr<EnergyProvider>> providers;
     const char* env = std::getenv("CODEGREEN_PROVIDERS");
-    bool strict = env && *env;
-    std::vector<std::string> names;
+    const bool strict = env && *env;
+    const auto registered = EnergyProvider::get_registered_providers();
+    std::vector<std::vector<std::string>> items;
     if (strict) {
-        std::stringstream ss(env);
-        for (std::string n; std::getline(ss, n, ',');) if (!n.empty()) names.push_back(n);
+        for (const auto& item : split(env, ',')) {
+            items.push_back(split(item, '|'));
+            for (const auto& name : items.back()) {
+                if (name.empty()) throw std::runtime_error(std::string("CODEGREEN_PROVIDERS: empty provider name in '") + env + "'");
+                if (std::find(registered.begin(), registered.end(), name) == registered.end())
+                    throw std::runtime_error("CODEGREEN_PROVIDERS: unknown provider '" + name + "'");
+            }
+        }
     } else {
-        names = EnergyProvider::get_registered_providers();
+        for (const auto& name : registered) items.push_back({name});
     }
-    std::stable_partition(names.begin(), names.end(), [](const std::string& n) { return n != "amd_rapl"; });
-    bool amd_requested = std::find(names.begin(), names.end(), "amd_rapl") != names.end();
-    for (const auto& name : names) {
-        if (name == "amd_rapl" && providers.count("intel_rapl")) continue;
-        auto provider = EnergyProvider::create(name);
-        if (!provider) {
-            if (strict) throw std::runtime_error("CODEGREEN_PROVIDERS: unknown provider '" + name + "'");
-            continue;
+    std::map<std::string, std::unique_ptr<EnergyProvider>> providers;
+    std::set<std::string> groups;
+    for (const auto& alts : items) {
+        bool found = false;
+        for (const auto& name : alts) {
+            auto provider = EnergyProvider::create(name);
+            const std::string group = provider->get_specification().counter_group;
+            if (providers.count(name) || (!group.empty() && groups.count(group))) {
+                std::cerr << "  " << name << " skipped: counter already read by another provider" << std::endl;
+                found = true;
+                break;
+            }
+            if (!provider->initialize() || !provider->self_test()) {
+                std::cerr << "  " << name << " unavailable" << std::endl;
+                continue;
+            }
+            std::cerr << "  " << name << " initialized" << std::endl;
+            if (!group.empty()) groups.insert(group);
+            providers[name] = std::move(provider);
+            found = true;
+            break;
         }
-        if (!provider->initialize()) {
-            if (strict && !(name == "intel_rapl" && amd_requested))
-                throw std::runtime_error("CODEGREEN_PROVIDERS: provider '" + name + "' failed to initialize");
-            continue;
+        if (strict && !found) {
+            std::string item;
+            for (const auto& name : alts) item += (item.empty() ? "" : "|") + name;
+            throw std::runtime_error("CODEGREEN_PROVIDERS: no working provider for '" + item + "'");
         }
-        std::cerr << "  " << name << " initialized" << std::endl;
-        providers[name] = std::move(provider);
     }
-    if (strict && providers.empty()) throw std::runtime_error(std::string("CODEGREEN_PROVIDERS: no provider initialized from '") + env + "'");
     return providers;
 }
 

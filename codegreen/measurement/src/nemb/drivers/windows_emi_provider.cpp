@@ -205,6 +205,8 @@ EnergyProviderSpec WindowsEMIProvider::get_specification() const {
         spec.measurement_domains.push_back(dc.domain);
     spec.energy_resolution_joules = 3.6e-9; // 1 pWh = 3.6 nJ
     spec.min_measurement_interval = std::chrono::microseconds(1000);
+    spec.update_interval = std::chrono::microseconds(1000);  // EMI exposes the RAPL counters (~1 ms updates)
+    spec.counter_group = "cpu_package";
     spec.typical_accuracy_percent = 2.0;
     spec.supports_temperature = false;
     spec.supports_frequency = false;

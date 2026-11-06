@@ -49,6 +49,7 @@ struct CoordinatorConfig {
     uint32_t measurement_buffer_size{1000};              ///< Circular buffer size
     bool auto_restart_failed_providers{true};            ///< Restart failed providers
     std::chrono::seconds provider_restart_interval{30};  ///< How often to retry failed providers
+    uint32_t max_consecutive_failures{5};                ///< Failed reads (or devices' failed reads) before a provider/device is lost
 };
 
 /**
@@ -72,11 +73,12 @@ public:
     // Core functionality
     
     /**
-     * @brief Add an energy provider to the coordination system
+     * @brief Add an initialized, self-tested provider (detect_available_providers does both)
      * @param provider Unique pointer to energy provider
-     * @return true if provider was successfully added and initialized
+     * @param name Key for the provider (registry name); empty = provider->get_name()
+     * @return true if the provider is available and was added before start_measurements()
      */
-    bool add_provider(std::unique_ptr<EnergyProvider> provider);
+    bool add_provider(std::unique_ptr<EnergyProvider> provider, const std::string& name = "");
     
     /**
      * @brief Remove a provider by name
@@ -101,6 +103,12 @@ public:
      * @return SynchronizedReading with aligned measurements
      */
     SynchronizedReading get_synchronized_reading();
+
+    /**
+     * @brief Take one sampler reading now. A reading with a failed provider is counted in
+     * rejected_readings() and in that provider's rejected count; returns false then.
+     */
+    bool sample_now(SynchronizedReading& out);
     
     /**
      * @brief Get time-aligned measurements over a specific duration
@@ -144,16 +152,24 @@ public:
     std::vector<SynchronizedReading> get_buffered_readings() const;
     
     /**
-     * @brief Set the size of the circular buffer
-     * @param size New buffer size
+     * @brief Resize the circular buffer, keeping the newest readings in order. Readings that no
+     * longer fit are dropped and reported through buffer_wrapped(). Returns false for size 0.
      */
-    void set_buffer_size(size_t size);
+    bool set_buffer_size(size_t size);
 
     /**
-     * @brief Set the sampling interval at runtime.
+     * @brief Set the sampling interval at runtime (safe while sampling).
      * @param interval_ms New interval in milliseconds; clamped to [1, 60000]
      */
     void set_measurement_interval_ms(int interval_ms);
+
+    /** @brief Per-provider counts keyed by provider name; inputs for the sampler report. */
+    struct ProviderCounts {
+        uint64_t rejected{0};   ///< sampler readings rejected because this provider's read failed
+        uint64_t held{0};       ///< device reads the provider answered with a held value
+        uint64_t restarts{0};   ///< re-initializations; each is a discontinuity in its cumulative energy
+    };
+    std::map<std::string, ProviderCounts> provider_counts() const;
 
     // Statistics and diagnostics
     
@@ -187,9 +203,15 @@ public:
     bool buffer_wrapped() const { return buffer_full_.load(); }
     /** @brief Sampler readings not buffered because a provider failed. */
     uint64_t rejected_readings() const { return rejected_readings_.load(); }
-    std::chrono::milliseconds measurement_interval() const { std::lock_guard<std::mutex> l(readings_mutex_); return config_.measurement_interval; }
+    std::chrono::milliseconds measurement_interval() const { return std::chrono::milliseconds(interval_ms_.load()); }
+    /** @brief Smallest and largest sampling interval in effect since start_measurements(). */
+    int64_t interval_ms_min() const { return interval_ms_min_.load(); }
+    int64_t interval_ms_max() const { return interval_ms_max_.load(); }
     uint32_t buffer_capacity() const { std::lock_guard<std::mutex> l(readings_mutex_); return config_.measurement_buffer_size; }
-    
+    /** @brief CPUs in the process affinity mask and in the sampler thread's mask, captured at start (-1 unreadable). */
+    int affinity_cpus() const { return affinity_cpus_.load(); }
+    int sampler_affinity_cpus() const { return sampler_affinity_cpus_.load(); }
+
 private:
     // Configuration
     CoordinatorConfig config_;
@@ -202,6 +224,8 @@ private:
         std::chrono::steady_clock::time_point last_successful_reading;
         std::chrono::steady_clock::time_point last_restart_attempt;
         uint32_t consecutive_failures{0};
+        uint64_t rejected{0};
+        uint64_t restarts{0};
         EnergyReading last_reading;
     };
     
@@ -220,6 +244,8 @@ private:
     std::atomic<size_t> buffer_write_index_{0};
     std::atomic<bool> buffer_full_{false};
     std::atomic<uint64_t> rejected_readings_{0};
+    std::atomic<int64_t> interval_ms_, interval_ms_min_, interval_ms_max_;
+    std::atomic<int> affinity_cpus_{-1}, sampler_affinity_cpus_{-1};
 
     // Shutdown synchronization
     mutable std::mutex shutdown_mutex_;
@@ -277,7 +303,10 @@ private:
      * @param reading Synchronized reading to buffer
      */
     void buffer_reading(const SynchronizedReading& reading);
-    
+
+    /** @brief Buffered readings in chronological order; caller holds readings_mutex_. */
+    std::vector<SynchronizedReading> ordered_readings_locked() const;
+
     /**
      * @brief Check and restart failed providers
      */

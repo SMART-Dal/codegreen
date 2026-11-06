@@ -185,8 +185,9 @@ EnergyProviderSpec IntelRAPLProvider::get_specification() const {
     // Hardware-queried capabilities (not hardcoded)
     spec.energy_resolution_joules = energy_unit_joules_;
     spec.power_resolution_watts = energy_unit_joules_ * 1000.0; // Approximate
-    spec.update_interval = std::chrono::microseconds(1000);
+    spec.update_interval = std::chrono::microseconds(1000);  // nominal RAPL counter update period (~1 ms)
     spec.counter_bits = 32; // RAPL counters are 32-bit
+    spec.counter_group = "cpu_package";
     
     // Advanced capabilities
     spec.supports_temperature = false;

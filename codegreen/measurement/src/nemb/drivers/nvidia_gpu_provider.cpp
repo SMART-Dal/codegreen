@@ -357,8 +357,9 @@ EnergyProviderSpec NVIDIAGPUProvider::get_specification() const {
         spec.measurement_domains.push_back("gpu" + std::to_string(i));
     spec.energy_resolution_joules = 1e-3;
     spec.power_resolution_watts = 1e-3;
-    spec.update_interval = std::chrono::microseconds(100000);
+    spec.update_interval = std::chrono::microseconds(100000);  // nominal NVML power sample period
     spec.counter_bits = 32;
+    spec.energy_source = "integrated_power";
     return spec;
 }
 

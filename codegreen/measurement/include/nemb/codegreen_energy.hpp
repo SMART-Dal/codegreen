@@ -255,8 +255,8 @@ public:
      */
     std::vector<nemb::SynchronizedReading> get_time_series_since(uint64_t since_ts_ns) const;
 
-    /** @brief Resize the coordinator's circular sampling buffer (clears existing). */
-    void set_buffer_size(size_t n);
+    /** @brief Resize the circular sampling buffer keeping the newest readings; dropped ones set sampler.wrapped. */
+    bool set_buffer_size(size_t n);
 
     /** @brief Set sampling interval at runtime; clamped to [1, 60000] ms. */
     void set_measurement_interval_ms(int ms);
@@ -303,13 +303,21 @@ public:
         uint64_t cache_misses{0};
         uint64_t branch_misses{0};
     };
+    /** @brief One selected provider: facts from its EnergyProviderSpec plus per-provider sampler counts. */
+    struct ProviderInfo {
+        std::string name, hardware_type, energy_source, counter_group;
+        double update_interval_ms{0};  // 0 = unknown
+        uint64_t rejected{0}, held{0};
+    };
     struct SamplerStats {
-        int64_t interval_ms{0};
+        int64_t interval_ms{0}, interval_ms_min{0}, interval_ms_max{0};
         size_t buffer_capacity{0}, readings{0};
         bool wrapped{false};
-        uint64_t rejected_readings{0}, dropped_checkpoints{0}, first_ns{0}, last_ns{0}, median_gap_ns{0}, max_gap_ns{0};
-        int affinity_cpus{0};
-        std::vector<std::string> providers;
+        uint64_t rejected_readings{0}, failed_reads{0}, provider_restarts{0}, dropped_checkpoints{0};
+        uint64_t first_ns{0}, last_ns{0}, median_gap_ns{0}, max_gap_ns{0};
+        int affinity_cpus{0}, sampler_affinity_cpus{0};
+        std::string marker_reads{"interpolated"};  // markers are interpolated between bracketing readings
+        std::vector<ProviderInfo> providers;
         std::string config_path;
     };
     /** @brief Correlate checkpoints (name/timestamp set) with time-ordered readings; fills energy, ri, clamp, provider_j. */

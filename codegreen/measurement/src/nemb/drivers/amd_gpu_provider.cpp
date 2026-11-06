@@ -225,7 +225,8 @@ EnergyProviderSpec AMDGPUProvider::get_specification() const {
     spec.power_resolution_watts = 1e-3; // Milliwatt precision
     spec.update_interval = std::chrono::microseconds(100000); // 100ms update interval
     spec.counter_bits = 32; // ROCm SMI power counters are 32-bit
-    
+    spec.energy_source = "integrated_power";
+
     return spec;
 }
 

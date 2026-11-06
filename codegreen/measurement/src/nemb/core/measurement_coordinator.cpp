@@ -6,6 +6,11 @@
 #include <iostream>
 #include <iomanip>
 #include <future>
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
+#endif
 
 namespace codegreen::nemb {
 
@@ -13,8 +18,25 @@ namespace codegreen::nemb {
 static bool reading_ok(const EnergyReading& r) { return !r.provider_id.empty() && r.energy_joules >= 0; }
 static bool sync_ok(const SynchronizedReading& r) { return r.providers_active > 0 && r.providers_failed == 0; }
 
+static void atomic_min(std::atomic<int64_t>& a, int64_t v) { for (int64_t c = a.load(); v < c && !a.compare_exchange_weak(c, v);) {} }
+static void atomic_max(std::atomic<int64_t>& a, int64_t v) { for (int64_t c = a.load(); v > c && !a.compare_exchange_weak(c, v);) {} }
+
+// CPUs in the process (main thread) affinity mask, or in thread t's mask; -1 when unreadable.
+static int affinity_cpu_count(std::thread* t) {
+#ifdef __linux__
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    int rc = t ? pthread_getaffinity_np(t->native_handle(), sizeof(set), &set) : sched_getaffinity(getpid(), sizeof(set), &set);
+    return rc == 0 ? CPU_COUNT(&set) : -1;
+#else
+    (void)t;
+    return static_cast<int>(std::thread::hardware_concurrency());
+#endif
+}
+
 MeasurementCoordinator::MeasurementCoordinator(const CoordinatorConfig& config)
-    : config_(config) {
+    : config_(config), interval_ms_(config.measurement_interval.count()),
+      interval_ms_min_(config.measurement_interval.count()), interval_ms_max_(config.measurement_interval.count()) {
     std::cerr << "[NEMB] measurement_interval=" << config_.measurement_interval.count()
               << "ms buffer_size=" << config_.measurement_buffer_size
               << " cross_validation_threshold=" << config_.cross_validation_threshold
@@ -25,40 +47,28 @@ MeasurementCoordinator::~MeasurementCoordinator() {
     stop_measurements();
 }
 
-bool MeasurementCoordinator::add_provider(std::unique_ptr<EnergyProvider> provider) {
+bool MeasurementCoordinator::add_provider(std::unique_ptr<EnergyProvider> provider, const std::string& name) {
     std::unique_lock<std::shared_mutex> lock(providers_mutex_);
-    
+
     if (!provider) {
         std::cerr << "Cannot add null energy provider" << std::endl;
         return false;
     }
-    
+
     if (running_.load()) {
         std::cerr << "Cannot add provider while measurements are active" << std::endl;
         return false;
     }
-    
-    std::string provider_name = provider->get_name();
+
+    std::string provider_name = name.empty() ? provider->get_name() : name;
     std::cerr << "Adding energy provider: " << provider_name << std::endl;
-    
+
     if (!provider->is_available()) {
         std::cerr << "  Provider not available: " << provider_name << std::endl;
         return false;
     }
-    
-    if (!provider->initialize()) {
-        std::cerr << "  Failed to initialize provider: " << provider_name << std::endl;
-        return false;
-    }
-    
-    // Run self-test
-    if (!provider->self_test()) {
-        std::cerr << "  Provider self-test failed: " << provider_name << std::endl;
-        provider->shutdown();
-        return false;
-    }
-    
-    // Add to provider map
+    provider->set_max_consecutive_failures(config_.max_consecutive_failures);
+
     ProviderState state;
     state.provider = std::move(provider);
     state.active = true;
@@ -117,17 +127,21 @@ bool MeasurementCoordinator::start_measurements() {
     filtered_power_ = 0.0;
     filter_first_reading_ = true;
     rejected_readings_.store(0);
+    interval_ms_min_.store(interval_ms_.load());
+    interval_ms_max_.store(interval_ms_.load());
+    affinity_cpus_.store(affinity_cpu_count(nullptr));
 
     running_.store(true);
 
     // Seed the buffer synchronously so the first marker is bracketed by a real reading.
-    auto seed = align_measurements(collect_provider_readings());
-    if (sync_ok(seed)) buffer_reading(seed); else rejected_readings_++;
+    SynchronizedReading seed;
+    if (sample_now(seed)) buffer_reading(seed);
 
     // Start worker threads
     measurement_thread_ = std::thread(&MeasurementCoordinator::measurement_loop, this);
     provider_health_thread_ = std::thread(&MeasurementCoordinator::provider_health_loop, this);
-    
+    sampler_affinity_cpus_.store(affinity_cpu_count(&measurement_thread_));
+
     std::cerr << "  Measurements started" << std::endl;
     return true;
 }
@@ -162,6 +176,27 @@ SynchronizedReading MeasurementCoordinator::get_synchronized_reading() {
     return align_measurements(provider_readings);
 }
 
+bool MeasurementCoordinator::sample_now(SynchronizedReading& out) {
+    auto readings = collect_provider_readings();
+    out = align_measurements(readings);
+    if (sync_ok(out)) return true;
+    rejected_readings_++;
+    std::unique_lock<std::shared_mutex> lock(providers_mutex_);
+    for (const auto& [name, r] : readings) {
+        auto it = providers_.find(name);
+        if (!reading_ok(r) && it != providers_.end()) it->second.rejected++;
+    }
+    return false;
+}
+
+std::map<std::string, MeasurementCoordinator::ProviderCounts> MeasurementCoordinator::provider_counts() const {
+    std::shared_lock<std::shared_mutex> lock(providers_mutex_);
+    std::map<std::string, ProviderCounts> counts;
+    for (const auto& [name, state] : providers_)
+        counts[name] = {state.rejected, state.provider->get_held_readings(), state.restarts};
+    return counts;
+}
+
 std::vector<SynchronizedReading> MeasurementCoordinator::collect_measurements_for_duration(
     std::chrono::milliseconds duration) {
     
@@ -172,7 +207,7 @@ std::vector<SynchronizedReading> MeasurementCoordinator::collect_measurements_fo
     
     while (std::chrono::steady_clock::now() < end_time && running_.load()) {
         readings.push_back(get_synchronized_reading());
-        std::this_thread::sleep_for(config_.measurement_interval);
+        std::this_thread::sleep_for(measurement_interval());
     }
     
     return readings;
@@ -230,50 +265,47 @@ bool MeasurementCoordinator::restart_provider(const std::string& provider_name) 
         state.failed = false;
         state.active = true;
         state.consecutive_failures = 0;
+        state.restarts++;
         state.last_successful_reading = std::chrono::steady_clock::now();
         return true;
     }
-    
+
     return false;
+}
+
+std::vector<SynchronizedReading> MeasurementCoordinator::ordered_readings_locked() const {
+    std::vector<SynchronizedReading> result;
+    result.reserve(readings_buffer_.size());
+    size_t start = buffer_full_.load(std::memory_order_acquire) ? buffer_write_index_.load(std::memory_order_acquire) : 0;
+    for (size_t i = 0; i < readings_buffer_.size(); ++i)
+        result.push_back(readings_buffer_[(start + i) % readings_buffer_.size()]);
+    return result;
 }
 
 std::vector<SynchronizedReading> MeasurementCoordinator::get_buffered_readings() const {
     std::lock_guard<std::mutex> lock(readings_mutex_);
-
-    std::vector<SynchronizedReading> result;
-    if (readings_buffer_.empty()) return result;
-
-    result.reserve(readings_buffer_.size());
-
-    if (!buffer_full_.load(std::memory_order_acquire)) {
-        // Simple case: just copy the readings
-        result.assign(readings_buffer_.begin(), readings_buffer_.end());
-    } else {
-        // Circular buffer: start from buffer_write_index_ and wrap around
-        size_t write_idx = buffer_write_index_.load(std::memory_order_acquire);
-        for (size_t i = 0; i < readings_buffer_.size(); ++i) {
-            result.push_back(readings_buffer_[(write_idx + i) % readings_buffer_.size()]);
-        }
-    }
-
-    return result;
+    return ordered_readings_locked();
 }
 
 void MeasurementCoordinator::set_measurement_interval_ms(int interval_ms) {
-    if (interval_ms < 1) interval_ms = 1;
-    if (interval_ms > 60000) interval_ms = 60000;
-    std::lock_guard<std::mutex> lock(readings_mutex_);
-    config_.measurement_interval = std::chrono::milliseconds(interval_ms);
+    int64_t ms = std::clamp(interval_ms, 1, 60000);
+    interval_ms_.store(ms);
+    atomic_min(interval_ms_min_, ms);
+    atomic_max(interval_ms_max_, ms);
 }
 
-void MeasurementCoordinator::set_buffer_size(size_t size) {
+bool MeasurementCoordinator::set_buffer_size(size_t size) {
+    if (size == 0) return false;
     std::lock_guard<std::mutex> lock(readings_mutex_);
-
-    readings_buffer_.clear();
+    auto ordered = ordered_readings_locked();
+    bool dropped = ordered.size() > size;
+    if (dropped) ordered.erase(ordered.begin(), ordered.end() - static_cast<std::ptrdiff_t>(size));
+    readings_buffer_ = std::move(ordered);
     readings_buffer_.reserve(size);
     buffer_write_index_.store(0, std::memory_order_release);
-    buffer_full_.store(false, std::memory_order_release);
+    if (dropped) buffer_full_.store(true, std::memory_order_release);
     config_.measurement_buffer_size = static_cast<uint32_t>(size);
+    return true;
 }
 
 MeasurementCoordinator::CoordinatorStatistics MeasurementCoordinator::get_statistics() const {
@@ -293,9 +325,8 @@ void MeasurementCoordinator::measurement_loop() {
         auto start_time = std::chrono::steady_clock::now();
 
         try {
-            auto synchronized_reading = align_measurements(collect_provider_readings());
-            if (!sync_ok(synchronized_reading)) {
-                rejected_readings_++;
+            SynchronizedReading synchronized_reading;
+            if (!sample_now(synchronized_reading)) {
                 update_statistics(synchronized_reading, false);
             } else {
                 if (config_.enable_real_time_filtering) apply_real_time_filtering(synchronized_reading);
@@ -310,7 +341,7 @@ void MeasurementCoordinator::measurement_loop() {
 
         // Use condition variable wait instead of sleep for immediate shutdown response
         auto elapsed = std::chrono::steady_clock::now() - start_time;
-        auto sleep_time = config_.measurement_interval - elapsed;
+        auto sleep_time = measurement_interval() - elapsed;
 
         if (sleep_time > std::chrono::milliseconds::zero()) {
             std::unique_lock<std::mutex> lock(shutdown_mutex_);
@@ -353,18 +384,17 @@ std::map<std::string, EnergyReading> MeasurementCoordinator::collect_provider_re
                 state.consecutive_failures = 0;
             } else {
                 state.consecutive_failures++;
-                if (state.consecutive_failures > 5) {
+                if (state.consecutive_failures > config_.max_consecutive_failures) {
                     state.failed = true;
                     std::cerr << "Provider failed: " << name << std::endl;
                 }
             }
-            
+
         } catch (const std::exception& e) {
             state.consecutive_failures++;
             std::cerr << "Exception reading from " << name << ": " << e.what() << std::endl;
-            
-            // Mark provider as failed if too many exceptions
-            if (state.consecutive_failures > 3) {
+
+            if (state.consecutive_failures > config_.max_consecutive_failures) {
                 state.failed = true;
                 std::cerr << "Provider " << name << " marked as failed due to repeated exceptions" << std::endl;
             }
@@ -498,8 +528,9 @@ void MeasurementCoordinator::check_provider_health() {
                     state.failed = false;
                     state.active = true;
                     state.consecutive_failures = 0;
+                    state.restarts++;
                     state.last_successful_reading = now;
-                    std::cerr << "Successfully restarted provider: " << name << std::endl;
+                    std::cerr << "Restarted provider " << name << "; its cumulative energy is discontinuous here" << std::endl;
                 }
             }
         }
