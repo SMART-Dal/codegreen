@@ -70,6 +70,15 @@ def test_analysis_finds_phases_energy_gpu_gaps_launch_bound_and_gc():
     assert out["method_energy"]["energy_j"] == pytest.approx(200.0)
 
 
+def test_a_decreasing_energy_series_marks_method_energy_invalid_without_aborting_the_analysis():
+    series = _nemb()
+    series[15]["energy_j"] = 0.0                            # a provider restarted mid-run
+    tr = tl.from_nemb(series).merge(tl.from_jfr(_jfr(0), offset_ns=0))
+    out = tl.analyze(tr, rel_change=0.5, confirm=2, gap_min_ns=10_000, launch_bound_frac=0.9)
+    me = out["method_energy"]
+    assert out["phases"] and not me["valid"] and me["invalid_reason"] == "negative_energy" and me["negative_intervals"] == 1
+
+
 def test_malformed_inputs_fail_loud():
     with pytest.raises(ValueError, match="non-empty JSON list"):
         tl.from_nemb({})

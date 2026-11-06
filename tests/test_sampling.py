@@ -72,3 +72,12 @@ def test_energy_by_method_refuses_misaligned_clocks():
     with pytest.raises(ValueError, match="clocks not aligned"):
         energy_by_method([(10**18, ("m",))], [(0, 0.0), (10, 1.0)])
     assert isinstance(monotonic_minus_realtime_ns(), int)
+
+
+def test_energy_by_method_keeps_a_decreasing_series_signed_and_flags_it_invalid():
+    from codegreen.analysis.sampling import energy_by_method
+    r = energy_by_method([(5, ("m",)), (15, ("m",))], [(0, 2.0), (10, 1.0), (20, 4.0)])
+    assert r["methods"]["m"]["self_j"] == pytest.approx(2.0) and r["energy_j"] == 2.0
+    assert (r["valid"], r["invalid_reason"], r["negative_intervals"]) == (False, "negative_energy", 1)
+    ok = energy_by_method([(5, ("m",))], [(0, 0.0), (10, 1.0)])
+    assert (ok["valid"], ok["invalid_reason"], ok["negative_intervals"]) == (True, None, 0)

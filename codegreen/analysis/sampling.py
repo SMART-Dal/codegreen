@@ -143,7 +143,10 @@ def energy_by_method(samples: list[tuple[int, tuple[str, ...]]],
     self energy goes to the leaf frame, total energy once to every distinct
     frame of the stack. Intervals without samples are reported as
     unattributed rather than dropped, so methods + unattributed = measured.
-    `frames` is leaf-last."""
+    Interval energies stay signed: a decreasing series (a provider restarted
+    or a counter went backwards) is counted in negative_intervals and makes
+    the result invalid (valid False, invalid_reason "negative_energy"), never
+    an error that drops the rest of the analysis. `frames` is leaf-last."""
     series = sorted(series)
     if len(series) < 2:
         raise ValueError("energy series needs at least two readings")
@@ -153,9 +156,10 @@ def energy_by_method(samples: list[tuple[int, tuple[str, ...]]],
         raise ValueError("no sample falls inside the energy series: clocks not aligned")
     self_j: dict[str, float] = {}
     total_j: dict[str, float] = {}
-    unattributed, i = 0.0, 0
+    unattributed, i, negative = 0.0, 0, 0
     for k in range(len(series) - 1):
         (_, ea), (tb, eb) = series[k], series[k + 1]
+        negative += eb < ea
         j = i
         while j < len(inside) and inside[j][0] < tb:
             j += 1
@@ -168,7 +172,8 @@ def energy_by_method(samples: list[tuple[int, tuple[str, ...]]],
             for name in set(frames):
                 total_j[name] = total_j.get(name, 0.0) + share
         i = j
-    return {"energy_j": series[-1][1] - series[0][1], "unattributed_j": unattributed,
+    return {"energy_j": series[-1][1] - series[0][1], "unattributed_j": unattributed, "valid": not negative,
+            "invalid_reason": "negative_energy" if negative else None, "negative_intervals": negative,
             "samples_used": len(inside), "samples_outside": len(samples) - len(inside),
             "methods": {n: {"self_j": self_j.get(n, 0.0), "total_j": total_j[n]} for n in total_j}}
 
