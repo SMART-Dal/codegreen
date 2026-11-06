@@ -22,8 +22,7 @@ namespace {
     }();
 }
 
-IntelRAPLProvider::IntelRAPLProvider() {
-}
+IntelRAPLProvider::IntelRAPLProvider(std::string powercap_root) : root_(std::move(powercap_root)) {}
 
 IntelRAPLProvider::~IntelRAPLProvider() {
     shutdown();
@@ -99,6 +98,7 @@ EnergyReading IntelRAPLProvider::get_reading() {
     double total_energy = 0.0;
     double total_power = 0.0;
     bool any_successful = false;
+    bool top_level_failed = false;  // a summed domain that failed would silently lower the total
     std::map<std::string, uint64_t> raw_values;
     
     // Read energy from ALL available RAPL domains
@@ -115,10 +115,11 @@ EnergyReading IntelRAPLProvider::get_reading() {
                  // Try to re-open if reading failed
                  if (reader) reader->open_file();
                  reading.domain_energy_joules[domain] = -1.0;
+                 top_level_failed |= top_level_domains_.count(domain) > 0;
             }
         } catch (const std::exception& e) {
-            // Log error but continue with other domains
             reading.domain_energy_joules[domain] = -1.0;
+            top_level_failed |= top_level_domains_.count(domain) > 0;
         }
     }
     
@@ -156,13 +157,14 @@ EnergyReading IntelRAPLProvider::get_reading() {
     }
     
     // Set aggregated values
-    reading.energy_joules = any_successful ? total_energy : -1.0;
+    const bool valid = any_successful && !top_level_failed;
+    reading.energy_joules = valid ? total_energy : -1.0;
     reading.instantaneous_power_watts = total_power;
     reading.average_power_watts = total_power;
     
     // Set quality metrics
     reading.measurement_uncertainty = 0.01; // 1% - Intel RAPL typical
-    reading.confidence = any_successful ? 0.95 : 0.0;
+    reading.confidence = valid ? 0.95 : 0.0;
     reading.uncertainty_percent = 1.0;
     reading.sample_count = 1;
     reading.source_type = "hardware_counter";
@@ -245,10 +247,10 @@ void IntelRAPLProvider::shutdown() {
 std::map<std::string, RAPLDomain> IntelRAPLProvider::get_available_domains() const {
     std::map<std::string, RAPLDomain> domains;
     
-    if (std::filesystem::exists("/sys/class/powercap/intel-rapl:0/energy_uj")) {
+    if (std::filesystem::exists(root_ + "/intel-rapl:0/energy_uj")) {
         RAPLDomain package_domain;
         package_domain.name = "package";
-        package_domain.sysfs_path = "/sys/class/powercap/intel-rapl:0/energy_uj";
+        package_domain.sysfs_path = root_ + "/intel-rapl:0/energy_uj";
         package_domain.available = true;
         domains["package"] = package_domain;
     }
@@ -277,7 +279,7 @@ bool IntelRAPLProvider::detect_rapl_domains() {
     std::set<std::string> zone_level_domains;  // sysfs top-level (intel-rapl:X)
 
     for (int pkg = 0; ; ++pkg) {
-        std::string base = "/sys/class/powercap/intel-rapl:" + std::to_string(pkg);
+        std::string base = root_ + "/intel-rapl:" + std::to_string(pkg);
         std::string energy_path = base + "/energy_uj";
         if (!std::filesystem::exists(energy_path)) break;
         std::string domain_name = read_sysfs(base + "/name");
@@ -378,7 +380,7 @@ bool IntelRAPLProvider::query_energy_units() {
     // For now, use a reasonable default and try to infer from readings
     
     // Check if we can read the name file to get more info
-    std::string name_path = "/sys/class/powercap/intel-rapl:0/name";
+    std::string name_path = root_ + "/intel-rapl:0/name";
     if (std::filesystem::exists(name_path)) {
         std::ifstream name_file(name_path);
         std::string rapl_name;
@@ -457,6 +459,12 @@ bool IntelRAPLProvider::initialize_file_readers() {
         std::cerr << "No RAPL domains accessible. Fix: sudo chmod +r /sys/class/powercap/intel-rapl/*/energy_uj" << std::endl;
         return false;
     }
+    for (const auto& d : top_level_domains_) {
+        if (!domain_file_readers_.count(d)) {
+            std::cerr << "RAPL domain " << d << " is part of the total but not readable" << std::endl;
+            return false;
+        }
+    }
     available_domains_ = accessible;
     return true;
 }
@@ -496,7 +504,7 @@ bool IntelRAPLProvider::take_initial_readings() {
 bool IntelRAPLProvider::query_energy_unit_from_hardware() {
     // Try to read energy unit from sysfs first (more reliable than MSR)
     // Use the same path format as detect_rapl_domains() for consistency
-    const std::string energy_unit_path = "/sys/class/powercap/intel-rapl:0/energy_uj";
+    const std::string energy_unit_path = root_ + "/intel-rapl:0/energy_uj";
     
     if (std::filesystem::exists(energy_unit_path)) {
         // For sysfs interface, energy values are already in microjoules
