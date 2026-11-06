@@ -108,8 +108,9 @@ class BenchmarkHarness:
                 self.progress_callback(f"  Run {i+1} failed: {e}")
         return results
 
-    def tasks(self, problem: str, languages: List[str], sizes: List[str]) -> List[Task]:
-        """Tasks of one problem at the given languages and sizes; the default suite is benchmarksgame."""
+    def tasks(self, problem: str, languages: List[str], sizes: Optional[List[str]] = None) -> List[Task]:
+        """Tasks of one problem at the given languages and sizes (suite defaults when None); the default suite is
+        benchmarksgame."""
         if self.suite is None:
             from benchmark.suites.benchmarksgame import BenchmarksgameSuite
             self.suite = BenchmarksgameSuite()

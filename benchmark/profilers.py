@@ -47,6 +47,7 @@ class CodeGreenProfiler(ProfilerInterface):
     def __init__(self):
         self.source_path: Path | None = None
         self.language: str | None = None
+        self.extra_args: List[str] = []
 
     def set_source(self, source: Path, language: str = None):
         """Set source file and language for measurement."""
@@ -69,7 +70,7 @@ class CodeGreenProfiler(ProfilerInterface):
             # Fallback: detect from command
             lang, source, args = self._detect_from_cmd(cmd)
 
-        full_cmd = ["codegreen", "measure", lang, source, "--json", "--timeout", str(timeout)] + args
+        full_cmd = ["codegreen", "measure", lang, source, "--json", "--timeout", str(timeout), *self.extra_args] + args
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
         start = time.perf_counter()

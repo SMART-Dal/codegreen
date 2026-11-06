@@ -1,10 +1,15 @@
 """Validation experiments for paper submission."""
+import json
+import os
+import statistics as st
+import subprocess
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence
 
+from benchmark.config import ValidityTolerances
 from benchmark.harness import BenchmarkHarness
+from benchmark.profilers import CodeGreenProfiler, PerfProfiler
 from benchmark.results import StatisticalAnalysis, valid_energies
 from validation.analysis import AccuracyAnalysis
 
@@ -53,7 +58,7 @@ class OverheadExperiment(Experiment):
                         native_times = [r.time_seconds for r in native_results]
                         cg_times = [r.time_seconds for r in cg_results]
                         if not native_times or not cg_times:
-                            harness.progress_callback(f"  Skipped: no valid results")
+                            harness.progress_callback("  Skipped: no valid results")
                             continue
                         overhead = StatisticalAnalysis.compute_overhead(native_times, cg_times)
                         all_overheads.append(overhead["overhead_percent"])
@@ -227,6 +232,150 @@ class LinearityExperiment(Experiment):
             raw_data=raw_data
         )
 
+_MEASURE_ARGS = {"coarse": [], "fine": ["-g", "fine"], "rapl": ["--sensors", "rapl"]}
+
+
+def _measure_facts(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Facts of one `codegreen measure --json` result that the validity contract must agree with."""
+    cps = sorted(d.get("checkpoints") or [], key=lambda c: c["timestamp"])
+    s = d.get("summary") or {}
+    f = {"energy_j": s.get("total_energy_j"), "exclusive_sum_j": s.get("exclusive_sum_j"), "sampler": d.get("sampler")}
+    if len(cps) >= 2:
+        steps = list(zip(cps, cps[1:]))
+        f.update(window_s=(cps[-1]["timestamp"] - cps[0]["timestamp"]) / 1e9,
+                 clamped=sum(c["clamp"] != "none" for c in cps), negative_steps=sum(b["joules"] < a["joules"] for a, b in steps),
+                 provider_decreases={p: sum(b["provider_j"][p] < a["provider_j"][p] for a, b in steps) for p in cps[0]["provider_j"]})
+    return f
+
+
+@dataclass
+class ValidityExperiment(Experiment):
+    """Exp6: the validity contract of codegreen measure/run on any host. Expectations come from each run's own facts
+    (window in sampler intervals, sampler affinity, dropped checkpoints, GPU providers), never from host constants;
+    starvation protocols pin the whole measured command to the first one or two CPUs of the inherited affinity;
+    accuracy is `codegreen run --sensors rapl` against `perf stat -a` at the same CPU domain set."""
+    problems: Sequence[str] = ("nbody", "binarytrees")
+    languages: Sequence[str] = ("python", "c", "java")
+    sizes: Optional[List[str]] = None
+    repetitions: int = 5
+    modes: Sequence[str] = ("coarse", "fine", "rapl", "run", "perf")
+    tol: ValidityTolerances = field(default_factory=ValidityTolerances)
+    name = "validity"
+    description = "Validity status, invariants, accuracy and repeatability of codegreen measure and run"
+
+    def one(self, harness: BenchmarkHarness, task, mode: str) -> Dict[str, Any]:
+        rec: Dict[str, Any] = {"task": task.name, "mode": mode}
+        if mode == "perf":
+            r = PerfProfiler().run(task.run_command, harness.timeout)
+            return {**rec, "energy_j": r.energy_joules, "duration_s": r.time_seconds}
+        if mode == "run":
+            p = subprocess.run(["codegreen", "run", "-n", "1", "-w", "0", "--no-validate", "--sensors", "rapl", "--json",
+                                "--", *task.run_command], capture_output=True, text=True, timeout=harness.timeout + 60)
+            d = json.loads(p.stdout)
+            return {**rec, "rc": p.returncode, "validity": d.get("validity"),
+                    "energy_j": (d.get("energy_j") or {}).get("mean"), "duration_s": (d.get("duration_s") or {}).get("mean")}
+        prof = CodeGreenProfiler()
+        prof.set_source(task.source_file, task.language)
+        prof.extra_args = _MEASURE_ARGS[mode]
+        r = prof.run(task.run_command, harness.timeout)
+        return {**rec, "validity": r.validity, **_measure_facts(r.raw_data)}
+
+    def expectation(self, r: Dict[str, Any]) -> tuple:
+        """(required reasons, allowed reasons, required warnings) of a measure-mode run."""
+        smp, req, opt, warn = r["sampler"], set(), set(), set()
+        k = r["window_s"] * 1e3 / smp["interval_ms"]
+        if k < self.tol.min_window_samples - 1:
+            req.add("TOTAL_BELOW_RESOLUTION")
+        elif k < self.tol.min_window_samples:
+            opt.add("TOTAL_BELOW_RESOLUTION")
+        if smp["dropped_checkpoints"]:
+            req.add("CHECKPOINT_CAP")
+        if smp["affinity_cpus"] < self.tol.min_affinity_cpus:
+            warn.add("AFFINITY_SINGLE_CPU")
+            opt.add("SAMPLER_STARVED")
+        if r["mode"] != "rapl" and any(p["hardware_type"] == "gpu" for p in smp["providers"]):
+            warn.add("GPU_IN_TOTAL")
+        return req, opt, warn
+
+    def run(self, harness: BenchmarkHarness) -> ExperimentResult:
+        full = sorted(os.sched_getaffinity(0))
+        protocols = {"P": set(full), "A": {full[0]}, "B": set(full[:2])}
+        recs = []
+        for problem in self.problems:
+            for task in harness.tasks(problem, list(self.languages), self.sizes):
+                task = harness.suite.build(task)
+                for proto, cpus in protocols.items():
+                    os.sched_setaffinity(0, cpus)
+                    try:
+                        for rep in range(self.repetitions):
+                            for mode in (self.modes if proto == "P" else ["rapl"]):
+                                harness.progress_callback(f"  validity {task.name} {proto} {mode} rep {rep}")
+                                try:
+                                    rec = self.one(harness, task, mode)
+                                except Exception as e:
+                                    rec = {"task": task.name, "mode": mode, "error": f"{type(e).__name__}: {e}"}
+                                recs.append({"proto": proto, "rep": rep, **rec})
+                    finally:
+                        os.sched_setaffinity(0, full)
+        return self.aggregate(recs)
+
+    def aggregate(self, recs: List[Dict[str, Any]]) -> ExperimentResult:
+        tol, mism, inv, decreases, excl = self.tol, [], [], [], []
+        errors, recs = [r for r in recs if "error" in r], [r for r in recs if "error" not in r]
+        for r in (r for r in recs if r["mode"] in _MEASURE_ARGS):
+            v = r["validity"]
+            if "window_s" not in r:
+                mism.append({"task": r["task"], "mode": r["mode"], "proto": r["proto"], "reasons": v["reasons"], "expected": "a window"})
+                continue
+            req, opt, warn = self.expectation(r)
+            obs = set(v["reasons"])
+            if not (req <= obs <= req | opt and warn <= set(v["warnings"]) and (v["status"] == "valid") == (not obs)):
+                mism.append({"task": r["task"], "mode": r["mode"], "proto": r["proto"], "reasons": sorted(obs),
+                             "warnings": sorted(v["warnings"]), "required": sorted(req), "allowed": sorted(opt),
+                             "required_warnings": sorted(warn), "window_s": r["window_s"]})
+            if v["status"] == "valid" and (r["clamped"] or r["negative_steps"] or not r["energy_j"] or r["energy_j"] < 0):
+                inv.append(r)
+            if any(r["provider_decreases"].values()):
+                decreases.append(r)
+            if (r["mode"] == "fine" and v["status"] == "valid" and "OVERLAPPING_THREADS" not in v["warnings"]
+                    and r["exclusive_sum_j"] > r["energy_j"] * (1 + tol.exclusive_rel_tol)):
+                excl.append(r)
+        inv += [r for r in recs if r["mode"] == "run" and r["validity"]["status"] == "valid" and not (r["energy_j"] or 0) > 0]
+        groups: Dict[tuple, List[Dict[str, Any]]] = {}
+        for r in recs:
+            groups.setdefault((r["task"], r["proto"], r["mode"]), []).append(r)
+
+        def ok(rs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            return [r for r in rs if r["mode"] == "perf" or r["validity"]["status"] == "valid"]
+        cv_fail, perf_rows = [], []
+        for (task, proto, mode), rs in groups.items():
+            e = [r["energy_j"] for r in ok(rs)]
+            w = st.mean(r.get("window_s") or r.get("duration_s") or 0 for r in rs)
+            lim = next((c for t, c in sorted(tol.cv_max_pct.items(), reverse=True) if w >= t), None)
+            if mode in ("rapl", "run") and lim and len(e) > 1 and st.mean(e) > 0 and st.stdev(e) / st.mean(e) * 100 > lim:
+                cv_fail.append({"task": task, "proto": proto, "mode": mode, "cv_pct": st.stdev(e) / st.mean(e) * 100, "limit": lim})
+            pg = ok(groups.get((task, proto, "perf"), []))
+            if mode == "run" and e and pg:
+                ratio, d = st.mean(e) / st.mean(r["energy_j"] for r in pg), st.mean(r["duration_s"] for r in rs)
+                perf_rows.append({"task": task, "proto": proto, "duration_s": d, "ratio": ratio,
+                                  "fail": d >= tol.run_vs_perf_min_duration_s and abs(ratio - 1) > tol.run_vs_perf_rel_tol})
+        starve: Dict[str, Dict[str, Any]] = {}
+        for r in (r for r in recs if r.get("sampler")):
+            s = starve.setdefault(r["proto"], {"runs": 0, "starved": 0, "max_gap_factor": 0.0})
+            s["runs"] += 1
+            s["starved"] += "SAMPLER_STARVED" in r["validity"]["reasons"]
+            s["max_gap_factor"] = max(s["max_gap_factor"], r["sampler"]["max_gap_ns"] / (r["sampler"]["interval_ms"] * 1e6))
+        criteria = {"all_runs_completed": not errors, "validity_matches_expectation": not mism, "valid_runs_invariants": not inv,
+                    "no_provider_decreases": not decreases, "exclusive_le_inclusive": not excl,
+                    "run_vs_perf": not any(x["fail"] for x in perf_rows), "cv_across_reps": not cv_fail}
+        keep = ("task", "mode", "proto", "rep", "energy_j", "validity")
+        return ExperimentResult(self.name, all(criteria.values()), criteria, {
+            "errors": errors, "mismatches": mism, "invariant_violations": [{k: r.get(k) for k in keep} for r in inv],
+            "provider_decreases": [{**{k: r.get(k) for k in keep}, "decreases": r["provider_decreases"]} for r in decreases],
+            "exclusive_failures": [{**{k: r.get(k) for k in keep}, "exclusive_sum_j": r["exclusive_sum_j"]} for r in excl],
+            "cv_failures": cv_fail, "run_vs_perf": perf_rows, "sampler_starvation": starve, "records": recs})
+
+
 class ExperimentRunner:
     def __init__(self, harness: Optional[BenchmarkHarness] = None):
         self.harness = harness or BenchmarkHarness()
@@ -244,3 +393,24 @@ class ExperimentRunner:
             LinearityExperiment()
         ]
         return {exp.name: self.run_experiment(exp) for exp in experiments}
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(description="CodeGreen measurement-validity suite (portable)")
+    ap.add_argument("--problems", nargs="+", default=list(ValidityExperiment.problems))
+    ap.add_argument("--languages", nargs="+", default=list(ValidityExperiment.languages))
+    ap.add_argument("--sizes", nargs="+")
+    ap.add_argument("--reps", type=int, default=ValidityExperiment.repetitions)
+    ap.add_argument("--out", required=True, help="JSON file for the criteria and raw records")
+    a = ap.parse_args()
+    harness = BenchmarkHarness(warmup_runs=0)
+    try:
+        res = ValidityExperiment(a.problems, a.languages, a.sizes, a.reps).run(harness)
+    finally:
+        harness.cleanup()
+    with open(a.out, "w") as f:
+        json.dump({"passed": res.passed, "criteria": res.metrics, **res.raw_data}, f, indent=1, default=str)
+    print(json.dumps(res.metrics, indent=1))
+    sys.exit(0 if res.passed else 1)
