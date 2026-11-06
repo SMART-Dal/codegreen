@@ -1768,6 +1768,42 @@ def test_project_fails_up_front_without_the_native_backend(tmp_path, monkeypatch
     assert r.exit_code == 1 and "NEMB native measurement library" in _plain(r.output)
 
 
+def test_version_comes_from_the_source_tree_not_stale_metadata():
+    """An editable install with metadata from an older build reported that version for newer code (0.4.8 vs 0.5.0)."""
+    from typer.testing import CliRunner
+    import codegreen.cli.cli as cli
+    pyproject = (Path(codegreen.__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    version = re.search(r'^version *= *"([^"]+)"', pyproject, re.M).group(1)
+    assert codegreen.__version__ == version
+    assert version in CliRunner().invoke(cli.app, ["--version"]).output
+
+
+def test_measure_output_file_is_the_json_report_with_the_verdict(tmp_path, monkeypatch):
+    """`measure -o` wrote a raw schema with measurement.success true on an invalid run, so a consumer of the file
+    used invalid joules; the file must be the --json document, verdict included, with or without --json."""
+    from typer.testing import CliRunner
+    import codegreen.cli.cli as cli
+    validity = {"status": "invalid", "reasons": ["TOTAL_BELOW_RESOLUTION"],
+                "detail": {"TOTAL_BELOW_RESOLUTION": "root window spans 0 reading(s) < 2"}, "warnings": {}}
+    fake = {"success": True, "output": "", "error": None, "returncode": 0, "sampler": _vsampler(), "validity": validity,
+            "checkpoints": [_vcp("enter:main:p", 0, 1.0, 1), _vcp("exit:main:p", 7_000_000, 1.5, 1)]}
+    monkeypatch.setattr(cli, "_should_run_actual_measurement", lambda: True)
+    monkeypatch.setattr(cli, "_run_energy_measurement", lambda *a, **k: fake)
+    script = tmp_path / "w.py"
+    script.write_text("def f():\n    return 1\n\n\nf()\n")
+    docs = []
+    for extra in (["--json"], []):
+        out = tmp_path / f"r{len(extra)}.json"
+        r = CliRunner().invoke(cli.app, ["measure", "python", str(script), "-o", str(out), *extra])
+        assert r.exit_code == 3
+        docs.append(json.loads(out.read_text()))
+        if extra:
+            assert json.loads(r.stdout) == docs[-1]
+    for d in docs:
+        assert d["success"] is False and d["error"] == "invalid_measurement: TOTAL_BELOW_RESOLUTION"
+        assert d["validity"] == validity and "per_function_energy" in d and d["summary"]["total_energy_j"] == 0.5
+
+
 def _vcp(cid: str, ts: int, joules: float, ri: int, clamp: str = "none", tid: str = "1") -> Dict:
     return {"checkpoint_id": f"{cid}#inv_1_t{tid}", "timestamp": ts, "joules": joules, "watts": 1.0, "ri": ri,
             "clamp": clamp, "provider_j": {"intel_rapl": joules}}

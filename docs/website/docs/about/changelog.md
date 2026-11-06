@@ -36,6 +36,8 @@ Every `measure`, `run` and `project` result now states whether it is a valid mea
 - Negative energy deltas are no longer clamped to 0 (`NEGATIVE_ENERGY`). `wall_time_s` is always nanoseconds / 1e9 (the unit was guessed from magnitude before).
 - The child's exit code and a timeout are reported (`INCOMPLETE_CRASH`, `INCOMPLETE_TIMEOUT`); a malformed result block raises instead of being ignored. A compile error is `COMPILE_FAILED` with the compiler output.
 - C/C++ compilers come from `measurement.toolchain` (`CC`/`CXX` override), resolved in `prefer_dirs` before `PATH`.
+- `--output`/`-o` writes the `--json` document (with `success: false` and `error: "invalid_measurement: ..."` on an invalid run); the former `{timestamp, analysis, measurement}` file reported `measurement.success: true` for invalid runs and had no per-function energy.
+- `codegreen --version` reads `pyproject.toml` in a source or editable tree, so stale installed metadata no longer reports an older version.
 - Coarse granularity is config-driven: `instrumentation_config.entry_points` names the entry functions and `ast_config.insertion_rules.<type>.boundary` (`enter`/`exit`) marks frame points, so C's `main` closes on every return.
 
 ### `codegreen run`

@@ -1047,19 +1047,15 @@ def measure_energy(
                             if not no_cleanup and c_path.exists() and c_path != script:
                                 os.remove(c_path)
 
-                if output:
-                    _save_measurement_results(output, result, measurement_result)
-                    if not json_output:
-                        console.print(f"[green][ok] Results saved to: {output}[/green]")
             else:
                 if not json_output:
                     console.print(f"\n[yellow]Note: No energy sensors available. Code analysis completed.[/yellow]")
-            
+
             validity = (measurement_result or {}).get("validity")
             invalid = validity is not None and validity["status"] != "valid"
             if invalid:
                 error = f"invalid_measurement: {','.join(validity['reasons'])}"
-            if json_output:
+            if json_output or (output and measurement_result is not None):
                 combined_results = _build_comprehensive_json(
                     result, measurement_result, source_code, script, language.value, granularity.value, sensors
                 )
@@ -1071,8 +1067,14 @@ def measure_energy(
                 }
                 if invalid:
                     combined_results.update(success=False, error=error)
-                print(json.dumps(combined_results, indent=2))
-            elif invalid:
+                report = json.dumps(combined_results, indent=2)
+                if output and measurement_result is not None:
+                    output.write_text(report, encoding="utf-8")
+                    if not json_output:
+                        console.print(f"[green][ok] Results saved to: {output}[/green]")
+                if json_output:
+                    print(report)
+            if invalid and not json_output:
                 console.print(f"[red]{error}[/red]")
                 for code, text in validity["detail"].items():
                     console.print(f"  [red]{code}[/red]: {text}")
@@ -1448,30 +1450,6 @@ def _run_energy_measurement(
                 binary_to_cleanup.unlink()
             except OSError:
                 pass
-
-
-def _save_measurement_results(
-    output_path: Path,
-    analysis_result: Any,
-    measurement_result: Dict[str, Any]
-) -> None:
-    """Save combined analysis and measurement results"""
-    
-    results = {
-        'timestamp': datetime.now(timezone.utc).isoformat(timespec="microseconds"),
-        'analysis': {
-            'language': analysis_result.language,
-            'success': analysis_result.success,
-            'instrumentation_points': analysis_result.checkpoint_count,
-            'optimization_suggestions': analysis_result.optimization_suggestions,
-            'metadata': analysis_result.metadata
-        },
-        'measurement': measurement_result
-    }
-    
-    # Save as JSON
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2)
 
 
 @app.command("analyze", rich_help_panel="Measurement")
