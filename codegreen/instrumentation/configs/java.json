@@ -290,9 +290,10 @@
                 "to": "CodeGreenStandaloneRuntime.checkpoint"
             },
             "env": {
-                "CODEGREEN_RAPL_ROOT": "/sys/class/powercap/intel-rapl",
+                "CODEGREEN_RAPL_ROOT": "/sys/class/powercap",
                 "CODEGREEN_RAPL_ZONE": "intel-rapl:\\d+",
-                "CODEGREEN_RAPL_DOMAIN": "package.*",
+                "CODEGREEN_RAPL_SUPERSET": "(?i).*(psys|platform).*",
+                "CODEGREEN_RAPL_DISJOINT": "(?i)dram.*",
                 "CODEGREEN_RAPL_POLL_US": "1000"
             }
         },

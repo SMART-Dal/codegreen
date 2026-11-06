@@ -48,10 +48,13 @@ import java.util.regex.Pattern;
  *
  * Poller settings (system property, else environment variable; no defaults, the CLI
  * exports them from runtime_injection.env in configs/java.json):
- *   codegreen.rapl.root    / CODEGREEN_RAPL_ROOT    directory holding the powercap zones
- *   codegreen.rapl.zone    / CODEGREEN_RAPL_ZONE    regex on zone directory names
- *   codegreen.rapl.domain  / CODEGREEN_RAPL_DOMAIN  regex on the zone's name file
- *   codegreen.rapl.poll_us / CODEGREEN_RAPL_POLL_US poll period in microseconds
+ *   codegreen.rapl.root     / CODEGREEN_RAPL_ROOT     directory holding the powercap zones (sub-zone ZONE:N beside ZONE)
+ *   codegreen.rapl.zone     / CODEGREEN_RAPL_ZONE     regex on top-level zone directory names
+ *   codegreen.rapl.superset / CODEGREEN_RAPL_SUPERSET regex on a zone's name file: a zone covering all others (psys)
+ *   codegreen.rapl.disjoint / CODEGREEN_RAPL_DISJOINT regex on a sub-zone's name file: a counter outside its zone (dram)
+ *   codegreen.rapl.poll_us  / CODEGREEN_RAPL_POLL_US  poll period in microseconds
+ * The summed domains follow NEMB's intel_rapl provider (IntelRAPLProvider::detect_rapl_domains): the superset zones
+ * alone when present, else every zone plus its disjoint sub-zones; nested sub-zones (core, uncore) never.
  *
  * Wire format on shutdown: one poller line per JVM (a single-line JSON object shaped like
  * the NEMB sampler block, ABI 4), then one line per (thread, method):
@@ -64,15 +67,15 @@ public class CodeGreenStandaloneRuntime {
 
     private static final boolean LEGACY_EMIT =
         Boolean.parseBoolean(System.getProperty("codegreen.standalone.legacy", "false"));
-    // Sums every zone under RAPL_ROOT whose directory matches RAPL_ZONE and whose name file
-    // matches RAPL_DOMAIN. The counter advances once per RAPL update period, so a per-call
+    // Sums the domains openDomains() selects. The counter advances once per RAPL update period, so a per-call
     // sysfs read returns no more information than the latest periodic reading while costing
     // a syscall pair on every enter and exit (call-heavy code ran 30x+ slower). One poller
     // thread reads the counters every POLL_NS and publishes the cumulative energy since
     // startup; checkpoints read the published value (marker_reads "last_poll").
     private static final String RAPL_ROOT = setting("codegreen.rapl.root", "CODEGREEN_RAPL_ROOT");
     private static final Pattern RAPL_ZONE = Pattern.compile(setting("codegreen.rapl.zone", "CODEGREEN_RAPL_ZONE"));
-    private static final Pattern RAPL_DOMAIN = Pattern.compile(setting("codegreen.rapl.domain", "CODEGREEN_RAPL_DOMAIN"));
+    private static final Pattern RAPL_SUPERSET = Pattern.compile(setting("codegreen.rapl.superset", "CODEGREEN_RAPL_SUPERSET"));
+    private static final Pattern RAPL_DISJOINT = Pattern.compile(setting("codegreen.rapl.disjoint", "CODEGREEN_RAPL_DISJOINT"));
     private static final long POLL_NS = Long.parseLong(setting("codegreen.rapl.poll_us", "CODEGREEN_RAPL_POLL_US")) * 1000L;
     private static final int AFFINITY_CPUS = allowedCpus("/proc/self/status");
     private static volatile long raplUj = 0L;
@@ -177,25 +180,44 @@ public class CodeGreenStandaloneRuntime {
         throw new IllegalStateException("CodeGreen: no Cpus_allowed_list in " + status);
     }
 
+    private static File[] zones(Pattern dirName) {
+        File[] dirs = new File(RAPL_ROOT).listFiles((d, n) -> dirName.matcher(n).matches());
+        if (dirs == null) return new File[0];
+        Arrays.sort(dirs);
+        return dirs;
+    }
+
+    private static String zoneName(File dir) {
+        try {
+            return new String(Files.readAllBytes(new File(dir, "name").toPath()), StandardCharsets.US_ASCII).trim();
+        } catch (IOException e) {
+            throw new IllegalStateException("CodeGreen: cannot read RAPL zone name " + dir + " (" + e + ")", e);
+        }
+    }
+
     private static Domain[] openDomains() {
-        File[] dirs = new File(RAPL_ROOT).listFiles((d, n) -> RAPL_ZONE.matcher(n).matches());
-        List<Domain> out = new ArrayList<>();
-        if (dirs != null) {
-            Arrays.sort(dirs);
-            for (File dir : dirs) {
-                try {
-                    if (!RAPL_DOMAIN.matcher(new String(Files.readAllBytes(new File(dir, "name").toPath()),
-                            StandardCharsets.US_ASCII).trim()).matches()) continue;
-                    out.add(new Domain(dir));
-                } catch (IOException | NumberFormatException e) {
-                    throw new IllegalStateException("CodeGreen: cannot read RAPL domain " + dir
-                        + " (" + e + "); per-function energy would be wrong. Grant read access to energy_uj.", e);
-                }
+        File[] top = zones(RAPL_ZONE);
+        List<File> picked = new ArrayList<>();
+        for (File z : top) if (RAPL_SUPERSET.matcher(zoneName(z)).matches()) picked.add(z);
+        if (picked.isEmpty()) {
+            for (File z : top) {
+                picked.add(z);
+                for (File s : zones(Pattern.compile(Pattern.quote(z.getName()) + ":\\d+")))
+                    if (RAPL_DISJOINT.matcher(zoneName(s)).matches()) picked.add(s);
             }
         }
-        if (out.isEmpty()) {
-            throw new IllegalStateException("CodeGreen: no zone matching " + RAPL_ZONE + " with a name matching "
-                + RAPL_DOMAIN + " under " + RAPL_ROOT + "; per-function energy is unavailable on this host.");
+        if (picked.isEmpty()) {
+            throw new IllegalStateException("CodeGreen: no zone matching " + RAPL_ZONE + " under " + RAPL_ROOT
+                + "; per-function energy is unavailable on this host.");
+        }
+        List<Domain> out = new ArrayList<>();
+        for (File dir : picked) {
+            try {
+                out.add(new Domain(dir));
+            } catch (IOException | NumberFormatException e) {
+                throw new IllegalStateException("CodeGreen: cannot read RAPL domain " + dir
+                    + " (" + e + "); per-function energy would be wrong. Grant read access to energy_uj.", e);
+            }
         }
         return out.toArray(new Domain[0]);
     }

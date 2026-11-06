@@ -1678,7 +1678,7 @@ class TestJavaAggregateFile:
             (dom / name).write_text(text + "\n")
         for _ in range(2):
             r = subprocess.run(["java", f"-Dcodegreen.rapl.root={tmp_path / 'rapl'}", "-Dcodegreen.rapl.zone=intel-rapl:\\d+",
-                                "-Dcodegreen.rapl.domain=package.*", "-Dcodegreen.rapl.poll_us=1000", "-cp", str(tmp_path), "T"],
+                                "-Dcodegreen.rapl.superset=psys", "-Dcodegreen.rapl.disjoint=dram", "-Dcodegreen.rapl.poll_us=1000", "-cp", str(tmp_path), "T"],
                                env=env, capture_output=True, text=True, check=True)
             assert r.stderr == ""
         lines = (tmp_path / "sum").read_text().splitlines()
