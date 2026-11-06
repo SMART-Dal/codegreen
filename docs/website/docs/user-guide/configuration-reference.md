@@ -271,13 +271,14 @@ the measured Python process alike.
 
 | Key | Default | Description |
 |---|---|---|
-| `min_window_samples` | 2 | Fewest sampler readings a root window (and a `measured` function call) must span |
+| `min_window_samples` | 2 | Fewest sampler readings a root window must span |
 | `median_gap_factor` | 1.5 | Median reading gap, in sampler intervals, that counts as a gap |
 | `gap_policy.<marker_reads>.max_gap_factor` | 3.0 | Max reading gap, in sampler intervals, that counts as a gap |
 | `gap_policy.<marker_reads>.severity` | `interpolated`: `fatal`; `last_poll`: `warning` | `fatal` reports `SAMPLER_STARVED`, `warning` reports `SAMPLER_GAP` and widens the per-function resolution to the gap |
 | `gap_policy.<marker_reads>.failed_read_severity` | `interpolated`: `warning`; `last_poll`: `fatal` | Severity of `PROVIDER_READ_FAILED` for `sampler.failed_reads` (interpolated markers skip a failed reading; last-poll markers read a stale counter) |
 | `min_affinity_cpus` | 2 | Fewest CPUs the measured process may run on before the `AFFINITY_SINGLE_CPU` warning |
 | `min_run_updates` | 10 | `run`: fewest resolutions per run before `RUN_BELOW_RESOLUTION` |
+| `measured_min_factor` | 10 | Mean time per call, in resolutions, and sampler readings in every call, for per-function `measured` |
 | `aggregate_min_factor` | 10 | Summed time, in resolutions, for per-function `aggregate_only` |
 | `fail_on_invalid` | true | Exit 3 on an invalid `measure`, `run` or `project` result; `false` only reports |
 

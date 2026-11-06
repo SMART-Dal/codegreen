@@ -407,11 +407,11 @@ def run_validity(energies: List[Optional[float]], mean_s: float, sampler: Option
 
 
 def function_quality(d: Dict[str, Any], res_ns: float, cfg: Dict[str, Any]) -> str:
-    """Per-function verdict shared by `measure` and `project`: measured when every call spans min_window_samples
-    sampler readings (reading indices, when the markers carry them) or else one resolution per call on average;
+    """Per-function verdict shared by `measure` and `project`: measured when the mean call spans measured_min_factor
+    resolutions and every call spans as many sampler readings (reading indices, when the markers carry them);
     aggregate_only when only the summed time spans aggregate_min_factor resolutions; below_resolution otherwise."""
-    per_call = (d["min_window_samples"] >= cfg["min_window_samples"] if "min_window_samples" in d
-                else d["time_ns"] >= res_ns * d["calls"])
+    f = cfg["measured_min_factor"]
+    per_call = d["time_ns"] >= f * res_ns * d["calls"] and ("min_window_samples" not in d or d["min_window_samples"] >= f)
     return ("measured" if per_call else "aggregate_only" if d["time_ns"] >= cfg["aggregate_min_factor"] * res_ns
             else "below_resolution")
 

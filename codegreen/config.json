@@ -69,7 +69,7 @@
         "quality_moderate_below_cv_pct": 10.0
       },
       "validity": {
-        "_comment": "Measurement validity policy (codegreen_runtime.measurement_validity / run_validity). Windows are counted in sampler readings; a resolution is the slowest selected provider's update_interval_ms (a provider fact) or the sampler interval. gap_policy is keyed by sampler.marker_reads: interpolated (NEMB markers interpolate between readings, so a starved sampler is fatal SAMPLER_STARVED) and last_poll (the Java standalone poller's markers read the last polled counter, so a gap is the warning SAMPLER_GAP and widens per-function resolution, while a failed read leaves a stale counter: fatal PROVIDER_READ_FAILED). severity values: fatal or warning. Per-function quality: measured, aggregate_only (summed time spans aggregate_min_factor resolutions), below_resolution. min_run_updates: a `codegreen run` mean duration below this many resolutions is RUN_BELOW_RESOLUTION. fail_on_invalid: exit 3 on any fatal reason (measure, run, project).",
+        "_comment": "Measurement validity policy (codegreen_runtime.measurement_validity / run_validity). Windows are counted in sampler readings; a resolution is the slowest selected provider's update_interval_ms (a provider fact) or the sampler interval. gap_policy is keyed by sampler.marker_reads: interpolated (NEMB markers interpolate between readings, so a starved sampler is fatal SAMPLER_STARVED) and last_poll (the Java standalone poller's markers read the last polled counter, so a gap is the warning SAMPLER_GAP and widens per-function resolution, while a failed read leaves a stale counter: fatal PROVIDER_READ_FAILED). severity values: fatal or warning. Per-function quality: measured (the mean call spans measured_min_factor resolutions and every call as many sampler readings), aggregate_only (summed time spans aggregate_min_factor resolutions), below_resolution. min_run_updates: a `codegreen run` mean duration below this many resolutions is RUN_BELOW_RESOLUTION. fail_on_invalid: exit 3 on any fatal reason (measure, run, project).",
         "min_window_samples": 2,
         "median_gap_factor": 1.5,
         "gap_policy": {
@@ -78,6 +78,7 @@
         },
         "min_affinity_cpus": 2,
         "min_run_updates": 10,
+        "measured_min_factor": 10,
         "aggregate_min_factor": 10,
         "fail_on_invalid": true
       }

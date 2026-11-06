@@ -294,11 +294,11 @@ caller's environment overrides them. Each function has `quality`.
 
 `measure` and `project` share one verdict per function:
 
-- `measured`: every call spans at least `min_window_samples` sampler readings
-  (when the markers carry reading indices), or else the mean time per call is
-  at least one resolution (`resolution_ns`: the slowest selected provider's
+- `measured`: the mean time per call spans at least `measured_min_factor`
+  resolutions (`resolution_ns`: the slowest selected provider's
   `update_interval_ms` or the sampler interval, widened to the largest gap on
-  `SAMPLER_GAP`).
+  `SAMPLER_GAP`) and, when the markers carry reading indices, every call spans
+  at least `measured_min_factor` sampler readings.
 - `aggregate_only`: the function's summed time spans at least
   `aggregate_min_factor` resolutions. Use the total, not per-call figures.
 - `below_resolution`: below both.

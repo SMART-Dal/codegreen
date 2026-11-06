@@ -2009,8 +2009,12 @@ class TestValidity:
         assert resolution_ns(_vsampler(providers=[gpu]), boundary=True) == 10e6
         assert resolution_ns(_vsampler(providers=[{**gpu, "boundary_source": "counter"}]), boundary=True) == 1e6
         assert resolution_ns(_vsampler(providers=[{**gpu, "boundary_source": "counter"}])) == 10e6
-        assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": 3}, res, cfg) == "measured"
-        assert function_quality({"calls": 2, "time_ns": 30e6}, res, cfg) == "measured"
+        f = cfg["measured_min_factor"]
+        assert function_quality({"calls": 2, "time_ns": 2 * f * res, "min_window_samples": f}, res, cfg) == "measured"
+        assert function_quality({"calls": 2, "time_ns": 2 * f * res}, res, cfg) == "measured"
+        assert function_quality({"calls": 2, "time_ns": 10, "min_window_samples": f}, res, cfg) == "below_resolution"
+        assert function_quality({"calls": 1, "time_ns": 22e6, "min_window_samples": 2}, res, cfg) == "below_resolution"
+        assert function_quality({"calls": 1, "time_ns": f * res, "min_window_samples": f - 1}, res, cfg) == "aggregate_only"
         assert function_quality({"calls": 1000, "time_ns": 100e6}, res, cfg) == "aggregate_only"
         assert function_quality({"calls": 1, "time_ns": 10, "min_window_samples": 0}, res, cfg) == "below_resolution"
 
@@ -2028,7 +2032,7 @@ class TestValidity:
             "x = 1\n", Path("t.py"), "python", "fine")
         f, m = out["per_function_energy"]["f"], out["per_function_energy"]["main"]
         assert f["calls"] == 2 and f["inclusive_j"] == pytest.approx(4.5) and f["quality"] == "below_resolution"
-        assert m["exclusive_j"] == pytest.approx(4.0) and m["quality"] == "measured"
+        assert m["exclusive_j"] == pytest.approx(4.0) and m["quality"] == "below_resolution"  # 40 readings, 50 ns
         assert out["summary"]["exclusive_sum_j"] == pytest.approx(out["summary"]["total_energy_j"]) == 8.0
         assert out["summary"]["energy_by_provider"] == {"intel_rapl": 8.0} and out["validity"] == v
         assert out["summary"]["wall_time_s"] == 50 / 1e9 and out["sampler"]["readings"] == 50
