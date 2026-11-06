@@ -170,3 +170,37 @@ def test_one_language_registry_holds_every_sampler_component_and_refuses_duplica
         languages.add("python", grammar=object())
     with pytest.raises(KeyError, match="no lines sampler for language 'native'"):
         languages.component("native", "lines")
+
+
+def test_capability_report_covers_every_registry_through_their_probes(monkeypatch):
+    from codegreen.analysis import gpu_metrics, languages
+    from codegreen.cli import cli
+    for reg in (gpu_metrics.GPU_SERIES, gpu_metrics.GPU_REPLAY, gpu_metrics.GPU_FRAMEWORKS, languages.LANGUAGES):
+        monkeypatch.setattr(reg, "probe", lambda reg=reg: [metrics.Availability(n, False, "stubbed") for n in reg.names()])
+    monkeypatch.setattr(hw, "provider", lambda: None)
+    monkeypatch.setattr(metrics.PROVIDERS, "probe", lambda: [metrics.Availability("hw_counters", True, details={"arch": "amd_zen"})])
+    rep = cli.capability_report()
+    assert set(rep) == {"metric", "gpu_series", "gpu_replay", "gpu_framework", "language"}
+    assert rep["metric"][0]["details"]["arch"] == "amd_zen" and [a["provider"] for a in rep["gpu_series"]] == ["nvml"]
+    assert {"java", "python", "native"} <= {a["provider"] for a in rep["language"]}
+    assert set(cli.capability_report(["metric"])) == {"metric"}
+    with pytest.raises(cli.typer.BadParameter, match="unknown registries"):
+        cli.capability_report(["gpu"])
+
+
+def test_capabilities_metric_reports_unavailable_counters_on_a_host_without_perf_event(monkeypatch, tmp_path):
+    import json
+
+    from typer.testing import CliRunner
+
+    from codegreen.cli.cli import app
+    fresh = metrics.Registry("metric")
+    monkeypatch.setattr(hw, "PROVIDERS", fresh)
+    monkeypatch.setattr(metrics, "PROVIDERS", fresh)
+    monkeypatch.setattr(hw, "CPUINFO", tmp_path / "absent")
+    monkeypatch.setattr("sys.platform", "darwin")
+    r = CliRunner().invoke(app, ["capabilities", "metric"])
+    assert r.exit_code == 0, r.output
+    rep = json.loads(r.output)
+    assert list(rep) == ["metric"] and rep["metric"][0]["provider"] == "hw_counters"
+    assert not rep["metric"][0]["available"] and "need Linux" in rep["metric"][0]["reason"]
