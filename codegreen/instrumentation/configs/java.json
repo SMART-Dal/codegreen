@@ -90,6 +90,7 @@
         "entry_points": ["main"],
         "import_statement": "import codegreen.runtime.CodeGreenRuntime;",
         "exit_strategy": "try_finally",
+        "record_name_field": "qualified_name",
         "templates": {
             "function_enter": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"enter\");",
             "function_exit": "CodeGreenRuntime.checkpoint(\"{checkpoint_id}\", \"{qualified_name}\", \"exit\");",
@@ -158,6 +159,11 @@
         "max_inheritance_depth": 5
     },
     "node_types": {
+        "parameter_signature": {
+            "skip_types": ["receiver_parameter", "modifiers", "variable_declarator"],
+            "variadic_types": {"spread_parameter": "..."},
+            "suffix_field": "dimensions"
+        },
         "function_types": [
             "method_declaration",
             "constructor_declaration"

@@ -79,7 +79,12 @@ rewritten files.
 A `summary.json` lands in the output directory with the same per-method
 schema as `codegreen measure -g fine`. Top fields:
 
-- `methods` - list of `{name, file, total_joules, total_seconds, calls, exclusive_pct, ...}`
+- `methods` - list of `{name, file, line, signature, total_joules, total_seconds, calls, exclusive_pct, ...}`;
+  `line` is the 1-based declaration line (null when the name is declared in more than one file), `signature` the
+  parameter types as written, where the language config sets `node_types.parameter_signature` (Java). Where probes
+  emit the qualified name (`instrumentation_config.record_name_field`, Java and Python), functions sharing it in one
+  file are separate records named `Class.method@<line>`; a record that still merges declarations carries
+  `merged_declarations`.
 - `totals` - aggregate energy / duration over the whole run
 - `meta` - command, language, build/run commands, host info
 

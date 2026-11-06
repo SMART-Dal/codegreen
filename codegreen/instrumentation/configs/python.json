@@ -90,6 +90,7 @@
         "entry_points": ["main", "__main__"],
         "import_statement": "import codegreen_runtime as _codegreen_rt",
         "exit_strategy": "try_finally",
+        "record_name_field": "qualified_name",
         "templates": {
             "function_enter": "_codegreen_rt.checkpoint('{checkpoint_id}', '{qualified_name}', 'enter')",
             "function_exit": "_codegreen_rt.checkpoint('{checkpoint_id}', '{qualified_name}', 'exit')",

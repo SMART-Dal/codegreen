@@ -515,6 +515,7 @@ class LanguageEngine:
             normalised_source = self._normalise(source_code, language)
 
             points = self._analyze_with_treesitter_safe(normalised_source, language)
+            self._annotate_functions(points, source_code, normalised_source, language)
             analysis_method = 'tree_sitter'
 
             #TODO: Generate optimization suggestions
@@ -758,6 +759,78 @@ class LanguageEngine:
         tree = self._parsers[language].parse(source_code.encode('utf-8'))
         source, tree = BraceNormaliser(source_code, tree, language, self._config_manager).normalise()
         return self._split_inline_bodies(source, tree, language)
+
+    def _annotate_functions(self, points: List[InstrumentationPoint], source_code: str, normalised_source: str,
+                            language: str) -> None:
+        """Give each function_enter `decl_line` (1-based, in the original source; None when normalisation changed the
+        function count or the definition is not of a function_types node), `signature` (where node_types.parameter_signature is configured) and `record_name` (the name
+        its probes emit: the point field named by instrumentation_config.record_name_field, else the bare name).
+        Functions of one file sharing that field are emitted as `<field>@<decl_line>`; without declaration lines they
+        stay one record carrying `merged_declarations` and a warning."""
+        enters = [p for p in points if p.type == 'function_enter' and p.node is not None]
+        if not enters:
+            return
+        node_types = self._config_manager.get_node_types(language)
+        fn_types = tuple(node_types['function_types'])
+        root = enters[0].node
+        while root.parent is not None:
+            root = root.parent
+        norm_fns = sorted(self._descendants(root, fn_types), key=lambda n: n.start_byte)
+        orig_fns = norm_fns
+        if normalised_source != source_code:
+            with self._parser_lock:
+                orig_root = self._parsers[language].parse(source_code.encode('utf-8')).root_node
+            orig_fns = sorted(self._descendants(orig_root, fn_types), key=lambda n: n.start_byte)
+        lines = ({n.start_byte: o.start_point[0] + 1 for n, o in zip(norm_fns, orig_fns)}
+                 if len(orig_fns) == len(norm_fns) else {})
+        fn_at = {n.start_byte: n for n in norm_fns}
+        spec = node_types.get('parameter_signature')
+        skip = {*node_types['comment_types'], *(spec or {}).get('skip_types', [])}
+        for p in enters:
+            start = p.metadata['function_start']
+            p.metadata['decl_line'] = lines.get(start)
+            sig = self._parameter_signature(fn_at[start], spec, skip) if spec and start in fn_at else None
+            if sig is not None:
+                p.metadata['signature'] = sig
+        field = self._config_manager.get_instrumentation_config(language).get('record_name_field')
+        groups: Dict[str, List[InstrumentationPoint]] = {}
+        for p in enters:
+            groups.setdefault(p.metadata[field] if field else p.name, []).append(p)
+        renamed: Dict[int, str] = {}
+        for name, group in groups.items():
+            split = len(group) > 1 and field is not None and all(p.metadata['decl_line'] is not None for p in group)
+            if len(group) > 1 and not split:
+                logger.warning(f"CodeGreen: {len(group)} functions share the record {name}: " + (
+                    "their declaration lines are unknown" if field else "their probes emit the bare name"))
+            for p in group:
+                p.metadata['record_name'] = f"{name}@{p.metadata['decl_line']}" if split else name
+                if split:
+                    renamed[p.metadata['function_start']] = p.metadata['record_name']
+                elif len(group) > 1:
+                    p.metadata['merged_declarations'] = len(group)
+                    p.metadata.pop('signature', None)
+        for p in points:
+            if p.type.startswith('function_') and p.metadata.get('function_start') in renamed:
+                p.metadata[field] = renamed[p.metadata['function_start']]
+
+    @staticmethod
+    def _parameter_signature(fn: 'Node', spec: Dict[str, Any], skip: set) -> Optional[str]:
+        """`(int, long[], String...)` from a definition's `parameters` field; None when a parameter has no written type.
+        A variadic parameter without a `type` field takes its first named child outside `skip` as the type."""
+        params = fn.child_by_field_name('parameters')
+        if params is None:
+            return None
+        types = []
+        for param in (c for c in params.named_children if c.type not in skip):
+            t = param.child_by_field_name('type')
+            if t is None and param.type in spec['variadic_types']:
+                t = next((c for c in param.named_children if c.type not in skip), None)
+            if t is None:
+                return None
+            suffix = param.child_by_field_name(spec['suffix_field'])
+            types.append(' '.join(t.text.decode('utf-8').split()) + spec['variadic_types'].get(param.type, '')
+                         + (''.join(suffix.text.decode('utf-8').split()) if suffix is not None else ''))
+        return '(' + ', '.join(types) + ')'
 
     def _skip(self, function: str, reason: str) -> None:
         skip = {'function': function, 'reason': reason}
