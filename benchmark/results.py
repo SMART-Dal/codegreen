@@ -8,6 +8,10 @@ from typing import Any, Dict, List
 
 from benchmark.config import RunResult, SystemState
 
+def valid_energies(results: List[RunResult]) -> List[float]:
+    """Signed energies of the runs whose measurement is valid; invalid runs are never mixed in or clamped."""
+    return [r.energy_joules for r in results if r.measurement_valid and r.energy_joules is not None]
+
 _T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
         8: 2.306, 9: 2.262, 10: 2.228, 15: 2.131, 20: 2.086, 25: 2.060, 29: 2.045}
 
@@ -105,8 +109,7 @@ class ComparisonReport:
             candidate = variants.get(candidate_variant, [])
             if not baseline or not candidate:
                 continue
-            b_energies = [r.energy_joules for r in baseline if r.energy_joules > 0]
-            c_energies = [r.energy_joules for r in candidate if r.energy_joules > 0]
+            b_energies, c_energies = valid_energies(baseline), valid_energies(candidate)
             if not b_energies or not c_energies:
                 continue
             b_stats = StatisticalAnalysis.summarize(b_energies)
@@ -154,8 +157,7 @@ class ComparisonReport:
             test = profilers.get(test_profiler, [])
             if not baseline or not test:
                 continue
-            b_energies = [r.energy_joules for r in baseline if r.energy_joules > 0]
-            t_energies = [r.energy_joules for r in test if r.energy_joules > 0]
+            b_energies, t_energies = valid_energies(baseline), valid_energies(test)
             if not b_energies or not t_energies:
                 continue
             b_mean = sum(b_energies) / len(b_energies)
@@ -176,6 +178,9 @@ class ComparisonReport:
         return comparisons
 
 
+def _reasons(summary: Dict[str, Any]) -> str:
+    return " ".join(f"{k}x{n}" for k, n in sorted(summary["invalid_reasons"].items()))
+
 class ResultCollector:
     def __init__(self):
         self.results: List[RunResult] = []
@@ -191,18 +196,27 @@ class ResultCollector:
                 if r.problem == problem and r.language == language
                 and r.size == size and r.profiler == profiler]
 
-    def summarize_all(self) -> Dict[str, Stats]:
+    def summarize_all(self) -> Dict[str, Dict[str, Any]]:
+        """Per problem/language/size/profiler: valid and invalid runs summarized separately, with reason counts."""
         summaries = {}
         keys = set((r.problem, r.language, r.size, r.profiler) for r in self.results)
         for problem, language, size, profiler in keys:
             results = self.get_by_key(problem, language, size, profiler)
-            energies = [r.energy_joules for r in results if r.energy_joules > 0]
-            times = [r.time_seconds for r in results]
-            key = f"{problem}/{language}/{size}/{profiler}"
-            summaries[key] = {
-                "energy": StatisticalAnalysis.summarize(energies) if energies else None,
-                "time": StatisticalAnalysis.summarize(times),
-                "valid_runs": sum(1 for r in results if r.output_valid),
+            valid = [r for r in results if r.measurement_valid]
+            invalid = [r for r in results if not r.measurement_valid]
+            val_e, inv_e = valid_energies(valid), [r.energy_joules for r in invalid if r.energy_joules is not None]
+            reasons: Dict[str, int] = {}
+            for r in invalid:
+                for code in r.validity["reasons"]:
+                    reasons[code] = reasons.get(code, 0) + 1
+            summaries[f"{problem}/{language}/{size}/{profiler}"] = {
+                "energy": StatisticalAnalysis.summarize(val_e) if val_e else None,
+                "time": StatisticalAnalysis.summarize([r.time_seconds for r in valid]) if valid else None,
+                "energy_invalid": StatisticalAnalysis.summarize(inv_e) if inv_e else None,
+                "invalid_reasons": reasons,
+                "valid_runs": len(valid),
+                "invalid_runs": len(invalid),
+                "output_valid_runs": sum(1 for r in results if r.output_valid),
                 "total_runs": len(results)
             }
         return summaries
@@ -244,15 +258,18 @@ class ResultCollector:
         return result
 
     def to_csv(self, path: Path):
-        lines = ["problem,language,size,profiler,repetition,energy_joules,time_seconds,output_valid"]
+        lines = ["problem,language,size,profiler,repetition,energy_joules,time_seconds,output_valid,measurement_valid,reasons"]
         for r in self.results:
-            lines.append(f"{r.problem},{r.language},{r.size},{r.profiler},{r.repetition},{r.energy_joules:.6f},{r.time_seconds:.6f},{r.output_valid}")
+            e = "" if r.energy_joules is None else f"{r.energy_joules:.6f}"
+            reasons = ";".join(r.validity["reasons"]) if r.validity else ""
+            lines.append(f"{r.problem},{r.language},{r.size},{r.profiler},{r.repetition},{e},{r.time_seconds:.6f},"
+                         f"{r.output_valid},{r.measurement_valid},{reasons}")
         path.write_text("\n".join(lines))
 
     def to_markdown(self) -> str:
         summary = self.summarize_all()
-        lines = ["| Problem | Language | Size | Profiler | Energy (J) | Std | Time (s) | Valid | N |",
-                 "|---------|----------|------|----------|-----------|-----|----------|-------|---|"]
+        lines = ["| Problem | Language | Size | Profiler | Energy (J) | Std | Time (s) | Valid | Invalid reasons |",
+                 "|---------|----------|------|----------|-----------|-----|----------|-------|-----------------|"]
         for key, data in sorted(summary.items()):
             parts = key.split("/")
             e = data.get("energy")
@@ -261,7 +278,8 @@ class ResultCollector:
             e_std = f"{e.std:.4f}" if e else "-"
             t_str = f"{t.mean:.4f}" if t else "-"
             lines.append(f"| {parts[0]} | {parts[1]} | {parts[2]} | {parts[3]} "
-                         f"| {e_str} | {e_std} | {t_str} | {data['valid_runs']}/{data['total_runs']} | {t.n if t else 0} |")
+                         f"| {e_str} | {e_std} | {t_str} | {data['valid_runs']}/{data['total_runs']} "
+                         f"| {_reasons(data)} |")
         return "\n".join(lines)
 
     def to_text(self) -> str:
@@ -273,5 +291,5 @@ class ResultCollector:
             e_str = f"{e.mean:.4f}J (std={e.std:.4f}, CI=[{e.ci95_lower:.4f}, {e.ci95_upper:.4f}])" if e else "N/A"
             t_str = f"{t.mean:.4f}s" if t else "-"
             valid = f"{data['valid_runs']}/{data['total_runs']}"
-            lines.append(f"  {key}: {e_str}, {t_str}, valid={valid}")
+            lines.append(f"  {key}: {e_str}, {t_str}, valid={valid} {_reasons(data)}".rstrip())
         return "\n".join(lines)

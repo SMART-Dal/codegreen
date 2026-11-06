@@ -282,6 +282,12 @@
             "checkpoint_rewrite": {
                 "from": "CodeGreenRuntime.checkpoint",
                 "to": "CodeGreenStandaloneRuntime.checkpoint"
+            },
+            "env": {
+                "CODEGREEN_RAPL_ROOT": "/sys/class/powercap/intel-rapl",
+                "CODEGREEN_RAPL_ZONE": "intel-rapl:\\d+",
+                "CODEGREEN_RAPL_DOMAIN": "package.*",
+                "CODEGREEN_RAPL_POLL_US": "1000"
             }
         },
         "source_root_markers": [

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -13,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.regex.Pattern;
 
 /**
  * CodeGreen Standalone Runtime for Java (no JNI).
@@ -44,34 +46,40 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Output: appended to the file named by {@code CG_CP_CHECKPOINT_FILE}
  * (set by the CLI per run); {@code System.err} only when it is unset.
  *
- * Wire format on shutdown: one poller line, then one line per (thread, method):
- *   CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns
+ * Poller settings (system property, else environment variable; no defaults, the CLI
+ * exports them from runtime_injection.env in configs/java.json):
+ *   codegreen.rapl.root    / CODEGREEN_RAPL_ROOT    directory holding the powercap zones
+ *   codegreen.rapl.zone    / CODEGREEN_RAPL_ZONE    regex on zone directory names
+ *   codegreen.rapl.domain  / CODEGREEN_RAPL_DOMAIN  regex on the zone's name file
+ *   codegreen.rapl.poll_us / CODEGREEN_RAPL_POLL_US poll period in microseconds
+ *
+ * Wire format on shutdown: one poller line per JVM (a single-line JSON object shaped like
+ * the NEMB sampler block, ABI 4), then one line per (thread, method):
+ *   CG_CP_META|{"marker_reads":"last_poll","interval_ms":D,"readings":N,"failed_reads":N,"first_ns":N,"last_ns":N,"max_gap_ns":N,"affinity_cpus":N,"sampler_affinity_cpus":N,"providers":[{"name":"intel_rapl","hardware_type":"cpu","energy_source":"counter","update_interval_ms":D,"counter_group":"cpu_package","rejected":0,"held":0}]}
  *   CG_CP_SUM|tid|name|calls|inclusive_uj|exclusive_uj|time_ns
+ * max_gap_ns includes the gap from the last poll to shutdown; update_interval_ms is the observed
+ * mean period between counter advances (the whole polled span when it advanced fewer than twice).
  */
 public class CodeGreenStandaloneRuntime {
 
-    // Sums every top-level package domain (intel-rapl:N whose name starts with
-    // "package") under this root; sub-domains (core, dram) are already included
-    // in the package counter, and non-package domains (psys) are skipped.
-    private static final String RAPL_ROOT =
-        System.getProperty("codegreen.rapl.root", "/sys/class/powercap/intel-rapl");
     private static final boolean LEGACY_EMIT =
         Boolean.parseBoolean(System.getProperty("codegreen.standalone.legacy", "false"));
-
-    // The package energy counter advances only once per RAPL update period
-    // (~1 ms), so a per-call sysfs read returns no more information than the
-    // latest periodic reading while costing a syscall pair on every enter and
-    // exit. That cost made instrumented runs of call-heavy code 30x+ slower
-    // (RoaringBitmap's JMH setup exceeded an hour). One poller thread reads
-    // the counters at the update period (property codegreen.rapl.poll_us,
-    // default 1000) and publishes the cumulative energy since startup;
-    // checkpoints read the published value.
-    private static final long POLL_NS = Long.getLong("codegreen.rapl.poll_us", 1000L) * 1000L;
+    // Sums every zone under RAPL_ROOT whose directory matches RAPL_ZONE and whose name file
+    // matches RAPL_DOMAIN. The counter advances once per RAPL update period, so a per-call
+    // sysfs read returns no more information than the latest periodic reading while costing
+    // a syscall pair on every enter and exit (call-heavy code ran 30x+ slower). One poller
+    // thread reads the counters every POLL_NS and publishes the cumulative energy since
+    // startup; checkpoints read the published value (marker_reads "last_poll").
+    private static final String RAPL_ROOT = setting("codegreen.rapl.root", "CODEGREEN_RAPL_ROOT");
+    private static final Pattern RAPL_ZONE = Pattern.compile(setting("codegreen.rapl.zone", "CODEGREEN_RAPL_ZONE"));
+    private static final Pattern RAPL_DOMAIN = Pattern.compile(setting("codegreen.rapl.domain", "CODEGREEN_RAPL_DOMAIN"));
+    private static final long POLL_NS = Long.parseLong(setting("codegreen.rapl.poll_us", "CODEGREEN_RAPL_POLL_US")) * 1000L;
+    private static final int AFFINITY_CPUS = allowedCpus("/proc/self/status");
     private static volatile long raplUj = 0L;
-    // Poller coverage, written by the poller only and reported as one
-    // CG_CP_META|polls|first_ns|last_ns|max_gap_ns|poll_ns line per JVM, so the
-    // CLI can reject a run whose poller was starved (SAMPLER_STARVED).
-    private static volatile long polls = 0L, firstNs = 0L, lastNs = 0L, maxGapNs = 0L;
+    // Poller coverage, published by the poller as one immutable snapshot per poll so the
+    // shutdown hook reads a consistent set: [polls, first_ns, last_ns, max_gap_ns,
+    // failed_reads, counter_advances, first_advance_ns, last_advance_ns, sampler_affinity_cpus].
+    private static volatile long[] stats = new long[9];
 
     // Per-method counters PER THREAD. Keeping the map thread-local
     // (no synchronization on the hot path) mirrors the C++ backend
@@ -142,15 +150,42 @@ public class CodeGreenStandaloneRuntime {
         }
     }
 
-    private static Domain[] openPackageDomains() {
-        File[] dirs = new File(RAPL_ROOT).listFiles((d, n) -> n.matches("intel-rapl:\\d+"));
+    private static String setting(String prop, String env) {
+        String v = System.getProperty(prop, System.getenv(env));
+        if (v == null || v.isEmpty()) {
+            throw new IllegalStateException("CodeGreen: " + env + " (or -D" + prop + ") is unset; `codegreen project`"
+                + " exports it from runtime_injection.env in configs/java.json.");
+        }
+        return v;
+    }
+
+    // CPUs in the Cpus_allowed_list of a /proc status file (process or calling thread).
+    private static int allowedCpus(String status) {
+        try {
+            for (String line : Files.readAllLines(Paths.get(status), StandardCharsets.US_ASCII)) {
+                if (!line.startsWith("Cpus_allowed_list:")) continue;
+                int n = 0;
+                for (String part : line.substring(18).trim().split(",")) {
+                    String[] r = part.split("-");
+                    n += r.length == 1 ? 1 : Integer.parseInt(r[1]) - Integer.parseInt(r[0]) + 1;
+                }
+                return n;
+            }
+        } catch (IOException | NumberFormatException e) {
+            throw new IllegalStateException("CodeGreen: cannot read the CPU affinity from " + status + " (" + e + ")", e);
+        }
+        throw new IllegalStateException("CodeGreen: no Cpus_allowed_list in " + status);
+    }
+
+    private static Domain[] openDomains() {
+        File[] dirs = new File(RAPL_ROOT).listFiles((d, n) -> RAPL_ZONE.matcher(n).matches());
         List<Domain> out = new ArrayList<>();
         if (dirs != null) {
             Arrays.sort(dirs);
             for (File dir : dirs) {
                 try {
-                    if (!new String(Files.readAllBytes(new File(dir, "name").toPath()),
-                            StandardCharsets.US_ASCII).trim().startsWith("package")) continue;
+                    if (!RAPL_DOMAIN.matcher(new String(Files.readAllBytes(new File(dir, "name").toPath()),
+                            StandardCharsets.US_ASCII).trim()).matches()) continue;
                     out.add(new Domain(dir));
                 } catch (IOException | NumberFormatException e) {
                     throw new IllegalStateException("CodeGreen: cannot read RAPL domain " + dir
@@ -159,30 +194,42 @@ public class CodeGreenStandaloneRuntime {
             }
         }
         if (out.isEmpty()) {
-            throw new IllegalStateException("CodeGreen: no RAPL package domain under " + RAPL_ROOT
-                + "; per-function energy is unavailable on this host.");
+            throw new IllegalStateException("CodeGreen: no zone matching " + RAPL_ZONE + " with a name matching "
+                + RAPL_DOMAIN + " under " + RAPL_ROOT + "; per-function energy is unavailable on this host.");
         }
         return out.toArray(new Domain[0]);
     }
 
     static {
-        final Domain[] domains = openPackageDomains();
+        final Domain[] domains = openDomains();
         Runtime.getRuntime().addShutdownHook(new Thread(
             CodeGreenStandaloneRuntime::flushOnExit, "cg-flush"));
         Thread poller = new Thread(() -> {
-            long total = 0L;
+            long total = 0L, polls = 0L, firstNs = 0L, lastNs = 0L, maxGapNs = 0L, failed = 0L;
+            long advances = 0L, firstAdv = 0L, lastAdv = 0L;
+            final long samplerCpus = allowedCpus("/proc/thread-self/status");
             while (true) {
-                try {
-                    for (Domain d : domains) total += d.delta();
-                } catch (IOException | NumberFormatException e) {
-                    System.err.println("CodeGreen: RAPL read failed (" + e + "); energy counter frozen from here on.");
-                    return;
+                long before = total;
+                // A failed read leaves that domain's last value in place, so the next good read
+                // carries its energy; every failure is counted and reported (failed_reads).
+                for (Domain d : domains) {
+                    try {
+                        total += d.delta();
+                    } catch (IOException | NumberFormatException e) {
+                        failed++;
+                    }
                 }
                 raplUj = total;
                 long now = System.nanoTime();
                 if (polls == 0L) firstNs = now; else maxGapNs = Math.max(maxGapNs, now - lastNs);
                 lastNs = now;
-                polls = polls + 1L;
+                polls++;
+                if (total != before) {
+                    if (advances == 0L) firstAdv = now;
+                    lastAdv = now;
+                    advances++;
+                }
+                stats = new long[] { polls, firstNs, lastNs, maxGapNs, failed, advances, firstAdv, lastAdv, samplerCpus };
                 java.util.concurrent.locks.LockSupport.parkNanos(POLL_NS);
             }
         }, "cg-rapl");
@@ -268,8 +315,16 @@ public class CodeGreenStandaloneRuntime {
         StringBuilder sb = new StringBuilder(8 * 1024);
         // The gap from the last poll to shutdown counts too: a poller that died
         // or never ran shows as one large gap.
-        sb.append("CG_CP_META|").append(polls).append('|').append(firstNs).append('|').append(lastNs).append('|')
-          .append(Math.max(maxGapNs, System.nanoTime() - lastNs)).append('|').append(POLL_NS).append('\n');
+        long[] s = stats;
+        double updateMs = (s[5] > 1L ? (double) (s[7] - s[6]) / (s[5] - 1L) : (double) (s[2] - s[1])) / 1e6;
+        sb.append("CG_CP_META|{\"marker_reads\":\"last_poll\",\"interval_ms\":").append(POLL_NS / 1e6)
+          .append(",\"readings\":").append(s[0]).append(",\"failed_reads\":").append(s[4])
+          .append(",\"first_ns\":").append(s[1]).append(",\"last_ns\":").append(s[2])
+          .append(",\"max_gap_ns\":").append(Math.max(s[3], System.nanoTime() - s[2]))
+          .append(",\"affinity_cpus\":").append(AFFINITY_CPUS).append(",\"sampler_affinity_cpus\":").append(s[8])
+          .append(",\"providers\":[{\"name\":\"intel_rapl\",\"hardware_type\":\"cpu\",\"energy_source\":\"counter\"")
+          .append(",\"update_interval_ms\":").append(updateMs)
+          .append(",\"counter_group\":\"cpu_package\",\"rejected\":0,\"held\":0}]}\n");
         for (ThreadState ts : registry) {
             for (Map.Entry<String, long[]> e : ts.agg.entrySet()) {
                 long[] r = e.getValue();

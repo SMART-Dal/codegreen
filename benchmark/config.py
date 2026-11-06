@@ -15,7 +15,7 @@ class SystemState:
     cpu_model: str = ""
     cpu_governor: str = ""
     kernel_version: str = ""
-    rapl_domains: List[str] = field(default_factory=list)
+    power_events: List[str] = field(default_factory=list)
 
     @classmethod
     def capture(cls) -> "SystemState":
@@ -34,17 +34,8 @@ class SystemState:
                 state.cpu_governor = f.read().strip()
         except (FileNotFoundError, OSError):
             pass
-        import os
-        for i in range(10):
-            path = f"/sys/class/powercap/intel-rapl:0:{i}/name"
-            if os.path.exists(path):
-                try:
-                    with open(path) as f:
-                        state.rapl_domains.append(f.read().strip())
-                except OSError:
-                    pass
-            else:
-                break
+        from benchmark.profilers import perf_power_events
+        state.power_events = perf_power_events()
         return state
 
 @dataclass
@@ -66,7 +57,7 @@ class RunResult:
     language: str
     size: str
     profiler: str
-    energy_joules: float
+    energy_joules: Optional[float]
     time_seconds: float
     output_valid: bool
     repetition: int = 0
@@ -74,6 +65,30 @@ class RunResult:
     suite: str = "benchmarksgame"
     timestamp: datetime = field(default_factory=datetime.now)
     checkpoints: List[Dict[str, Any]] = field(default_factory=list)
+    validity: Optional[Dict[str, Any]] = None
+
+    @property
+    def measurement_valid(self) -> bool:
+        """No fatal validity reason; profilers without a validity contract (perf, native) report None."""
+        return self.validity is None or self.validity["status"] == "valid"
+
+# perf power events summed as the CPU-scope truth, mirroring the RAPL adapters' top-level domain rule: the first set
+# whose first event the power PMU offers wins (psys supersedes package + dram), using the offered events of that set.
+PERF_CPU_EVENT_SETS = (("energy-psys",), ("energy-pkg", "energy-ram"))
+
+@dataclass
+class ValidityTolerances:
+    """Expectations of benchmark.validation.experiments.ValidityExperiment. Windows are in sampler intervals
+    (sampler.interval_ms of the run itself); a window below min_window_samples - 1 intervals must be flagged
+    TOTAL_BELOW_RESOLUTION, one at or above min_window_samples must not, the interval between is either. A sampler
+    allowed on fewer than min_affinity_cpus CPUs must raise the AFFINITY_SINGLE_CPU warning and may be SAMPLER_STARVED.
+    cv_max_pct maps a minimum window (s) to the largest CV (%) of valid energies across repetitions."""
+    min_window_samples: int = 2
+    min_affinity_cpus: int = 2
+    exclusive_rel_tol: float = 0.01
+    run_vs_perf_rel_tol: float = 0.03
+    run_vs_perf_min_duration_s: float = 1.0
+    cv_max_pct: Dict[float, float] = field(default_factory=lambda: {1.0: 5.0, 0.1: 10.0})
 
 @dataclass
 class BenchmarkConfig:
