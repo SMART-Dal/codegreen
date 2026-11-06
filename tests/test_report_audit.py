@@ -2426,6 +2426,25 @@ class TestInvalidReads:
         assert rep["meta"]["measurement_quality"] == "provider_read_failed"
         assert rep["validity"]["reasons"] == ["PROVIDER_READ_FAILED"]
 
+    def test_session_warns_gpu_in_total(self, monkeypatch):
+        """A Session total that sums a GPU with the CPU carries GPU_IN_TOTAL and warns it, like measure and run."""
+        import types
+        from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+
+        def stop(sid, e, p, dur, buf, n):
+            e._obj.value, dur._obj.value, buf.value = 5.0, 2.0, b'{"package-0": 4.0, "gpu0": 1.0}'
+            return len(buf.value)
+        lib = types.SimpleNamespace(nemb_start_session=lambda n: 1, nemb_stop_session_v2=stop, nemb_abi_version=lambda: 4)
+        provs = [_vprov(), _vprov("nvidia_gpu", "gpu", "integrated_power", 100.0, boundary_source="counter")]
+        client = types.SimpleNamespace(lib=lib, abi=4, get_final_measurements=lambda: {"sampler": _vsampler(providers=provs)})
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: client)
+        s = rt.Session("mixed", save_to_file=False, warn_on_concurrent=False).start()
+        with s.task("t"):
+            pass
+        with pytest.warns(RuntimeWarning, match="GPU_IN_TOTAL: total sums GPU provider"):
+            rep = s.stop()
+        assert rep["validity"]["status"] == "valid" and list(rep["validity"]["warnings"]) == ["GPU_IN_TOTAL"]
+
     def test_session_flags_shared_and_short_tasks(self, monkeypatch):
         """A boundary read while another task is open is shared (the backend adds the power integral to the last
         counter read instead of reading the counter); the task is TASK_POWER_INTEGRATED for a power-integrating provider.

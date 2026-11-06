@@ -1685,6 +1685,8 @@ class Session:
         sampler = None if self._noop else self._client.get_final_measurements()["sampler"]
         if sampler:
             task_checks([t.__dict__ for t in self._tasks], sampler, _measurement_cfg(), r, w)
+        for code, text in {**r, **w}.items():  # the verdict `measure` and `run` print, as warnings of the API
+            _warnings.warn(f"codegreen: {code}: {text}", RuntimeWarning, stacklevel=4)
         report = {
             "meta": meta,
             "tasks": [t.__dict__ for t in self._tasks],

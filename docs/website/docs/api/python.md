@@ -201,7 +201,9 @@ tasks, the provider checks of `run` apply (`GPU_IN_TOTAL`, `GPU_READ_HELD`,
 `BOUNDARY_READ_HELD`, `COUNTER_INTEGRAL_DIVERGED`, `PROVIDER_STALLED`), and the
 warnings `TASK_POWER_INTEGRATED` (tasks whose energy integrates sampled power)
 and `TASK_BELOW_RESOLUTION` (tasks shorter than `min_run_updates` provider
-resolutions) name the tasks. A failed read is never reported as 0 J.
+resolutions) name the tasks. A failed read is never reported as 0 J. `stop()`
+also emits every reason and warning as a `RuntimeWarning` (`codegreen: CODE: text`),
+as the CLI prints them.
 
 See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
 
