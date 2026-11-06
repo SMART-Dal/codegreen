@@ -7,8 +7,8 @@ every key (env vars, paths, language plumbing, migration from older configs).
 
 ## Configuration File Location
 
-- **Default**: `~/.codegreen/codegreen.json`
-- **Custom**: Use `--config` flag: `codegreen --config /path/to/codegreen.json`
+- **User override**: `~/.codegreen/config.json` (only the keys you change; the bundled `codegreen/config.json` supplies the rest)
+- **Custom**: `codegreen --config /path/to/config.json ...` or `CODEGREEN_CONFIG=/path/to/config.json`
 
 ## Basic Configuration
 
@@ -163,7 +163,7 @@ codegreen config --show
 codegreen config --edit
 
 # Validate configuration syntax
-python3 -m json.tool config/codegreen.json
+python3 -m json.tool ~/.codegreen/config.json
 
 # Reset to default configuration
 codegreen config --reset
@@ -171,6 +171,8 @@ codegreen config --reset
 
 ## Configuration File Locations (Priority Order)
 
-1. `./codegreen.json` (Local override in current directory)
-2. `~/.codegreen/codegreen.json` (User configuration)
-3. `/etc/codegreen/codegreen.json` (System-wide configuration)
+1. `--config PATH` or `CODEGREEN_CONFIG`
+2. `~/.codegreen/config.json` (user configuration)
+3. the bundled `codegreen/config.json` (package defaults)
+
+See [Configuration File Locations](../user-guide/configuration-reference.md#configuration-file-locations).

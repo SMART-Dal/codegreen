@@ -1826,6 +1826,23 @@ def test_init_merges_detected_providers_into_the_user_config_on_every_environmen
     assert bundled.read_text() == before
 
 
+def test_config_search_order_matches_the_docs(tmp_path, monkeypatch):
+    """Docs listed codegreen.json search paths (./, config/, ~/.codegreen/, /etc/codegreen/) that no resolver reads.
+    The one resolver: CODEGREEN_CONFIG, else ~/.codegreen/config.json when it exists, else the bundled config.json."""
+    from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+    root = Path(__file__).resolve().parents[1]
+    pages = [p for p in (root / "docs").rglob("*.md") if p.name != "changelog.md"] + [root / "scripts" / "commands.sh"]
+    assert [str(p) for p in pages if "codegreen.json" in p.read_text()] == []
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CODEGREEN_CONFIG", raising=False)
+    assert rt._config_path() == rt._package_file("config.json")
+    (tmp_path / ".codegreen").mkdir()
+    (tmp_path / ".codegreen" / "config.json").write_text("{}")
+    assert rt._config_path() == tmp_path / ".codegreen" / "config.json"
+    monkeypatch.setenv("CODEGREEN_CONFIG", str(tmp_path / "x.json"))
+    assert rt._config_path() == tmp_path / "x.json"
+
+
 def test_measure_output_file_is_the_json_report_with_the_verdict(tmp_path, monkeypatch):
     """`measure -o` wrote a raw schema with measurement.success true on an invalid run, so a consumer of the file
     used invalid joules; the file must be the --json document, verdict included, with or without --json."""

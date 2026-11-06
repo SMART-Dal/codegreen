@@ -237,6 +237,6 @@ codegreen config [OPTIONS]
 ---
 
 **Configuration File Locations:**
-1. `./codegreen.json` (Local override)
-2. `~/.codegreen/codegreen.json` (User config)
-3. `/etc/codegreen/codegreen.json` (System config)
+1. `--config PATH` or `CODEGREEN_CONFIG`
+2. `~/.codegreen/config.json` (user config, merged over the bundled defaults)
+3. `codegreen/config.json` (bundled with the package)

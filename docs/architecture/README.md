@@ -128,6 +128,6 @@ When adding new architecture documentation:
 Architecture docs are verified against:
 - Implementation: `src/measurement/`
 - Tests: `tests/cpp/`
-- Configuration: `config/codegreen.json`
+- Configuration: `codegreen/config.json`
 
 Last comprehensive review: 2026-01-19

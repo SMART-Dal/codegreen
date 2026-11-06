@@ -2,11 +2,10 @@
 
 ## Config File
 
-CodeGreen searches for configuration in this order:
-
-1. `<project_root>/config/codegreen.json` (relative to install dir)
-2. `<project_root>/build/bin/config/codegreen.json`
-3. `~/.codegreen/codegreen.json` (user home)
+CodeGreen reads the first of `--config PATH` / `CODEGREEN_CONFIG`,
+`~/.codegreen/config.json` and the bundled `codegreen/config.json`; Python
+merges the bundled defaults under the active file. See
+[Configuration File Locations](../user-guide/configuration-reference.md#configuration-file-locations).
 
 See [Configuration Reference](../user-guide/configuration-reference.md) for the full schema.
 

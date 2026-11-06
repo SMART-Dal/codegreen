@@ -352,7 +352,7 @@ src/measurement/
 
 ## Configuration
 
-From `config/codegreen.json`:
+From `codegreen/config.json`:
 
 ```json
 {

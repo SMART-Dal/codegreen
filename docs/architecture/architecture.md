@@ -104,8 +104,6 @@ The CodeGreen project is organized as a hybrid Python-C++ system where high-perf
 ├── install.sh                             # Automated installation script
 ├── pyproject.toml                         # Python package configuration
 ├── setup.py                               # Python setup script
-├── config/
-│   └── codegreen.json                    # Default configuration
 ├── bin/                                  # Generated at build time (gitignored)
 │   ├── codegreen                         # C++ NEMB binary
 │   ├── src/                              # Copied instrumentation files

@@ -185,15 +185,13 @@ codegreen/
 │   ├── cli/                      # CLI commands
 │   ├── instrumentation/          # Tree-sitter based analysis
 │   └── measurement/              # C++ NEMB backend
-├── config/
-│   └── codegreen.json            # Default configuration
 ├── docs/                         # Documentation
 └── install.sh                    # Installation script
 ```
 
 ## Configuration
 
-Default configuration is at `config/codegreen.json`. You can override with:
+Default configuration is the bundled `codegreen/config.json`; `~/.codegreen/config.json` overrides its keys. You can also name a file:
 
 ```bash
 codegreen --config custom.json measure python script.py

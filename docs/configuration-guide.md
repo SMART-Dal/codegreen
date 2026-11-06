@@ -17,36 +17,20 @@ Complete guide to configuring CodeGreen for optimal performance and accuracy.
 
 ## Configuration File Locations
 
-CodeGreen searches for configuration files in this priority order:
+CodeGreen reads the first of:
 
-1. **Local Project Override**: `./config/codegreen.json`
-2. **Current Directory**: `./codegreen.json`
-3. **User Configuration**: `~/.codegreen/codegreen.json`
-4. **System-wide**: `/etc/codegreen/codegreen.json`
+1. `--config PATH` or `CODEGREEN_CONFIG`
+2. `~/.codegreen/config.json` (user config, merged over the bundled defaults)
+3. `codegreen/config.json` (bundled with the package)
 
-The first file found is used. All others are ignored.
+Python merges the bundled file under the active one key by key.
 
 ### Recommended Setup
 
-**Development:**
 ```bash
-# Project-specific config
-cp config/codegreen.json ./codegreen.json
-# Edit for your project needs
-```
-
-**Personal Use:**
-```bash
-# User-level config
+# User-level config: only the keys you change
 mkdir -p ~/.codegreen
-cp config/codegreen.json ~/.codegreen/codegreen.json
-```
-
-**System-wide (requires sudo):**
-```bash
-# All users on system
-sudo mkdir -p /etc/codegreen
-sudo cp config/codegreen.json /etc/codegreen/
+echo '{"measurement": {"default_sensors": ["rapl"]}}' > ~/.codegreen/config.json
 ```
 
 ---
@@ -449,13 +433,8 @@ codegreen run --repeat 3 -- python3 -c 'sum(range(10**7))'
 ### Migration Script
 
 ```bash
-# Backup old config
-cp config/codegreen.json config/codegreen.json.backup
-
-# Copy new template
-cp config/codegreen.json.template config/codegreen.json
-
-# Edit with your settings
+# Back up the old user config, then start from a copy of the bundled one
+mv ~/.codegreen/config.json ~/.codegreen/config.json.backup
 codegreen config --edit
 ```
 
@@ -467,10 +446,10 @@ codegreen config --edit
 
 ```bash
 # Check which config file is being used
-codegreen info --verbose
+codegreen config
 
 # Output will show:
-# Configuration loaded from: /path/to/codegreen.json
+#   Active: /path/to/config.json
 ```
 
 ### Syntax Errors
@@ -480,7 +459,7 @@ codegreen info --verbose
 codegreen config --validate
 
 # Use a JSON validator
-python3 -m json.tool config/codegreen.json
+python3 -m json.tool ~/.codegreen/config.json
 ```
 
 ### Permission Issues
@@ -535,7 +514,7 @@ CodeGreen supports environment variables in config values:
 
 ## Best Practices
 
-1. **Start with Defaults**: Use the provided `config/codegreen.json` template
+1. **Start with Defaults**: Keep only changed keys in `~/.codegreen/config.json`
 2. **Validate Early**: Run `codegreen config --validate` after changes
 3. **Test Incrementally**: Change one setting at a time
 4. **Monitor Overhead**: Use `codegreen doctor` to check measurement impact

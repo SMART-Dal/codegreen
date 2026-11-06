@@ -532,10 +532,9 @@ EXAMPLES:
   codegreen config --generate > my_config.json
 
 CONFIGURATION FILE LOCATIONS (checked in order):
-  1. ./codegreen.json                              (current directory)
-  2. ./config/codegreen.json                       (project config)
-  3. ~/.codegreen/codegreen.json                   (user config)
-  4. /etc/codegreen/codegreen.json                 (system config)
+  1. --config PATH or $CODEGREEN_CONFIG
+  2. ~/.codegreen/config.json                      (user config)
+  3. <package>/codegreen/config.json               (bundled defaults)
 
 OVERRIDE VIA FLAG:
   codegreen --config /path/to/config.json measure ...
@@ -636,7 +635,7 @@ RUNTIME ENVIRONMENT VARIABLES:
 12. CONFIGURATION FILE REFERENCE
 ================================================================================
 
-Location: config/codegreen.json
+Location: ~/.codegreen/config.json (user keys), merged over codegreen/config.json (bundled)
 
 STRUCTURE:
 {

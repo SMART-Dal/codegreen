@@ -17,21 +17,25 @@ Complete guide to configuring CodeGreen for optimal performance and accuracy.
 
 ## Configuration File Locations
 
-CodeGreen searches for configuration files in this priority order:
+The CLI, the Python runtime and the native library read one active file, the
+first of:
 
-1. `<install_dir>/config/codegreen.json` (project root)
-2. `<install_dir>/build/bin/config/codegreen.json`
-3. `~/.codegreen/codegreen.json` (user home)
+1. `--config PATH` (global CLI option; it sets `CODEGREEN_CONFIG`)
+2. `CODEGREEN_CONFIG` (a missing file is an error)
+3. `~/.codegreen/config.json`, when it exists
+4. the bundled `codegreen/config.json` of the installed package
+   (`$CODEGREEN_INSTALL_DIR/codegreen/config.json` when that is set)
 
-The first file found is used. The default config ships at `config/codegreen.json` in the project root.
+See [Config file resolution](#config-file-resolution) for how the file is merged
+and passed to measured processes.
 
 ### Custom Config
 
 ```bash
-# User-level override
+# User-level override: only the keys you change; the bundled file supplies the rest
 mkdir -p ~/.codegreen
-cp config/codegreen.json ~/.codegreen/codegreen.json
-# Edit as needed
+echo '{"measurement": {"default_sensors": ["rapl"]}}' > ~/.codegreen/config.json
+codegreen config --edit    # or start from a full copy of the active file
 ```
 
 ---
@@ -254,11 +258,16 @@ lists their sensors in `default_sensors`. RAPL domains (`package`, `pp0`,
 ### Config file resolution
 
 The CLI, the Python runtime and the native library read one file:
-`CODEGREEN_CONFIG` if set, else `~/.codegreen/config.json`, else the bundled
-`codegreen/config.json`. The CLI and the runtime export the resolved path as
-`CODEGREEN_CONFIG` to measured processes and to the library. Python merges
-the bundled defaults with the active file key by key, so an older user config
-cannot drop a key. A file that does not parse raises an error naming it.
+`CODEGREEN_CONFIG` if set (the CLI's `--config` sets it), else
+`~/.codegreen/config.json`, else the bundled `codegreen/config.json`. The CLI
+and the runtime export the resolved path as `CODEGREEN_CONFIG` to measured
+processes and to the library. Python merges the bundled defaults with the
+active file key by key, so an older user config cannot drop a key; the native
+library reads the active file alone and uses the bundled values for keys it
+lacks. A program linked against the library without `CODEGREEN_CONFIG` reads
+the config installed next to the library (`<libdir>/../config.json`,
+`../codegreen/config.json` or `../share/codegreen/config.json`). A file that
+does not parse raises an error naming it.
 
 ### Measurement Validity
 
@@ -409,7 +418,7 @@ of readings (100000 x 10 ms = 1000 s by default). A longer run is
 
 ```bash
 # Check JSON syntax
-python3 -m json.tool config/codegreen.json
+python3 -m json.tool ~/.codegreen/config.json
 
 # Show current active configuration
 codegreen config --show
@@ -490,13 +499,10 @@ codegreen measure-workload --duration 3
 ### Migration Script
 
 ```bash
-# Backup old config
-cp config/codegreen.json config/codegreen.json.backup
+# Back up the old user config
+mv ~/.codegreen/config.json ~/.codegreen/config.json.backup
 
-# Copy new template
-cp config/codegreen.json.template config/codegreen.json
-
-# Edit with your settings
+# Start from a copy of the bundled config and edit it
 codegreen config --edit
 ```
 
@@ -508,20 +514,17 @@ codegreen config --edit
 
 ```bash
 # Check which config file is being used
-codegreen info --detailed
+codegreen config
 
 # Output will show:
-# Configuration loaded from: /path/to/codegreen.json
+#   Active: /path/to/config.json
 ```
 
 ### Syntax Errors
 
 ```bash
-# Validate JSON syntax
-python3 -m json.tool config/codegreen.json
-
-# Use a JSON validator
-python3 -m json.tool config/codegreen.json
+# Validate JSON syntax of the active file
+python3 -m json.tool ~/.codegreen/config.json
 ```
 
 ### Permission Issues
@@ -585,8 +588,8 @@ CodeGreen supports environment variables in config values:
 
 ## Best Practices
 
-1. **Start with Defaults**: Use the provided `config/codegreen.json` template
-2. **Validate Early**: Run `python3 -m json.tool config/codegreen.json` after changes
+1. **Start with Defaults**: Keep only changed keys in `~/.codegreen/config.json`; the bundled `codegreen/config.json` supplies the rest
+2. **Validate Early**: Run `python3 -m json.tool ~/.codegreen/config.json` after changes
 3. **Test Incrementally**: Change one setting at a time
 4. **Monitor Overhead**: Use `codegreen doctor` to check measurement impact
 5. **Version Control**: Commit project-specific configs to git
@@ -607,7 +610,7 @@ codegreen config --edit
 codegreen config --reset
 
 # Validate JSON syntax
-python3 -m json.tool config/codegreen.json
+python3 -m json.tool ~/.codegreen/config.json
 ```
 
 ---
