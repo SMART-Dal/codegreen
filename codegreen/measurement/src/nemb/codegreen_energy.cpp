@@ -348,10 +348,11 @@ EnergyResult EnergyMeter::Impl::convert_synchronized_reading(const nemb::Synchro
     result.power_watts = sync_reading.total_system_power_watts;
     result.timestamp_ns = sync_reading.common_timestamp_ns;
     result.is_valid = sync_reading.providers_failed == 0;
-    // Aggregate per-domain breakdown from all providers
+    // Per-domain breakdown from all providers, signed: a failed domain is kept and counted, not dropped
     for (auto& pr : sync_reading.provider_readings) {
         for (auto& [domain, joules] : pr.domain_energy_joules) {
-            if (joules >= 0) result.components[domain] = joules;
+            result.components[domain] = joules;
+            if (joules < 0) result.negative_components++;
         }
     }
     return result;
@@ -453,16 +454,14 @@ EnergyDifference calculate_difference(const EnergyResult& e, const EnergyResult&
         d.energy_joules = e.energy_joules - s.energy_joules;
         d.duration_seconds = (e.timestamp_ns - s.timestamp_ns) / 1e9;
         if(d.duration_seconds > 0) d.average_power_watts = d.energy_joules / d.duration_seconds;
-        // Per-domain delta: subtract baseline from end for each domain present in both
+        // Per-domain delta, signed and never dropped; a negative delta or a failed (negative) end/start value is counted
         for (auto& [domain, end_j] : e.components) {
             auto it = s.components.find(domain);
             double start_j = (it != s.components.end()) ? it->second : 0;
             double delta = end_j - start_j;
-            if (delta >= 0) {
-                d.component_energy[domain] = delta;
-                if (d.duration_seconds > 0)
-                    d.component_power[domain] = delta / d.duration_seconds;
-            }
+            d.component_energy[domain] = delta;
+            if (d.duration_seconds > 0) d.component_power[domain] = delta / d.duration_seconds;
+            if (delta < 0 || end_j < 0 || start_j < 0) d.negative_components++;
         }
     }
     return d;
@@ -687,6 +686,8 @@ extern "C" {
     // Atomic stop: returns total energy, power, duration, and per-domain JSON
     // breakdown of THIS session in a single locked operation. Race-free under
     // concurrent task tracking. Pass nullptr/0 for json_buf to skip serialization.
+    // Domain deltas are signed and never dropped: a negative value (failed domain read
+    // or a counter going backwards) is the caller's signal to flag the measurement.
     // Returns: positive bytes written to json_buf on success (0 if buf null/empty),
     //          0 if session invalid, -required_size if buf too small.
     int nemb_stop_session_v2(uint64_t i, double* e, double* p, double* dur,
@@ -806,7 +807,7 @@ extern "C" {
     }
 
     // Returns per-domain energy DELTA from the last nemb_stop_session call.
-    // This is the energy consumed by the workload per domain, not cumulative.
+    // This is the energy consumed by the workload per domain, not cumulative; signed (see above).
     int nemb_get_domain_energy_json(char* b, int m) {
         std::lock_guard<std::mutex> l(c_api_mutex);
         std::ostringstream ss;

@@ -188,6 +188,17 @@ static void test_power_integrator() {
     CHECK(p.lost_devices() == 0 && p.joules(0) == 0);
 }
 
+static void test_signed_domains() {
+    EnergyResult s, e;
+    s.is_valid = e.is_valid = true;
+    e.timestamp_ns = 1000000000ULL;
+    s.components = {{"package", 10}, {"dram", 5}, {"core", 3}};
+    e.components = {{"package", 12}, {"dram", 4}, {"core", -1}};  // dram went backwards, core read failed
+    auto d = energy_utils::calculate_difference(e, s);
+    CHECK(d.is_valid && d.component_energy.size() == 3 && d.component_energy["package"] == 2);
+    CHECK(d.component_energy["dram"] == -1 && d.component_energy["core"] == -4 && d.negative_components == 2);
+}
+
 static bool throws_with(const char* env) {
     setenv("CODEGREEN_PROVIDERS", env, 1);
     try { detect_available_providers(); } catch (const std::runtime_error&) { unsetenv("CODEGREEN_PROVIDERS"); return true; }
@@ -370,6 +381,7 @@ int main(int argc, char** argv) {
     test_correlate();
     test_coordinator();
     test_power_integrator();
+    test_signed_domains();
     test_provider_selection();
     test_config_resolution();
     test_meter_sampler();

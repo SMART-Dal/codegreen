@@ -70,7 +70,8 @@ struct EnergyResult {
     uint32_t cpu_frequency_mhz{0};          ///< CPU frequency in MHz
     
     // Component breakdown (when available)
-    std::map<std::string, double> components; ///< Per-component energy (CPU, GPU, DRAM, etc.)
+    std::map<std::string, double> components; ///< Per-component energy (CPU, GPU, DRAM, etc.); signed, a failed domain reads negative
+    uint32_t negative_components{0};          ///< Components with a negative value (failed domain reads)
     
     // Metadata
     std::string provider_info;              ///< Hardware provider information
@@ -106,8 +107,9 @@ struct EnergyDifference {
     bool is_valid{false};                   ///< Whether difference is valid
     
     // Component breakdown
-    std::map<std::string, double> component_energy; ///< Energy per component
+    std::map<std::string, double> component_energy; ///< Energy per component; signed, never dropped
     std::map<std::string, double> component_power;  ///< Average power per component
+    uint32_t negative_components{0};                ///< Components with a negative delta or a negative (failed) end/start value
     
     std::string summary() const;
 };
