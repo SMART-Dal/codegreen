@@ -4,7 +4,7 @@ Complete reference for the `codegreen` command-line interface.
 
 The CLI is grouped into four panels: **Measurement** (`measure`, `analyze`,
 `run`, `monitor`, `project`, `timeline`), **Setup** (`init`, `config`,
-`init-sensors`), **Diagnostics** (`info`, `doctor`), and **Validation**
+`init-sensors`), **Diagnostics** (`info`, `capabilities`, `doctor`), and **Validation**
 (`benchmark`; `validate`/`validate-accuracy`/`measure-workload` are hidden
 but still functional).
 
@@ -429,6 +429,23 @@ codegreen info [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `-d, --detailed` | Show detailed information |
+
+### `capabilities`
+
+Print, as JSON, what the profiling registries can measure on this host (probes
+only, no workload runs).
+
+```bash
+codegreen capabilities [KIND...]
+```
+
+`KIND` is any of `metric` (CPU hardware counters), `gpu_series` (device time
+series, e.g. NVML), `gpu_replay` (per-kernel replay counters, e.g. Nsight
+Compute), `gpu_framework` (framework traces mapped to kernels, e.g. torch) and `language` (event and line samplers per
+language); none prints every registry, an unknown name exits with an error.
+Each registry maps to a list of `{provider, available, reason, device,
+details}`; `details` lists per-event or per-component availability (for
+`hw_counters`: `arch` and each logical event).
 
 ### `doctor`
 
