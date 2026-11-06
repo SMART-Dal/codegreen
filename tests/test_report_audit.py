@@ -2172,7 +2172,7 @@ class TestRound3:
         (tmp_path / "w.py").write_text(
             "import atexit, os, sys, types\nimport codegreen_runtime as rt\n"
             "rt._get_nemb_client = lambda: types.SimpleNamespace(lib=None, abi=4, get_final_measurements=lambda: "
-            "{'measurements': [{'checkpoint_id': 'enter:m:x#inv_1_t1', 'timestamp': 1, 'joules': 0.0, 'watts': 0.0}], "
+            "{'measurements': [{'checkpoint_id': 'enter:m:x#inv_1_t1', 'timestamp': 1, 'joules': 0.0, 'watts': 0.0, 'clamp': 'none'}], "
             f"'sampler': {_vsampler(readings=0)!r}}})\n"
             "atexit.register(rt._report_at_exit)\nprint('payload')\nsys.stdout.close()\nos.close(1)\n")
         r = subprocess.run([sys.executable, "w.py"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
@@ -2235,7 +2235,7 @@ class TestInvalidReads:
             return len(buf.value)
         lib = types.SimpleNamespace(nemb_start_session=lambda n: next(ids), nemb_stop_session_v2=stop,
                                     nemb_abi_version=lambda: 4)
-        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4))
+        monkeypatch.setattr(rt, "_get_nemb_client", lambda: types.SimpleNamespace(lib=lib, abi=4, gpu_energy_source=lambda: ""))
         s = rt.Session("inv", save_to_file=False, warn_on_concurrent=False).start()
         for name in ("ok", "bad"):
             with s.task(name):
