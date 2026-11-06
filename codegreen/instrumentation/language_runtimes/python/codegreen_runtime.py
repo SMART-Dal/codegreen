@@ -198,8 +198,11 @@ def _config_path() -> Path:
     CODEGREEN_CONFIG, else the user override ~/.codegreen/config.json, else the bundled package config.json."""
     if os.environ.get("CODEGREEN_CONFIG"):
         return Path(os.environ["CODEGREEN_CONFIG"])
-    user = Path.home() / ".codegreen" / "config.json"
-    return user if user.exists() else _package_file("config.json")
+    return _user_config_path() if _user_config_path().exists() else _package_file("config.json")
+
+
+def _user_config_path() -> Path:
+    return Path.home() / ".codegreen" / "config.json"
 
 
 def _deep_merge(base: Dict, over: Dict) -> Dict:

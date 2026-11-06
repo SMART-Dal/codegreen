@@ -43,7 +43,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 from codegreen.instrumentation.language_runtimes.python.codegreen_runtime import (
-    _config_path, load_config as _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
+    _config_path, _user_config_path, _deep_merge, load_config as _load_config, _measurement_cfg, _validity, _merge_validity, _run_reasons, _thread_overlap,
     measurement_validity, run_validity, resolution_ns, function_quality, providers_env, _poller_sampler,
     _checkpoint_events, _replay_checkpoint_events, _read_nemb_json,
 )
@@ -550,141 +550,16 @@ def check_energy_permissions() -> Dict[str, Dict[str, Any]]:
     
     return permissions
 
-def detect_performance_settings() -> Dict[str, Any]:
-    """Detect optimal performance settings for the current system."""
-    
-    if psutil:
-        settings = {
-            "cpu_cores": psutil.cpu_count(),
-            "memory_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-            "recommended_settings": {}
-        }
-        
-        # CPU scaling detection
-        cpu_freq = psutil.cpu_freq()
-        if cpu_freq:
-            settings["cpu_freq_mhz"] = {
-                "current": cpu_freq.current,
-                "min": cpu_freq.min,
-                "max": cpu_freq.max
-            }
-            
-            # Recommend frequency scaling settings
-            if cpu_freq.current < cpu_freq.max * 0.9:
-                settings["recommended_settings"]["cpu_scaling"] = "Consider disabling CPU frequency scaling for consistent measurements"
-        
-        # Memory optimization
-        memory = psutil.virtual_memory()
-        if memory.available < memory.total * 0.2:  # Less than 20% free
-            settings["recommended_settings"]["memory"] = "Low memory - consider reducing measurement buffer sizes"
-        
-        # Thread count recommendations
-        logical_cores = psutil.cpu_count()
-        physical_cores = psutil.cpu_count(logical=False)
-        
-        settings["recommended_threads"] = min(physical_cores or logical_cores, 4)
-        settings["recommended_settings"]["threading"] = f"Recommended worker threads: {settings['recommended_threads']}"
-        
-        # I/O and storage
-        try:
-            disk_usage = psutil.disk_usage('/')
-            if disk_usage.free < disk_usage.total * 0.1:
-                settings["recommended_settings"]["storage"] = "Low disk space - enable temp file cleanup"
-        except Exception:
-            pass
-
-    else:
-        # Fallback settings without psutil
-        import multiprocessing
-        cpu_cores = multiprocessing.cpu_count()
-        settings = {
-            "cpu_cores": cpu_cores,
-            "memory_gb": "unknown",
-            "recommended_settings": {},
-            "recommended_threads": min(cpu_cores, 4)
-        }
-        settings["recommended_settings"]["threading"] = f"Recommended worker threads: {settings['recommended_threads']}"
-    
-    return settings
-
-def generate_optimized_config(
-    environment_info: Dict[str, Any], 
-    sensor_info: Dict[str, Any], 
-    permission_info: Dict[str, Any],
-    performance_info: Dict[str, Any],
-    custom_config: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """Generate an optimized configuration based on detected system capabilities."""
-    
-    # Start with base configuration from existing config file
-    base_config_path = get_config_path()
-    if base_config_path and base_config_path.exists():
-        with open(base_config_path, 'r') as f:
-            config = json.load(f)
-    else:
-        config = load_config()  # Default config
-    
-    # Add initialization metadata
-    config["initialization"] = {
-        "completed": True,
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
-        "environment_type": environment_info["type"],
-        "detected_sensors": list(sensor_info.keys()),
-        "version": _VERSION
-    }
-    
-    # Environment-specific optimizations
-    if environment_info["type"] == "container":
-        # Container optimizations
-        config["measurement"]["accuracy"]["minimize_system_noise"] = False
-        config["performance"]["threading"]["max_worker_threads"] = 2
-        config["measurement"]["nemb"]["coordinator"]["auto_restart_failed_providers"] = True
-        
-    elif environment_info["type"] == "hpc":
-        # HPC optimizations
-        config["measurement"]["nemb"]["accuracy_mode"] = "production"
-        config["measurement"]["accuracy"]["priority"] = "maximum"
-        config["performance"]["threading"]["max_worker_threads"] = performance_info.get("recommended_threads", 4)
-        config["measurement"]["accuracy"]["disable_frequency_scaling"] = False  # HPC manages this
-        
-    elif environment_info["type"] == "shared_server":
-        # Shared server optimizations
-        config["measurement"]["accuracy"]["minimize_system_noise"] = True
-        config["performance"]["threading"]["max_worker_threads"] = min(2, performance_info.get("recommended_threads", 2))
-
-    elif environment_info["type"] == "cicd":
-        # CI/CD optimizations
-        config["measurement"]["accuracy"]["priority"] = "balanced"
-        config["measurement"]["nemb"]["accuracy_mode"] = "testing"
-        config["developer"]["debug_mode"] = True
-        config["performance"]["threading"]["max_worker_threads"] = 1
-    
-    # Providers keyed by NEMB registry name: enable the detected ones and select their sensors by default
-    # (a strict selection: every listed sensor must initialize on this host).
-    nemb_providers = config["measurement"]["nemb"]["providers"]
-    for name in nemb_providers:
-        nemb_providers[name]["enabled"] = bool(sensor_info.get(name, {}).get("available"))
-    config["measurement"]["default_sensors"] = [
-        s for s, provs in config["measurement"]["sensor_providers"].items()
-        if any(nemb_providers.get(p, {}).get("enabled") for p in provs)]
-
-    # Performance optimizations based on system capabilities
-    if performance_info["memory_gb"] < 4:
-        config["performance"]["database"]["batch_operations"] = True
-        config["performance"]["database"]["transaction_size"] = 500
-
-    # Apply custom configuration overrides
-    if custom_config:
-        def deep_merge(base_dict, override_dict):
-            for key, value in override_dict.items():
-                if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
-                    deep_merge(base_dict[key], value)
-                else:
-                    base_dict[key] = value
-        
-        deep_merge(config, custom_config)
-    
-    return config
+def generate_optimized_config(environment_info: Dict[str, Any], sensor_info: Dict[str, Any]) -> Dict[str, Any]:
+    """The entries init writes to the active config: the detected NEMB providers enabled and their sensors as
+    measurement.default_sensors (a strict selection: every listed sensor must initialize on this host)."""
+    m = _load_config()["measurement"]
+    providers = {n: {"enabled": bool(sensor_info.get(n, {}).get("available"))} for n in m["nemb"]["providers"]}
+    sensors = [s for s, provs in m["sensor_providers"].items() if any(providers.get(p, {}).get("enabled") for p in provs)]
+    return {"measurement": {"nemb": {"providers": providers}, "default_sensors": sensors},
+            "initialization": {"completed": True, "environment_type": environment_info["type"],
+                               "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+                               "detected_sensors": list(sensor_info), "version": _VERSION}}
 
 def test_configuration(config: Dict[str, Any]) -> Dict[str, Any]:
     """Test the generated configuration for basic functionality."""
@@ -1688,7 +1563,7 @@ def comprehensive_init(
     """
     console.print(Panel.fit("[bold blue]CodeGreen Comprehensive Initialization[/bold blue]"))
     
-    config_file_path = config_path or get_config_path()
+    config_file_path = Path(config_path or os.environ.get("CODEGREEN_CONFIG") or _user_config_path())
     
     # Check if initialization already completed
     if not force and config_file_path and Path(config_file_path).exists():
@@ -1736,10 +1611,6 @@ def comprehensive_init(
                 console.print("[red]Setup script timeout[/red]")
         else:
             console.print("[yellow]Permission setup requested but script not found[/yellow]")
-    
-    # Step 4: Performance Settings Detection
-    console.print("\n[bold]Step 4: Performance Settings Detection[/bold]")
-    performance_info = detect_performance_settings()
     
     # Display detection summary
     console.print("\n" + "="*60)
@@ -1839,36 +1710,22 @@ def comprehensive_init(
         if not proceed:
             console.print("[yellow]Initialization cancelled by user[/yellow]")
             return
-        
-        # Allow configuration customization
-        custom_config = {}
-        if typer.confirm("Customize configuration settings?"):
-            # Environment-specific customizations
-            if environment_info["type"] == "hpc":
-                custom_config["measurement"] = {"nemb": {"accuracy_mode": "production"}}
-            elif environment_info["type"] == "container":
-                custom_config["performance"] = {"minimize_system_noise": False}
-    else:
-        custom_config = {}
-    
-    # Step 5: Generate optimized configuration
-    console.print("\n[bold]Step 5: Generating Configuration[/bold]")
-    config = generate_optimized_config(environment_info, sensor_info, permission_info, performance_info, custom_config)
-    
-    # Step 6: Test configuration
-    console.print("\n[bold]Step 6: Testing Configuration[/bold]")
-    test_results = test_configuration(config)
-    
+
+    # Step 4: entries merged into the active config file (a user config keeps the bundled defaults for other keys)
+    console.print("\n[bold]Step 4: Generating Configuration[/bold]")
+    entries = generate_optimized_config(environment_info, sensor_info)
+
+    def save() -> None:
+        config_file_path.parent.mkdir(parents=True, exist_ok=True)
+        current = json.loads(config_file_path.read_text()) if config_file_path.exists() else {}
+        config_file_path.write_text(json.dumps(_deep_merge(current, entries), indent=2) + "\n")
+
+    console.print("\n[bold]Step 5: Testing Configuration[/bold]")
+    test_results = test_configuration(_deep_merge(_load_config(), entries))
+
     if test_results["success"]:
         console.print("[green]Configuration test successful![/green]")
-        
-        # Save configuration
-        config_dir = Path(config_file_path).parent
-        config_dir.mkdir(parents=True, exist_ok=True)
-        
-        with open(config_file_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        
+        save()
         console.print(f"\n[green]Initialization completed successfully![/green]")
         console.print(f"Configuration saved to: [cyan]{config_file_path}[/cyan]")
         
@@ -1886,8 +1743,7 @@ def comprehensive_init(
         if interactive:
             save_anyway = typer.confirm("Save configuration anyway?")
             if save_anyway:
-                with open(config_file_path, 'w') as f:
-                    json.dump(config, f, indent=2)
+                save()
                 console.print(f"Configuration saved with warnings: [cyan]{config_file_path}[/cyan]")
             else:
                 console.print("[yellow]Configuration not saved[/yellow]")

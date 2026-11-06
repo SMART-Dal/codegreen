@@ -1779,6 +1779,29 @@ def test_version_comes_from_the_source_tree_not_stale_metadata():
     assert version in CliRunner().invoke(cli.app, ["--version"]).output
 
 
+def test_init_merges_detected_providers_into_the_user_config_on_every_environment(tmp_path, monkeypatch):
+    """init raised KeyError 'accuracy' on container, hpc, shared_server and cicd hosts (it tuned keys no config has
+    and nothing reads) and, without a user config, overwrote the bundled config.json."""
+    from typer.testing import CliRunner
+    import codegreen.cli.cli as cli
+    from codegreen.instrumentation.language_runtimes.python import codegreen_runtime as rt
+    bundled = rt._package_file("config.json")
+    before = bundled.read_text()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "detect_hardware_sensors", lambda: {"intel_rapl": {"available": True}})
+    monkeypatch.setattr(cli, "check_energy_permissions", lambda: {})
+    monkeypatch.setattr(cli, "test_configuration", lambda c: {"success": "measurement" in c, "errors": []})
+    for env in ("personal", "container", "hpc", "shared_server", "cicd"):
+        monkeypatch.delenv("CODEGREEN_CONFIG", raising=False)
+        monkeypatch.setattr(cli, "detect_environment", lambda: {"type": env, "platform": "linux", "deployment_mode": ""})
+        r = CliRunner().invoke(cli.app, ["init", "--auto-detect-only", "--force"])
+        assert r.exit_code == 0, r.output
+        assert rt._config_path() == tmp_path / ".codegreen" / "config.json"
+        assert rt.load_config()["initialization"]["environment_type"] == env
+        assert rt.providers_env(None, rt._measurement_cfg()) == "intel_rapl"
+    assert bundled.read_text() == before
+
+
 def test_measure_output_file_is_the_json_report_with_the_verdict(tmp_path, monkeypatch):
     """`measure -o` wrote a raw schema with measurement.success true on an invalid run, so a consumer of the file
     used invalid joules; the file must be the --json document, verdict included, with or without --json."""

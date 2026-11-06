@@ -385,7 +385,7 @@ codegreen analyze python app.py --save-instrumented --output-dir ./instrumented
 
 ### `init`
 
-Comprehensive system initialization: detects the environment and hardware, validates permissions, and generates a configuration tuned to the host.
+Comprehensive system initialization: detects the environment and hardware, validates permissions, and merges the detected providers (`measurement.nemb.providers.<name>.enabled`) and their sensors (`measurement.default_sensors`) into `--config`, else `CODEGREEN_CONFIG`, else `~/.codegreen/config.json`; the bundled config is never written.
 
 ```bash
 codegreen init [OPTIONS]
