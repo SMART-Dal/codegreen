@@ -1,173 +1,128 @@
 # Energy Measurement
 
-CodeGreen uses the Native Energy Measurement Backend (NEMB) for hardware-level energy monitoring.
+How CodeGreen turns hardware energy counters into per-run and per-function
+energy, and what limits the result.
 
-## Which command should I use?
+## Which command
 
-| You want to ... | Use | Why |
+| You want to ... | Use | How energy is taken |
 |---|---|---|
-| Bracket a shell command (no source change) | [`codegreen run`](cli-reference.md#run) | Whole-subprocess energy with N-run statistics + `--budget` |
-| Inject per-function checkpoints into a single file | [`codegreen measure`](cli-reference.md#measure) | Tree-sitter AST instrumentation, coarse/fine granularity |
-| Profile a multi-file project against its own build | [`codegreen project`](cli-reference.md#project) | DISCOVER -> INSTRUMENT+BUILD -> MEASURE with your `--build-cmd` / `--run-cmd` |
-| Bracket regions inside a long-running Python script | [`codegreen.Session`](../api/python.md#manual-api-codegreensession) | In-process API, no subprocess, per-task energy + per-domain breakdown |
-| Sample an already-running daemon or webapp | [`codegreen monitor`](continuous-monitoring.md) | Non-invasive, cgroup_v2 per-PID, optional UDS annotation channel |
+| Measure an unmodified command, repeated, with statistics | [`codegreen run`](cli-reference.md#run) | Counters read at the start and end of every run |
+| Per-function energy of one source file | [`codegreen measure`](cli-reference.md#measure) | Checkpoints at function entry and exit, interpolated in the sampled series |
+| Per-function energy of a project with its own build | [`codegreen project`](project-profiling.md) | As `measure`, across every source file |
+| Regions inside a Python program | [`codegreen.Session`](../api/python.md#manual-api-codegreensession) | Counters read at each task boundary |
+| A service that is already running | [`codegreen monitor`](continuous-monitoring.md) | Periodic counter reads, optionally attributed to a PID or to requests |
 
-## Supported Hardware Sensors
+## Providers and sensors
 
-| Sensor | Driver | Implementation | Platform |
-|--------|--------|----------------|----------|
-| **CPU (Intel/AMD)** | Intel RAPL | `intel_rapl_provider.cpp` | Linux |
-| **GPU (NVIDIA)** | NVIDIA NVML | `nvidia_gpu_provider.cpp` | Linux |
-| **GPU (AMD)** | AMD ROCm SMI | `amd_gpu_provider.cpp` | Linux |
-| **CPU (AMD)** | AMD RAPL | `amd_rapl_provider.cpp` | Linux |
+NEMB (the Native Energy Measurement Backend, `libcodegreen-nemb`) reads
+energy through providers: `intel_rapl` (Linux powercap, Intel and AMD CPUs),
+`amd_rapl` (AMD RAPL MSRs), `nvidia_gpu` (NVML) and `amd_gpu` (ROCm SMI) on
+Linux, IOReport on macOS and EMI on Windows. See
+[Installation](../getting-started/installation.md#hardware-sensors) for their
+requirements.
 
-### RAPL Domains
+`--sensors` (on `measure`, `run` and `project`) and
+`measurement.default_sensors` choose which providers are summed: `rapl`,
+`amd_cpu`, `nvidia`, `amd_gpu`. The default `"all"` sums every provider that
+initializes, so on a GPU host the total includes GPU energy and carries the
+warning `GPU_IN_TOTAL`. Use `--sensors rapl` for the CPU package alone.
 
-Intel RAPL exposes multiple energy domains. CodeGreen dynamically enumerates available domains at runtime, including multi-socket systems:
+The total sums non-overlapping counters only. For RAPL that is the package
+zones plus DRAM where the CPU exposes it (or the psys zone alone, when
+present); `core` and `uncore` lie inside the package and are reported as
+domains but never added. AMD CPUs have no DRAM counter. Domain breakdowns
+(`domains` in `run` and `Session` reports) therefore do not sum to the total;
+`meta.domain_topology` says which domains are top-level.
 
-| Domain | What it measures |
-|--------|-----------------|
-| `package` | Entire CPU socket (cores + uncore) |
-| `pp0` / `core` | CPU cores only |
-| `pp1` | Integrated GPU (where available) |
-| `dram` | Memory subsystem |
-| `psys` | Entire platform (where available) |
+RAPL, NVML and the other counters are system-wide: they include every
+process on the package or device, not just the measured one. Measure on an
+otherwise idle machine and do not run two measurements at the same time.
 
-## Measurement Architecture
+## How `measure` and `project` attribute energy
 
-### Background Polling
+1. Inside the measured process, a background NEMB thread reads the selected
+   providers every `measurement.nemb.coordinator.measurement_interval_ms`
+   (default 10 ms) into a ring buffer of cumulative energy. The buffer is
+   seeded with a reading before the thread starts and closed with one at
+   exit, so every checkpoint lies between two real readings.
+2. A checkpoint call records only a timestamp and a name; it does not read a
+   counter. In CPython an instrumented call costs about 1 µs on an AMD EPYC
+   9554P (1.27 million checkpoints added 1.2 s to a 0.4 s program).
+3. At exit, each checkpoint's cumulative energy is linearly interpolated
+   between the two readings that bracket it. A checkpoint outside the
+   sampled range is flagged (`clamp`) and the run is invalid
+   (`MARKER_CLAMPED`).
+4. Calls are replayed on per-thread stacks: a call's inclusive energy is the
+   difference between its exit and entry values, and its exclusive energy
+   subtracts its instrumented callees.
 
-NEMB runs a dedicated high-priority C++ thread that samples hardware sensors at 1ms intervals (configurable). Energy readings are stored in a circular buffer for later correlation.
+`run` and `Session` read the counters directly at each boundary instead, so
+their windows do not depend on the sampler interval (except for providers
+that only report power, whose energy is integrated from the samples).
 
-### Signal-Generator Model
+## Resolution
 
-Instead of synchronous hardware reads at every checkpoint (~5-20us each), CodeGreen inserts lightweight timestamp signals (~100-200ns) into the instrumented code. This is 25-100x lower overhead.
+A window can be resolved only to the update interval of its slowest
+selected provider or the sampler interval, whichever is larger. Each
+provider reports its update interval in `sampler.providers[].update_interval_ms`;
+on an AMD EPYC 9554P with an NVIDIA RTX 5000 Ada, RAPL updates every 1 ms and
+NVML about every 100 ms. With the default 10 ms sampler:
 
-### Correlation and Interpolation
+| Result | Requirement (defaults) | Otherwise |
+|---|---|---|
+| `measure` / `project` root window | at least 2 sampler readings | `TOTAL_BELOW_RESOLUTION` (invalid) |
+| Per-function `measured` | mean call at least 10 resolutions, and at least 10 readings in every call | `aggregate_only` (summed time at least 10 resolutions) or `below_resolution` |
+| `run` | mean run at least 10 update intervals of the finest selected provider | `RUN_BELOW_RESOLUTION` (invalid) |
+| `Session` task | at least 10 resolutions | warning `TASK_BELOW_RESOLUTION` |
 
-After the workload completes, NEMB correlates checkpoint timestamps with the time-series energy data using binary search + linear interpolation to attribute energy between function enter/exit points. The buffer is seeded with a synchronous reading before the sampler starts and closed with one at report time, so every marker is bracketed by real readings. A marker outside the sampled range (ring buffer wrapped) is flagged and the run is invalid (`MARKER_CLAMPED`), never silently assigned the edge value.
+Including a GPU provider widens the per-function resolution to its update
+interval: with `"all"` on that host, a 0.73 s `main()` is
+`below_resolution`, while with `--sensors rapl` it is `measured`.
+The thresholds are in
+[`measurement.report.validity`](configuration-reference.md#measurement-validity).
 
-### Validity
+## Validity
 
-Each result carries a `validity` verdict computed from the sampler statistics: CPU affinity, reading gaps, buffer wrap, clamped markers, window length in readings, and zero or negative energy. `measure` and `run` exit 3 on an invalid result. Reason codes and the JSON fields are listed under [Exit codes and measurement validity](cli-reference.md#exit-codes-and-measurement-validity).
+Each result carries a `validity` verdict built from the sampler statistics
+and the providers' own facts: CPU affinity, reading gaps, buffer wrap,
+clamped checkpoints, window length, failed or stalled providers and zero or
+negative energy. `measure`, `run` and `project` exit 3 on an invalid result.
+The codes are listed under
+[Exit codes and measurement validity](cli-reference.md#exit-codes-and-measurement-validity).
 
-- Do not pin the measured process to one CPU: the sampler thread runs in it and would compete with the workload (`AFFINITY_SINGLE_CPU`).
-- A measured window must span several sampling intervals. Shorter windows are `TOTAL_BELOW_RESOLUTION`; repeat short commands with `codegreen run --repeat N --warmup M`.
-- Select sensors with `--sensors` on hosts with a GPU; otherwise GPU energy is summed into the total (`GPU_IN_TOTAL`).
-- Use `codegreen project` for exclusive per-function attribution and read each function's `quality`.
+- Do not pin the measured process to one CPU: the sampler thread runs inside
+  it and competes with the workload (`AFFINITY_SINGLE_CPU`, and usually
+  `SAMPLER_STARVED`).
+- Choose sensors explicitly on hosts with a GPU.
+- Make measured windows long enough (see above); repeat short commands with
+  `codegreen run --repeat N`.
+- Read each function's `quality` before comparing functions.
 
-## Granularity Modes
+## Granularity
 
-| Mode | What gets instrumented | Use case |
-|------|----------------------|----------|
-| **coarse** (default) | Main entry/exit only | Total program energy, minimal overhead |
-| **fine** | All functions per language config | Per-function energy breakdown |
+| Mode | Instrumented | Use |
+|---|---|---|
+| `coarse` (default for `measure`) | The entry function's frame only | Whole-program energy with two checkpoints |
+| `fine` (default for `project`) | Every function the language config matches | Per-function breakdown |
 
-```bash
-# Coarse: 2 checkpoints (enter + exit main)
-codegreen measure python script.py
+A fine run that records fewer than two checkpoints (all work at module level
+or in child processes) is re-measured at coarse granularity, and
+`instrumentation_audit.fallback_to_coarse` is `true`.
 
-# Fine: N checkpoints (enter + exit for each function)
-codegreen measure python script.py -g fine
-```
+## Checkpoint throttling
 
-## Visualization
+`CODEGREEN_CHECKPOINT_THROTTLE_MS=N` makes the Python runtime drop a
+checkpoint that repeats within N ms of the previous one with the same id.
+It reduces overhead for very hot functions, but entry and exit checkpoints
+are throttled independently, so the throttled functions lose most of their
+calls and their energy is attributed to their callers. The result is still
+reported as valid; use it only to locate coarse hotspots.
 
-Use `--export-plot` to generate an interactive energy timeline:
+## Comparing with `perf`
 
-```bash
-codegreen measure python script.py -g fine --export-plot energy.html
-```
-
-The HTML output (via Plotly) includes:
-
-- **Function energy bar chart**: Horizontal bars sorted by energy consumption
-- **Hotspot detection**: Functions >90th percentile highlighted in red
-- **Zoomable timeline**: Scatter plot with zoom, pan, hover tooltips
-- **Summary stats**: Total energy, wall time, average/peak power
-
-For static images:
-```bash
-codegreen measure python script.py -g fine --export-plot energy.png  # requires matplotlib
-```
-
-## Benchmarking
-
-CodeGreen includes a built-in benchmark suite using programs from the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/) to validate energy measurement accuracy.
-
-### Running Benchmarks
-
-```bash
-# Run all available benchmarks
-codegreen benchmark
-
-# Specific problem and language
-codegreen benchmark -p nbody -l python -s 5000
-
-# Compare CodeGreen vs perf RAPL
-codegreen benchmark -p nbody --profiler codegreen --profiler perf
-
-# Custom output directory
-codegreen benchmark -p nbody -l python -o benchmark/results
-```
-
-### Available Programs
-
-| Problem | Languages | Description |
-|---------|-----------|-------------|
-| nbody | Python, C, C++ | N-body gravitational simulation |
-| binarytrees | Python, C, C++ | Binary tree allocation/deallocation |
-| spectralnorm | Python, C, C++ | Spectral norm computation |
-| fannkuchredux | Python, C, C++ | Pancake sorting permutations |
-| fasta | Python, C, C++ | FASTA format sequence generation |
-
-### Benchmark Output
-
-Results are saved as JSON in `benchmark/results/` with per-run energy, time, and checkpoint data. CSV summaries are also generated.
-
-### Quick Sensor Test
-
-For a quick test of sensor accuracy:
-
-```bash
-codegreen measure-workload --duration 3
-```
-
-### Checkpoint Throttling
-
-For workloads with very high checkpoint rates, set the `CODEGREEN_CHECKPOINT_THROTTLE_MS` environment variable to throttle checkpoint recording. This limits how frequently checkpoints are recorded, reducing overhead for tight loops:
-
-```bash
-CODEGREEN_CHECKPOINT_THROTTLE_MS=5 codegreen measure python script.py -g fine
-```
-
-### Benchmark Accuracy
-
-Validated against `perf stat` RAPL readings on representative workloads:
-
-| Benchmark | Error vs perf RAPL |
-|-----------|-------------------|
-| binarytrees/18 | 0.03% |
-| spectralnorm/1000 | 0.71% |
-
-Short workloads are automatically repeated to accumulate sufficient energy for accurate measurement.
-
-## Quick Energy Measurement
-
-For measuring any shell command without code instrumentation:
-
-```bash
-codegreen run python script.py --repeat 10 --warmup 1
-codegreen run --budget 5.0 --json ./my_binary arg1 arg2
-```
-
-See [CLI Reference](cli-reference.md#run) for full options.
-
-## Performance
-
-| Metric | Value |
-|--------|-------|
-| Checkpoint overhead | ~100-200ns per checkpoint |
-| Polling interval | 1ms (configurable) |
-| Background thread overhead | Negligible |
-| Visualization overhead | Zero (post-measurement only) |
+`codegreen benchmark` runs programs under CodeGreen and `perf stat` RAPL and
+compares the readings (it needs the Benchmarks Game sources in a source
+checkout; see [CLI Reference: `benchmark`](cli-reference.md#benchmark)).
+[Example 10](../examples/10_codegreen_vs_perf.md) does the same comparison
+with `codegreen run` and `perf stat` directly.

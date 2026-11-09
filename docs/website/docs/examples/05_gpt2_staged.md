@@ -1,21 +1,24 @@
 # 05 - GPT-2 staged inference
 
-Multi-task `codegreen.Session` over a small GPT-2 inference pipeline:
-tokenise, generate, decode. Demonstrates per-domain attribution
-(`package-0`, `core`, `gpu0`, `dram-0`) and time-series export.
+One `codegreen.Session` with three tasks over a GPT-2 pipeline:
+`preprocess` (load the tokenizer), `load_model` and `generate` (16 prompts,
+64 new tokens each, on CUDA when available). It records the power time
+series and exports a plot.
 
-## What you learn
+What it shows:
 
-- One Session bracketing multiple `with s.task(...):` regions.
-- `record_time_series=True` for power-vs-time plots.
-- `domains` and `domains_power_w` fields on each task.
-- Why `generate` dominates total Joules while `decode` runs hot per watt.
+- Per-task `domains`: CPU package (`package-0`, with the nested `core`) and
+  GPU (`gpu0`) energy for each stage.
+- `record_time_series=True`: per-task samples, the `noise` summary and
+  `Session.export_plot`.
 
 ## Prerequisites
 
-- `pip install -r examples/05_gpt2_staged/requirements.txt` (pulls `torch`
-  and `transformers`).
-- This example is **skipped by the harness** -- it's heavy.
+- `pip install -r examples/05_gpt2_staged/requirements.txt` (`torch`,
+  `transformers`, `sentencepiece`). The first run downloads the `gpt2` model.
+- `plotly` for the HTML plot. Without it `export_plot` writes nothing.
+- The test harness skips this example unless
+  `CODEGREEN_RUN_HEAVY_EXAMPLES=1` is set.
 
 ## Source
 
@@ -32,20 +35,38 @@ pip install -r examples/05_gpt2_staged/requirements.txt
 python examples/05_gpt2_staged/main.py
 ```
 
-## Expected output
+`pipeline.html` is written next to `main.py` (override the path with
+`CG_PLOT`). The last line on the host used for these pages:
 
-A `pipeline.html` time-series plot lands in the example directory plus:
-
+```text
+OK: gpt2_staged; tasks=3; total_energy_j=131.7195; gen_s=0.67
 ```
-OK: gpt2_staged; tasks=3; total_energy_j=84.7800; gen_s=12.41
-```
 
-## Why it matters
+The script does not check validity, and this run was not valid. Read the
+`validity` block of `codegreen_<pid>.json` before using the numbers. That
+run's report:
 
-Real ML workloads have **wildly different per-stage power profiles**.
-Tokenisation is CPU-bound at idle power; `generate()` lights up the GPU at
-sustained 120-200W; `decode()` is short but hot. Bracketing each stage
-shows you which knob (batch size, model size, hardware) moves the needle.
+| Task | `energy_j` | `duration_s` | `package-0` (J) | `gpu0` (J) |
+|---|---:|---:|---:|---:|
+| `preprocess` | 5.68 | 0.073 | 5.68 | 0 |
+| `load_model` | 22.75 | 0.210 | 17.36 | 5.39 |
+| `generate` | 103.29 | 0.677 | 53.93 | 49.36 |
 
-See also: [Python deep dive: GPT-2 with per-domain attribution](python.md#real-world-example-text-generation-with-per-domain-attribution),
-[03 - Session API](03_session_api.md).
+- `validity.status` was `invalid` with `COUNTER_INTEGRAL_DIVERGED`
+  (`counter 54.748 J, integral 31.075 J over 0.962 s` for `gpu0`): the GPU
+  energy counter and the integral of its sampled power disagreed beyond
+  `measurement.report.validity.counter_check.tolerance`. This check is fatal
+  by default; its usual cause is another process reading the counter or the
+  instantaneous power (`nvidia-smi`, DCGM).
+- `TASK_BELOW_RESOLUTION` (warning) named all three tasks. The NVIDIA
+  provider reported an update interval of about 100 ms, so a stage needs
+  about 1 s to be resolved on the GPU side.
+- `GPU_IN_TOTAL` (warning): each task's `energy_j` sums CPU and GPU
+  providers. Select sensors to measure one side only.
+
+On a CPU-only host the `gpu0` domain is absent and the same code reports CPU
+energy only.
+
+See also: [Python deep dive](python.md),
+[03 - Session API](03_session_api.md),
+[Python API: TaskResult fields](../api/python.md#taskresult-fields).

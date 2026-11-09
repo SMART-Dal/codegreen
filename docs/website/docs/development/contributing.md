@@ -1,47 +1,42 @@
 # Contributing
 
-## Getting Started
+## Setup
 
 ```bash
 git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
-pip install -e ".[dev]"
-pre-commit install
+./install.sh --skip-rapl          # builds NEMB and installs the package in editable mode
+pip install -e ".[dev,all]"
 ```
 
-## Code Style
+See [Building from Source](building.md) for the manual build and the tests.
 
-- **Formatting**: ruff (`ruff check --fix .`)
-- **Methods**: snake_case
-- **Classes**: PascalCase
-- **Constants**: UPPER_CASE
+## Conventions
 
-## Adding Language Support
+- Python: snake_case functions and variables, PascalCase classes,
+  UPPER_CASE constants.
+- Configuration over constants: thresholds and paths belong in
+  `codegreen/config.json` or the language configs, not in code.
+- Measurement failures are reported, never hidden: a failed or doubtful
+  reading becomes a `validity` reason or warning, not a silent 0.
 
-CodeGreen uses a config-driven design. To add a new language:
+## Adding a language
 
-1. Add a Tree-sitter grammar to `third_party/`
-2. Create `src/instrumentation/configs/<language>.json` with function patterns
-3. Add a runtime bridge in `src/instrumentation/language_runtimes/<language>/`
-4. Register the language in `src/cli/cli.py` Language enum
+Instrumentation is driven by per-language configs, so the engine does not
+change:
 
-No changes needed to the core instrumentation engine.
+1. Add the Tree-sitter grammar (the `tree-sitter-language-pack` dependency
+   covers most languages; otherwise a submodule under `third_party/`).
+2. Write `codegreen/instrumentation/configs/<language>.json`, starting from
+   `TEMPLATE.json`; `SCHEMA.md` in the same directory documents the format.
+3. Add a runtime bridge under
+   `codegreen/instrumentation/language_runtimes/<language>/` that calls
+   `nemb_mark_checkpoint` (see [Core API](../api/core.md#language-runtimes)).
+4. Add the language to the `Language` enum in `codegreen/cli/cli.py` and, for
+   `measure`, its run command in `_run_energy_measurement`.
 
-## Project Structure
+## Pull requests
 
-```
-src/
-  cli/              # Python CLI (Typer + Rich)
-  instrumentation/  # Tree-sitter engine + language configs
-  measurement/      # C++ NEMB backend
-  analyzer/         # Post-measurement visualization
-benchmark/          # Benchmark suite
-docs/website/       # MkDocs documentation
-```
-
-## Submitting Changes
-
-1. Fork the repository
-2. Create a feature branch
-3. Ensure `ruff check .` passes
-4. Open a pull request with a clear description
+1. Fork the repository and create a feature branch.
+2. Run the tests (`pytest tests --ignore=tests/test_examples.py`).
+3. Open a pull request that explains the change and how it was verified.

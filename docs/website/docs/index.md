@@ -13,7 +13,7 @@
 
     ---
 
-    Hardware-level energy monitoring via RAPL (Linux), IOReport (macOS), EMI (Windows), NVML, and ROCm with sub-millisecond resolution.
+    Hardware energy counters via RAPL (Linux), IOReport (macOS), EMI (Windows), NVML and ROCm, with a validity verdict on every result.
 
     [:octicons-arrow-right-24: Getting Started](getting-started/quickstart.md)
 
@@ -45,39 +45,26 @@
 
     ---
 
-    CLI tool with JSON/CSV/Markdown output, CI/CD energy gating via `--budget`, and granularity control.
+    JSON output for every command, CI energy gating with `--budget`, and exit code 3 for invalid measurements.
 
     [:octicons-arrow-right-24: Installation](getting-started/installation.md)
 
 </div>
 
-## Setup & Installation
-
-<video width="100%" controls autoplay loop muted>
-  <source src="assets/demo.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
-*Quick start guide: installing and configuring CodeGreen.*
-
 ## What is CodeGreen?
 
-CodeGreen is an energy measurement tool that helps developers understand the energy consumption of their software at the function level. It uses Tree-sitter AST parsing for automatic code instrumentation and a C++ backend (NEMB) for hardware-level energy readings with minimal overhead.
+CodeGreen measures the energy consumption of software from hardware energy counters, down to individual functions. It instruments source code with Tree-sitter and reads the counters through a native C++ backend (NEMB, the Native Energy Measurement Backend).
 
 ### Key Features
 
-- **Energy Measurement**: Per-function energy attribution via RAPL (Linux), IOReport + kpc (macOS), EMI (Windows), NVML, ROCm
-- **Quick Measurement**: `codegreen run` measures energy of any shell command with hardware-level precision
-- **Continuous Monitoring**: `codegreen monitor` samples already-running services; per-PID via cgroup_v2; per-request via UDS annotations
-- **Project Profiling**: `codegreen project` plugs into your build (Maven, Gradle, Make, plain python) for per-function attribution across multi-file projects
-- **Code Analysis**: Tree-sitter based static analysis across Python, C, C++, Java
-- **Visualization**: Interactive energy timeline with `--export-plot` (Plotly HTML with zoom/pan)
-- **Granularity Control**: Coarse mode (main only) or fine mode (all functions)
-- **CI/CD Energy Gating**: `--budget` flag to enforce energy budgets in pipelines
-- **Benchmarking**: Built-in benchmark suite -- 0.03% error vs perf RAPL on representative workloads
+- **Per-function energy**: `codegreen measure` instruments a file; `codegreen project` instruments a multi-file project and runs your own build and run commands (Maven, Gradle, Make, plain Python).
+- **Whole-command energy**: `codegreen run` measures any command over repeated runs, with confidence intervals and `--budget` gating.
+- **In-process API**: `codegreen.Session` brackets regions of a Python program.
+- **Continuous monitoring**: `codegreen monitor` samples running services, with per-PID attribution (cgroup v2) and per-request annotations over a Unix socket.
+- **Validity**: every result carries a verdict with reason codes; `measure`, `run` and `project` exit 3 on an invalid measurement.
+- **Visualization**: `--export-plot` writes an interactive Plotly timeline or a static image.
 
 ## Quick Start
-
-Get started with CodeGreen in just a few steps:
 
 === "Install (pip)"
 
@@ -102,13 +89,13 @@ Get started with CodeGreen in just a few steps:
 === "Measure"
 
     ```bash
-    codegreen measure python my_script.py
+    codegreen measure python my_script.py --sensors rapl
     ```
 
 === "Quick Run"
 
     ```bash
-    codegreen run python my_script.py --repeat 10
+    codegreen run --repeat 10 --sensors rapl -- python3 my_script.py
     ```
 
 === "Visualize"
@@ -129,7 +116,7 @@ Get started with CodeGreen in just a few steps:
     codegreen project python ./src -r "python main.py" -g fine
     ```
 
-## Find what you need in two clicks
+## Where to start
 
 | I want to ... | Start here | Then |
 |---|---|---|
@@ -138,25 +125,18 @@ Get started with CodeGreen in just a few steps:
 | Bracket regions inside a long script | [Python API](api/python.md) | [03 Session API](examples/03_session_api.md) |
 | Find per-method hotspots in a Java/Python/C++ project | [Project Profiling](user-guide/project-profiling.md) | [04 Java](examples/04_project_hotspots_java.md) / [09 Python](examples/09_project_hotspots_python.md) |
 | Watch a running daemon or webapp | [Continuous Monitoring](user-guide/continuous-monitoring.md) | [06 host](examples/06_monitor_host.md) / [07 PID](examples/07_monitor_pid.md) / [08 annotations](examples/08_monitor_socket.md) |
-| Integrate into CI | [CI/CD integration](user-guide/cicd-integration.md) | `codegreen run --budget 10.0 ...` |
+| Gate energy in CI | [CI/CD integration](user-guide/cicd-integration.md) | `codegreen run --budget 10.0 ...` |
 | Cross-validate against `perf` | [Energy Measurement](user-guide/energy-measurement.md) | [10 CodeGreen vs perf](examples/10_codegreen_vs_perf.md) |
 | Add a language or contribute | [Architecture](development/architecture.md) | [Contributing](development/contributing.md) |
 
 ## What's new in 0.5.0
 
-- Every `measure`, `run` and `project` result carries a `validity` verdict with reason codes; `measure` and `run` exit 3 on an invalid measurement. See [Exit codes and measurement validity](user-guide/cli-reference.md#exit-codes-and-measurement-validity).
-- `--sensors` selects the NEMB providers that are measured (`CODEGREEN_PROVIDERS`); per-function energy counts every call, with inclusive and exclusive energy and per-provider totals.
-- NEMB result block ABI 4: per-marker bracketing index, clamp flag, per-provider energy and sampler statistics. See the [Changelog](about/changelog.md).
+- Every `measure`, `run` and `project` result carries a `validity` verdict with reason codes, and the command exits 3 on an invalid measurement. See [Exit codes and measurement validity](user-guide/cli-reference.md#exit-codes-and-measurement-validity).
+- `--sensors` (and `measurement.default_sensors`) selects the providers that are summed; a total that mixes GPU and CPU energy is flagged `GPU_IN_TOTAL`.
+- Per-function energy replays every call: `inclusive_j`, `exclusive_j` and a per-function `quality` verdict. `project` percentages are shares of the attributed (exclusive) energy.
+- NEMB result block ABI 4: per-marker reading index, clamp flag, per-provider energy and sampler statistics.
 
-## What's new in 0.4.9
-
-- Per-function attribution closes frames on every exit path (`try`/`finally`, C++ RAII guard, C return rewrite), so the work inside `return <expr>` is attributed and function names are qualified in all languages. See the [Changelog](about/changelog.md).
-- `codegreen project --sync-device cuda` attributes GPU work to the functions that launched it; `attribution_pct` is now exclusive and `--min-attribution-pct` flags low coverage. See [Project Profiling](user-guide/project-profiling.md).
-- `codegreen monitor` / `codegreen.Monitor` -- continuous sampler with cgroup_v2 per-PID attribution, per-request annotation over a UDS socket, and OTLP / Prometheus exporters. See [Continuous Monitoring](user-guide/continuous-monitoring.md).
-- `codegreen timeline` -- power, stacks, GC, allocation and GPU kernels on one axis, exported for ui.perfetto.dev. See [CLI: timeline](user-guide/cli-reference.md#timeline).
-- `codegreen run --stdin`, `--validate/--no-validate`, `--timeout`; the default per-run time limit is now unlimited. See [CLI: run](user-guide/cli-reference.md#run).
-- 14 worked end-to-end examples under [`examples/`](examples/index.md), each verified by `pytest tests/test_examples.py`.
-- Earlier 0.4.7 / 0.4.8 changes (schema overhaul, local-timezone display fields) are in the [Changelog](about/changelog.md).
+Earlier releases are described in the [Changelog](about/changelog.md).
 
 ## Supported Platforms
 
@@ -182,7 +162,7 @@ Get started with CodeGreen in just a few steps:
 
 </div>
 
-Pre-built wheels for Linux x86_64 and macOS ARM64. Windows and other platforms: install from source.
+PyPI wheels: Linux x86_64 (CPython 3.9-3.13), Linux aarch64, macOS arm64 and Windows x86_64 (CPython 3.10-3.13). Other platforms install from source.
 
 ## Citing CodeGreen
 

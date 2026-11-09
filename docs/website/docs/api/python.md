@@ -1,35 +1,23 @@
 # Python API
 
-Reference for the public Python API. The runtime exposes:
+`import codegreen` exposes `Session`, `TaskResult`, `task`, `Monitor`,
+`annotate_request` and `__version__`.
 
-```python
-codegreen.__all__ = [
-    "Session", "Monitor", "annotate_request",
-    "TaskResult", "task",
-]
-```
+| API | Use |
+|---|---|
+| [`codegreen.Session`](#manual-api-codegreensession) and [`@codegreen.task`](#manual-api-codegreensession) | Measure named regions of a Python program, in-process |
+| [`codegreen.Monitor`](#codegreenmonitor) | Sample a running service or the whole host continuously |
+| [`codegreen.annotate_request`](#annotate_request) | Attribute energy to individual requests through a `Monitor` |
+| [Runtime module](#runtime-module-auto-instrumenter) | What `codegreen measure` and `project` inject into instrumented code |
 
-Use:
-
-1. **`codegreen.Session`** -- manual span-based measurement, in-process.
-2. **`@codegreen.task`** -- decorator form of Session tasks.
-3. **`codegreen.Monitor`** -- continuous sampling of an already-running
-   service or the whole host.
-4. **`codegreen.annotate_request`** -- per-request span via a UDS
-   annotation channel served by a Monitor.
-5. **CLI auto-instrumenter** -- runs `codegreen measure ...` over a
-   script, injects checkpoints automatically (no Python import needed).
-
-All share the same NEMB C++ backend, the same JSON output envelope, and
-the same `libcodegreen-nemb.so` ABI (v2+). They can coexist in one
-process.
-
-For a guided tour with full workloads, see [Python examples](../examples/python.md).
-For a 60-second introduction, see the [Quickstart](../getting-started/quickstart.md).
+All of them use the native backend `libcodegreen-nemb` and sum the providers
+selected by `measurement.default_sensors` (there is no per-call sensor
+argument; set it in the [config](../user-guide/configuration-reference.md#sensor-selection)
+or with `CODEGREEN_CONFIG`). For worked examples see
+[Python examples](../examples/python.md) and
+[Example 03](../examples/03_session_api.md).
 
 ## Manual API: `codegreen.Session`
-
-For end-to-end examples, see [Python examples → Manual measurement with `codegreen.Session`](../examples/python.md#manual-measurement-with-codegreensession).
 
 ```python
 import codegreen
@@ -41,461 +29,397 @@ with codegreen.Session("training-run") as s:
         train_model()
 ```
 
-By default, results are written to `codegreen_<pid>.json` in the working directory. CSV is opt-in (pass `output_file="x.csv"` or `output_format="csv"`). Pass `save_to_file=False` to suppress file output.
-
-Three usage forms are supported — context manager, explicit `start_task` / `stop_task`, and `@codegreen.task` decorator. Full code for each is in [Python examples](../examples/python.md#manual-measurement-with-codegreensession).
+A task can also be opened with `s.start_task(name)` / `s.stop_task(name)`,
+or by decorating a function with `@codegreen.task()` (named after the
+function's qualified name unless a name is given; calling it outside an
+active session raises `RuntimeError`). Tasks nest; each thread keeps its own
+task stack. When the session stops, the report is written to
+`codegreen_<pid>.json` in the working directory if at least one task ran;
+`stop()` also returns it as a dict, and `s.tasks` holds the `TaskResult`
+objects.
 
 ### Constructor parameters
 
 | Param | Default | Notes |
 |---|---|---|
-| `name` | `"default"` | Session name written to output |
-| `output_file` | `codegreen_<pid>.json` | Output path; CSV chosen automatically when path ends in `.csv` |
-| `output_format` | `"auto"` | `"auto"` \| `"json"` \| `"csv"` \| `"none"`; `"auto"` sniffs from extension, defaults to JSON |
-| `save_to_file` | `True` | Set `False` to suppress file writes entirely |
-| `warn_on_concurrent` | `True` | Warn at construction if another codegreen process is active on the same host (RAPL is system-wide) |
-| `record_time_series` | `False` | Capture sampled (timestamp, power, energy, per-domain) tuples for each task |
-| `buffer_samples` | `None` | Power-user override of the C++ ring-buffer size; usually unnecessary because Python drain is adaptive |
-| `sample_interval_ms` | `None` (uses `config.json`) | Per-session override of the sampler's measurement interval; routes to the existing `coordinator.measurement_interval_ms` field via `nemb_set_measurement_interval_ms` — no parallel state |
-| `sampling_mode` | `"fixed"` | `"adaptive"` is reserved for a future runtime-rate-control mode; today only `"fixed"` is implemented |
+| `name` | `"default"` | Session name, written to `meta.session_name` |
+| `output_file` | `codegreen_<pid>.json` | Output path; a path ending in `.csv` selects CSV (one row per task, appended) |
+| `output_format` | `"auto"` | `"auto"` (from the extension, else JSON), `"json"`, `"csv"` or `"none"` (no file) |
+| `save_to_file` | `True` | `False` writes no file |
+| `warn_on_concurrent` | `True` | Warn when another CodeGreen process is active on the host (the counters are system-wide) |
+| `record_time_series` | `False` | Record the sampler's readings for every task |
+| `buffer_samples` | `None` | Override the native ring-buffer size (`measurement_buffer_size`, 100000 readings) |
+| `sample_interval_ms` | `None` | Override the sampler period for this process (`measurement_interval_ms`, 10 ms) |
+| `sampling_mode` | `"fixed"` | Only `"fixed"` is implemented |
 
-### Output schema (v0.4.7+)
+### Report
 
-Top-level keys: `meta`, `tasks` (list of task dicts), `totals`. Every numeric field carries an explicit unit suffix (`_j`, `_s`, `_w`, `_ns`). Field names are identical between the Session API and `codegreen run` CLI output.
+Top-level keys: `meta`, `tasks`, `totals`, `sampler`, `validity`. A real
+report (one task, `default_sensors: ["rapl"]`, AMD EPYC 9554P), with `cwd`,
+`argv`, `codegreen_env` and most of `sampler` removed:
 
 ```json
 {
   "meta": {
     "schema_version": "1",
-    "codegreen_version": "0.4.8",
-    "run_id": "b7856b409d72",
-    "session_name": "training-run",
-    "started_at":       "2026-05-10T18:16:56.209074+00:00",
-    "ended_at":         "2026-05-10T18:17:01.345702+00:00",
-    "started_at_local": "2026-05-10T11:16:56.209074-07:00",
-    "ended_at_local":   "2026-05-10T11:17:01.345702-07:00",
-    "host_timezone":    "PDT",
-    "duration_total_s": 5.137,
-    "hostname": "amd-epyc-9554p",
-    "pid": 12345,
+    "codegreen_version": "0.5.0",
+    "run_id": "ae19c0a5b27c",
+    "started_at": "2026-11-06T23:12:28.379344+00:00",
+    "ended_at": "2026-11-06T23:12:28.744816+00:00",
+    "duration_total_s": 0.365506,
+    "hostname": "asgard",
+    "pid": 2886208,
     "platform": "linux",
-    "python_version": "3.13.0",
+    "python_version": "3.13.12",
     "cpu_model": "AMD EPYC 9554P 64-Core Processor",
-    "kernel": "Linux-5.15.0-...",
-    "cwd": "/home/user/work",
-    "argv": ["script.py"],
-    "codegreen_env": {"CODEGREEN_LIB_PATH": "..."},
+    "kernel": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
     "measurement_quality": "ok",
     "domain_support": "full",
     "outlier_method": "none",
     "iso_timestamp_format": "rfc3339_utc",
-    "nemb_abi_version": 3,
+    "started_at_local": "2026-11-06T19:12:28.379356-04:00",
+    "ended_at_local": "2026-11-06T19:12:28.744831-04:00",
+    "host_timezone": "AST",
+    "nemb_abi_version": 4,
     "domain_topology": {
       "package-0": {"top_level": true, "kind": "cpu_package", "includes": ["core"]},
-      "core":      {"top_level": false, "kind": "nested", "includes": []},
-      "gpu0":      {"top_level": true, "kind": "gpu", "includes": []}
+      "core": {"top_level": false, "kind": "nested", "includes": []}
     },
-    "timeseries": {"enabled": true, "schema_version": "1",
-                   "sample_keys": ["t_ns", "energy_j", "power_w", "domains"],
-                   "t_ns_clock": "clock_monotonic",
-                   "inclusive_of_children": true}
+    "timeseries": {"enabled": false},
+    "session_name": "demo"
   },
   "tasks": [
-    {"name": "data_load", "depth": 0, "parent": null,
-     "energy_j": 12.4, "avg_power_w": 4.0, "duration_s": 3.1,
-     "started_at": 1714155600.123, "ended_at": 1714155603.234,
-     "started_at_mono_ns": 20364878312447553, "ended_at_mono_ns": 20364881412447553,
-     "domains":         {"package-0": 10.2,  "core": 0.8,  "gpu0": 1.4},
-     "domains_power_w": {"package-0": 3.29,  "core": 0.26, "gpu0": 0.45},
-     "timeseries": [/* {t_ns, energy_j, power_w, domains}, ... */]}
+    {
+      "name": "compute",
+      "energy_j": 28.218922999999997,
+      "avg_power_w": 77.26881657510587,
+      "duration_s": 0.365204545,
+      "started_at": 1794006748.3795133,
+      "ended_at": 1794006748.7447863,
+      "depth": 0,
+      "parent": null,
+      "domains": {"core": 0.007522, "package-0": 28.218923},
+      "domains_power_w": {"core": 0.020596676856800892, "package-0": 77.26881657510587},
+      "started_at_mono_ns": 37131825150185017,
+      "ended_at_mono_ns": 37131825515459042,
+      "timeseries": null,
+      "noise": null,
+      "valid": true,
+      "invalid_reason": null,
+      "shared_boundary": false
+    }
   ],
   "totals": {
-    "energy_j": 857.4,
-    "duration_s":         123.1,
-    "wall_duration_s":    125.5,
-    "task_duration_s":    123.1,
-    "gap_duration_s":       2.4,
+    "energy_j": 28.218922999999997,
+    "duration_s": 0.365204545,
+    "wall_duration_s": 0.365505576133728,
+    "task_duration_s": 0.365204545,
+    "gap_duration_s": 0.00023155113372802516,
     "concurrent_overlap_s": 0.0,
-    "n_tasks": 2,
-    "n_top_level_tasks": 2,
-    "domains":         {"package-0": 705.1, "core": 56.2, "gpu0": 96.1},
-    "domains_power_w": {"package-0": 5.73,  "core": 0.46, "gpu0": 0.78},
-    "sample_interval_ms": 10,
-    "worst_within_task_power_cv_percent": 7.25,
+    "n_tasks": 1,
+    "n_top_level_tasks": 1,
+    "invalid_tasks": 0,
+    "domains": {"core": 0.007522, "package-0": 28.218923},
+    "domains_power_w": {"core": 0.020596676856800892, "package-0": 77.26881657510587},
+    "sample_interval_ms": null,
+    "worst_within_task_power_cv_percent": null,
     "noise_warnings": []
-  }
+  },
+  "sampler": {"interval_ms": 10, "buffer_capacity": 100000, "readings": 42, "marker_reads": "interpolated", "providers": ["..."]},
+  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}
 }
 ```
 
-#### `meta` — run identity & environment (every output, including failure paths)
+#### `meta`
+
+`codegreen run --json` and the result block of instrumented runs carry the
+same `meta` block.
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | output-schema version. Bump indicates a breaking field rename or removal |
-| `codegreen_version` | installed library version |
-| `run_id` | 12-hex-char UUID4 prefix; unique per process invocation, for log correlation |
-| `session_name` | the `Session(name=…)` argument; `null` for CLI runs |
-| `started_at` / `ended_at` | RFC 3339 **UTC** timestamp with `+00:00` offset, microsecond precision. The canonical correlation key — use this for joins, sorts, and cross-machine comparisons |
-| `started_at_local` / `ended_at_local` | (v0.4.8+) Same instant rendered in the host's local timezone with its offset (e.g. `-07:00`). Display-only companion; never use for joins. UTC and local always describe the same instant within microseconds |
-| `host_timezone` | (v0.4.8+) Local timezone label at measurement time (e.g. `PDT`, `ADT`, `+05:30` for non-DST regions) |
-| `duration_total_s` | monotonic-clock delta from session start to report build (NTP-immune) |
-| `hostname`, `pid`, `platform`, `python_version` | process & host identity |
-| `cpu_model`, `kernel` | hardware/OS reproducibility metadata |
-| `cwd`, `argv` | working directory & argv at measurement time |
-| `codegreen_env` | snapshot of all `CODEGREEN_*` environment variables |
-| `measurement_quality` | `ok` \| `no_tasks` \| `no_backend` \| `provider_read_failed` \| `negative_energy` \| `energy_zero` \| `failed` \| `checkpoints_only` |
-| `domain_support` | `full` (per-domain breakdown) \| `scalar_only` (overall energy only) \| `none` (no backend) |
-| `outlier_method` | `measurement.report.outlier_method`: `none` (default) or `iqr_<k>`, the filter behind `run`'s `filtered` block |
-| `iso_timestamp_format` | format contract for `started_at`/`ended_at`; pin in case future versions change it |
-| `nemb_abi_version` | C++ NEMB backend ABI version actually loaded |
-| `domain_topology` | machine-readable domain nesting (so consumers know which keys are top-level vs. nested) |
-| `timeseries` | block describing whether timeseries was recorded + its sample schema |
+| `schema_version` | Output schema version; changes on a breaking rename or removal |
+| `codegreen_version` | Installed CodeGreen version |
+| `run_id` | 12 hex characters, unique per process, for log correlation |
+| `session_name` | The `Session` name; `null` for `codegreen run`, `auto_instrumentation` for instrumented runs |
+| `started_at` / `ended_at` | RFC 3339 UTC timestamps with microseconds; use these for joins and sorting |
+| `started_at_local` / `ended_at_local`, `host_timezone` | The same instants in the host's local time zone, for display |
+| `duration_total_s` | Monotonic time from session start to report |
+| `hostname`, `pid`, `platform`, `python_version`, `cpu_model`, `kernel`, `cwd`, `argv` | Host and process identity |
+| `codegreen_env` | Every `CODEGREEN_*` environment variable |
+| `measurement_quality` | `ok`, `no_tasks`, `no_backend`, `provider_read_failed`, `negative_energy`, `energy_zero`, `checkpoints_only` (instrumented runs), `no_energy` or `failed` (`codegreen run`) |
+| `domain_support` | `full` (per-domain breakdown), `scalar_only` (total only) or `none` (no backend) |
+| `outlier_method` | `measurement.report.outlier_method` (`none` or `iqr_<k>`), used by `codegreen run` |
+| `iso_timestamp_format` | Format of `started_at` / `ended_at` |
+| `nemb_abi_version` | ABI of the loaded native library (4 in 0.5.0) |
+| `domain_topology` | Which domains are top-level and which lie inside another |
+| `timeseries` | Whether time series were recorded, and their sample schema and clock |
 
-#### `totals` — aggregate metrics
+#### `tasks[]` and `TaskResult` { #taskresult-fields }
 
-`task_duration_s` is the sum of depth-0 task durations (matches `energy_j`'s window); `wall_duration_s` is `s.start()`→`s.stop()` from monotonic clock; `gap_duration_s = wall − union(task intervals)` (uninstrumented work between tasks); `concurrent_overlap_s` is positive when tasks ran in parallel threads. `domains_power_w[d]` is the energy-weighted average power: `Σenergy_d / Σduration_over_tasks_where_d_was_reported` (so a domain present on only some tasks is not diluted).
+| Field | Meaning |
+|---|---|
+| `name`, `depth`, `parent` | Task name, nesting depth (0 = top level) and the enclosing task's name |
+| `energy_j` | Energy between the task's start and stop reads, summed over the selected providers |
+| `avg_power_w` | `energy_j / duration_s` |
+| `duration_s` | Monotonic duration |
+| `started_at`, `ended_at` | Wall-clock POSIX seconds (display only) |
+| `started_at_mono_ns`, `ended_at_mono_ns` | Monotonic timestamps, on the clock of `timeseries[].t_ns` |
+| `domains`, `domains_power_w` | Energy (J) and average power (W) per domain |
+| `timeseries` | The samples inside the task window (`record_time_series=True`; `null` otherwise, `[]` for a task shorter than one sample). A parent's samples include its children's |
+| `noise` | Power variability of the task, from its time series |
+| `valid`, `invalid_reason` | `valid` is `false` when the task's energy is not a measurement: `provider_read_failed` (a boundary read failed) or `negative_energy`. Such tasks are excluded from `totals` and counted in `totals.invalid_tasks`; their energy is not reported as 0 J |
+| `shared_boundary` | A start or stop read happened while another task was open. A provider with a boundary energy counter (NVIDIA) then answers from its last counter read plus its power integral, because a counter read would discard the open task's energy; that task's energy from it is integrated power |
 
-#### Per-task fields
+Domain energies are not disjoint: `package-0` includes `core`, while DRAM and
+GPU domains are separate counters. `energy_j` sums only the top-level
+domains, so `sum(domains.values())` is larger than `energy_j` whenever a
+nested domain is present; `meta.domain_topology` says which is which.
 
-`avg_power_w` = `energy_j / duration_s`. `domains_power_w[d]` = `domains[d] / duration_s` per task. `started_at_mono_ns`/`ended_at_mono_ns` (added v0.4.7) let consumers align task windows with `timeseries[].t_ns` exactly. The `parent` field is the immediately-enclosing task name when nested.
+#### `totals`
 
-- `domains` — per-domain RAPL/NVML energy (J) for the task, computed atomically with the session stop (ABI v2 — race-free under concurrent threads).
-- `domains_power_w` — per-domain average power (W), computed as `domains[d] / duration_s`. Same time-base as `avg_power_w` so the two are directly comparable.
-- **Domain nesting caveat**: domain energies are **NOT disjoint**. On Intel, `package` already includes `pp0`/`core` and `pp1` (uncore/igpu); `dram` measures a physically-separate counter (Intel SDM Vol 4 §14.9 — MSR 0x611 vs MSR 0x619); `gpu*` (NVML) is fully independent. On AMD EPYC, only `package-0` is exposed. So `sum(domains.values()) ≠ energy_j` by design — `energy_j` aggregates `package + dram + gpu` and excludes the `pp0`/`pp1`/`core`/`uncore` subsets. Use `meta.domain_topology` to programmatically distinguish top-level from nested domains.
-- **DRAM is always included** (v0.4.6+): Linux exposes DRAM at `intel-rapl:0/intel-rapl:0:0/name=dram` on Skylake-SP+ Xeons (sub-zone) and at `intel-rapl:1/name=dram-0` on older Xeons (zone-level). v0.4.6 promotes both layouts equivalently into the `energy_j` total — earlier versions undercounted by 10-15% on memory-bound workloads on Skylake-SP+ chips.
-- `timeseries` — present only when `record_time_series=True` (ABI v3+). Each sample is self-describing:
+`energy_j` and `task_duration_s` (also `duration_s`) sum the valid top-level
+tasks. `wall_duration_s` runs from `start()` to `stop()`; `gap_duration_s` is
+the wall time outside every top-level task; `concurrent_overlap_s` is positive
+when top-level tasks overlapped in different threads. `domains_power_w[d]` is
+the domain's energy over the duration of the tasks that reported it.
 
-| Key | Type | Unit | Meaning |
-|---|---|---|---|
-| `t_ns` | `int` | nanoseconds | `CLOCK_MONOTONIC` timestamp at sample (Linux); `mach_continuous_time` on macOS; `QueryPerformanceCounter` on Windows — all converted to ns |
-| `energy_j` | `float` | joules | system-wide cumulative energy from session start (sum across all providers) |
-| `power_w` | `float` | watts | system-wide instantaneous power at this sample (sum across all domains) |
-| `domain_j` | `Dict[str,float]` | joules | per-domain cumulative energy from session start (e.g. `package-0`, `core`, `dram`, `gpu0`) |
-| `domain_w` | `Dict[str,float]` | watts | per-domain average power since the previous sample. Domains whose provider does not expose per-domain power (Darwin IOReport, Windows EMI, AMD RAPL) are absent rather than reported as 0, so callers can distinguish "0 W" from "not measured" |
+#### `sampler` and `validity`
 
-So to get only GPU watts directly: `[s["domain_w"].get("gpu0", 0.0) for s in ts]`.
+`sampler` is the native sampler's statistics, as in the CLI output.
+`validity` is `{status, reasons, detail, warnings}`: `PROVIDER_READ_FAILED`
+and `NEGATIVE_ENERGY` name excluded tasks; the provider checks of `run` apply
+(`GPU_IN_TOTAL`, `GPU_READ_HELD`, `BOUNDARY_READ_HELD`,
+`COUNTER_INTEGRAL_DIVERGED`, `PROVIDER_STALLED`); `TASK_POWER_INTEGRATED`
+names tasks whose energy integrates sampled power and `TASK_BELOW_RESOLUTION`
+tasks shorter than `min_run_updates` provider resolutions. `stop()` also
+issues each reason and warning as a `RuntimeWarning` (`codegreen: CODE:
+text`). The API never changes the exit code; check `validity` yourself. See
+[Exit codes and measurement validity](../user-guide/cli-reference.md#exit-codes-and-measurement-validity).
 
-### TaskResult fields
+### Time series
 
-| Field | Type | Meaning |
-|---|---|---|
-| `name` | `str` | task name passed to `start_task` / `task()` |
-| `energy_j` | `float` | total joules during the task (atomic via `nemb_stop_session_v2`) |
-| `avg_power_w` | `float` | average watts over the task window (= `energy_j / duration_s`) |
-| `duration_s` | `float` | task wall-clock seconds (monotonic-derived) |
-| `started_at`, `ended_at` | `float` | wall-clock POSIX seconds (display only) |
-| `started_at_mono_ns`, `ended_at_mono_ns` | `int` | monotonic-clock stamps for aligning with `timeseries[].t_ns` (v0.4.7+) |
-| `depth`, `parent` | `int`, `Optional[str]` | nesting info; `parent` is the immediately-enclosing task name |
-| `domains` | `Dict[str, float]` | per-RAPL/NVML domain energy (J) for the task |
-| `domains_power_w` | `Dict[str, float]` | per-domain average power (W) = `domains[d] / duration_s`. Same time-base as `avg_power_w`. |
-| `timeseries` | `Optional[List[Dict]]` | sorted, deduplicated samples within `[started_at_mono_ns, ended_at_mono_ns]`. `None` when `record_time_series=False`; empty list when enabled but the task was shorter than one sample interval. Inclusive of children (a parent's timeseries contains its children's samples — see `meta.timeseries.inclusive_of_children`). |
-| `noise` | `Optional[Dict]` | quality summary computed from `timeseries` |
-| `valid` | `bool` | `False` when the task is not a measurement; it is then excluded from `totals` (counted in `totals.invalid_tasks`) |
-| `invalid_reason` | `Optional[str]` | `provider_read_failed` (the backend could not read the providers at start or stop) or `negative_energy` |
-| `shared_boundary` | `bool` | a start or stop read happened while another task was open. A provider with a boundary energy counter (NVIDIA) then answers from its last counter read plus its power integral since, because a counter read discards the open task's energy (about half an update period per read); that task's energy from it is integrated power |
-
-A report also carries `sampler` (the backend's sampler block, as in the CLI
-output) and `validity` (`{status, reasons, detail, warnings}`, the same block
-as the CLI): `PROVIDER_READ_FAILED` or `NEGATIVE_ENERGY` name the excluded
-tasks, the provider checks of `run` apply (`GPU_IN_TOTAL`, `GPU_READ_HELD`,
-`BOUNDARY_READ_HELD`, `COUNTER_INTEGRAL_DIVERGED`, `PROVIDER_STALLED`), and the
-warnings `TASK_POWER_INTEGRATED` (tasks whose energy integrates sampled power)
-and `TASK_BELOW_RESOLUTION` (tasks shorter than `min_run_updates` provider
-resolutions) name the tasks. A failed read is never reported as 0 J. `stop()`
-also emits every reason and warning as a `RuntimeWarning` (`codegreen: CODE: text`),
-as the CLI prints them.
-
-See the timeseries-sample schema table above for sample keys (`t_ns`, `energy_j`, `power_w`, `domain_j`, `domain_w`).
-
-### Noise / quality reporting { #noise--quality-reporting }
-
-When `record_time_series=True`, every task carries a `noise` dict and `totals` carry a roll-up:
+With `record_time_series=True` each task carries the sampler's readings
+inside its window. `meta.timeseries` describes them (`t_ns_clock` is
+`clock_monotonic` on Linux). A real sample:
 
 ```json
-"noise": {
-  "samples_captured":         2847,
-  "samples_expected":         3000,
-  "samples_expected_method":  "observed_median",
-  "drop_ratio":               0.0510,
-  "power_mean_w":             102.3,
-  "power_std_w":                7.4,
-  "power_cv_percent":           7.25,
-  "sample_interval_ms":            1,
-  "quality":                  "moderate"
-},
-"totals": {
-  ...,
-  "worst_within_task_power_cv_percent": 7.25,
-  "noise_warnings": [
-    {"task": "data_load", "depth": 0,
-     "within_task_power_cv_percent": 17.8, "drop_ratio": 0.003,
-     "quality": "high-noise",
-     "reasons": ["within_task_power_cv_above_10pct"]}
-  ]
-}
+{"t_ns": 37132889715889060, "energy_j": 4.018652, "power_w": 78.0526951593942,
+ "domain_j": {"core": 0.001221, "package-0": 4.018652},
+ "domain_w": {"core": 0.0209661320057171, "package-0": 78.0526951593942}}
 ```
 
-`samples_expected_method` is `"observed_median"` (interval inferred from captured samples; default when n ≥ 3) or `"configured"` (falls back to `sample_interval_ms`). `quality` is bucketed by `power_cv_percent`: `excellent` <2 %, `good` <5 %, `moderate` <10 %, `high-noise` ≥10 %. A `RuntimeWarning` is emitted (and the task is appended as a structured record to `totals.noise_warnings`) when CV ≥10 % or `drop_ratio` ≥20 %. All thresholds live in `config.json` under `measurement.report.noise_warning` so they can be overridden without code changes. Computation runs once at `stop()` time and adds ~0.05 % bias vs `record_time_series=False`.
+| Key | Unit | Meaning |
+|---|---|---|
+| `t_ns` | ns | Monotonic timestamp of the reading (the clock of `started_at_mono_ns`) |
+| `energy_j` | J | Cumulative energy of the selected providers since the backend started |
+| `power_w` | W | Power at this reading |
+| `domain_j` | J | Cumulative energy per domain |
+| `domain_w` | W | Power per domain; providers without per-domain power leave the domain out rather than report 0 |
 
-**Note — slight overhead when `record_time_series=True`.**
-The drain thread that pulls samples out of the C++ ring buffer is cheap but not free. On reproducibility benchmarks (3 fresh subprocesses each, identical workload):
+`meta.timeseries.sample_keys` lists `domains` where the samples carry
+`domain_j` and `domain_w`.
 
-- The **mean** energy/duration is unchanged: `record_time_series=True` vs `=False` agreed to ≤ 0.3 % (within run-to-run jitter).
-- The **run-to-run spread** is slightly wider with sampling on (CV of total energy ~5 % vs ~1 % off) because the drain wakes up at irregular intervals and competes briefly with the workload for CPU.
+The native ring buffer holds `measurement_buffer_size` readings (100000, or
+1000 s at 10 ms). A drain thread copies new readings out every 0.5 s, faster
+(down to 50 ms) when a drain finds the buffer more than half full and slower
+(up to 2 s) after three nearly empty drains, and warns above 90 % with a
+larger `buffer_samples` to use.
 
-So enabling time-series gives you per-sample power, plot export and the noise/quality summary, at the cost of a marginally noisier *individual* total. Best-of-both-worlds: use it during development to inspect power traces and pick the right code regions, then turn it off for production benchmark runs where you want the tightest possible run-to-run CV.
+#### Noise and quality { #noise--quality-reporting }
+
+With time series, every task carries a `noise` summary and `totals` a
+roll-up:
+
+```json
+"noise": {"samples_captured": 33, "samples_expected": 34, "samples_expected_method": "observed_median",
+          "drop_ratio": 0.0294, "power_mean_w": 77.5687, "power_std_w": 2.0381,
+          "power_cv_percent": 2.627, "sample_interval_ms": 10, "quality": "good"}
+```
+
+`samples_expected_method` is `observed_median` (interval inferred from the
+samples, with at least three) or `configured`. `quality` is `excellent`
+(CV below 2 %), `good` (below 5 %), `moderate` (below 10 %) or `high-noise`.
+A task with a CV of at least 10 % or a `drop_ratio` of at least 20 % is
+appended to `totals.noise_warnings` and raises a `RuntimeWarning`. The
+thresholds are in `measurement.report.noise_warning`. The drain thread runs
+inside the measured process, so leave time series off for the most stable
+totals.
 
 ### Power-vs-time plotting
 
-`record_time_series=True` collects samples at the coordinator's configured rate (`config.json`'s `coordinator.measurement_interval_ms`, default 1 ms on this build). The `Session.export_plot(path)` helper renders a power-vs-time chart per task; area under the curve equals the task's energy.
+`s.export_plot(path)` draws each task's power over time from its time series
+(`record_time_series=True`). The format follows the extension: `.html`
+(plotly) or `.png`, `.svg`, `.pdf` (matplotlib); without the library nothing
+is written, and no warning is issued.
 
 ```python
 with codegreen.Session("training", record_time_series=True) as s:
     with s.task("epoch1"): train_one_epoch()
     with s.task("epoch2"): train_one_epoch()
-    s.export_plot("training.html")    # Plotly (interactive)
-    s.export_plot("training.png")     # Matplotlib (static image)
+    s.export_plot("training.html")
 ```
 
-Numerically, integrating `w(t)` over a task's window with the trapezoidal rule recovers the NEMB-reported `energy_j` to within ~0.2% (verified on a 5 s task with ~4,800 samples).
-
-### Time-series correctness for long tasks
-
-The C++ sampling ring buffer is fixed-size (default 1000 samples — at the default 1 ms interval that's a ~1 s window; with `sample_interval_ms=10` it's a ~10 s window, etc.). To prevent silent loss on long tasks, the Session runs a Python drain thread that pulls samples out faster than the buffer rotates. Drain is **adaptive**:
-
-- starts at 0.5 s,
-- halves to a 50 ms floor when buffer >50% saturated on a single drain pass,
-- doubles to a 2 s ceiling when <10% for three consecutive drains,
-- emits a warning at >90% saturation suggesting `buffer_samples` override.
-
-Verified on a 30-second task with defaults only: 28,460 samples, full span, zero gaps >50 ms.
-
-### Sampling rate
-
-Pre-existing: `config.json`'s `coordinator.measurement_interval_ms` is the startup default (loaded by `nemb::ConfigLoader::load_config()`).
-
-Per-session override: pass `sample_interval_ms=N` to `Session(...)` — it calls `nemb_set_measurement_interval_ms` which writes the **same** `config_.measurement_interval` field the sample loop reads. No parallel sampling-rate state, no duplicate config parsing.
+The area under a task's curve approximates its `energy_j`; the exact value
+is `energy_j`, which comes from the boundary reads.
 
 ### Behavior rules
 
-- **Single session per process.** Constructing a second `Session` while one is active raises `RuntimeError`.
-- **Mismatched stops** raise `RuntimeError` with the actual innermost task name.
-- **Forgotten `.stop()`** is recovered by an `atexit` hook — the file is still written, the JSON envelope still emitted.
-- **Concurrent threads** can each maintain their own task stack (per-thread). `nemb_stop_session_v2` makes domain breakdown race-free.
-- **Forked children** become no-ops automatically; only the parent process reports.
-- **No NEMB lib loaded** (CodeGreen built without C++ backend) → Session degrades to a warning + zero-energy results, your program still runs.
-
-### Multi-process / RAPL caveat
-
-RAPL counters are **system-wide, not per-process**. If two CodeGreen sessions overlap in wall time on the same socket, both readings include the other's energy (double-counting). The Session constructor warns when it detects another live CodeGreen pid via `$XDG_RUNTIME_DIR/codegreen-<uid>.pids`. For benchmarks, run sequentially or accept "system energy during this window" semantics.
+- One active `Session` per process: constructing a second raises
+  `RuntimeError` until the first is stopped.
+- Stopping a task that is not the innermost open task of the thread raises
+  `RuntimeError` naming the innermost one.
+- A session that is never stopped is finalized at exit (and on SIGTERM or
+  SIGINT): open tasks are closed innermost first and the report is written.
+- Forked child processes do not measure; only the parent reports.
+- Without the native library the session warns and records no energy; the
+  program still runs.
+- The counters are system-wide. Two CodeGreen processes measuring at the same
+  time both include each other's energy; the constructor warns when it finds
+  another live CodeGreen process (`$XDG_RUNTIME_DIR/codegreen-<uid>.pids`).
 
 ## `codegreen.Monitor`
 
-Continuous host / PID sampler for already-running services. Used by
-`codegreen monitor` under the hood. See the
-[Continuous Monitoring guide](../user-guide/continuous-monitoring.md) and
-example [06](../examples/06_monitor_host.md) /
-[07](../examples/07_monitor_pid.md) for runnable code.
+Continuous sampler for an already-running service or the whole host;
+`codegreen monitor` is a thin wrapper around it.
 
 ```python
 import codegreen
 
-m = codegreen.Monitor(interval_ms=200).start()
-# ... your service runs ...
+m = codegreen.Monitor(interval_ms=200, output_file="energy.jsonl").start()
+run_load_test()
 summary = m.stop()
+print(summary["total_joules"], summary["avg_watts"], summary["validity"]["status"])
 ```
 
-### Constructor parameters
+The constructor parameters (`interval_ms`, `duration_s`, `pid`,
+`include_children`, `output_file`, `max_samples_in_memory`, `rotate_mb`,
+`listen_socket_path`, `attribution_mode`, `max_labels`, `exporters`,
+`exporter_overrides`) default to the `monitor.*` keys of the config; they are
+listed in [Continuous Monitoring: Python API](../user-guide/continuous-monitoring.md#python-api),
+and the summary and JSON-lines records under
+[Output](../user-guide/continuous-monitoring.md#output).
 
-| Param | Default | Notes |
-|---|---|---|
-| `interval_ms` | `200` | Sample period. `ValueError` if < 50 (RAPL noise floor) |
-| `duration_s` | `None` | Stop after N seconds; `None` = manual `.stop()` |
-| `pid` | `None` | PID to attribute (requires psutil) |
-| `attribution_mode` | `"auto"` | `auto`, `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
-| `output_path` | `None` | Stream samples as JSON-lines to this file |
-| `rotate_mb` | `0` | Rotate output file when it exceeds N MB (0 = off) |
-| `max_in_memory` | `1000` | Bound in-memory sample deque (0 = drop when streaming) |
-| `listen_socket_path` | `None` | Bind a UDS for `annotate_request` events |
-
-### Sample schema
-
-Each sample (also one JSON-line in `output_path`):
-
-| Key | Type | Notes |
-|---|---|---|
-| `t` | `float` | seconds since `start()` |
-| `valid` | `bool` | `false` when the backend read failed: such a sample carries only `type`, `t` and `valid`, is written to `output_path` but not kept in memory, attributed to annotations or sent to exporters. The next valid sample's `joules_delta` spans the gap |
-| `joules_total` | `float` | cumulative system Joules since `start()` |
-| `joules_delta` | `float` | delta since previous sample |
-| `watts` | `float` | instantaneous watts from the backend |
-| `proc_cpu_percent` | `float` | (PID mode) parent + recursive children CPU% |
-| `proc_n_children` | `int` | (PID mode) live child count |
-| `proc_attributed_joules` | `float` | (PID mode) `joules_delta * share` |
-| `attribution_backend` | `str` | (PID mode, header only) `cgroup_v2` / `cgroup_v1` / `cpu_percent` |
-
-### Stop summary
-
-`m.stop()` returns a dict and (if `output_path` set) writes one final
-`summary` JSON-line:
-
-```python
-{
-  "duration_s": 30.0,
-  "total_joules": 126.4,
-  "mean_watts": 4.21,
-  "samples_captured": 150,
-  "terminated_reason": null,        # or "pid 1234 exited", "duration", "ctrl-c"
-  "invalid_samples": 0,             # failed sample reads (skipped, never zero-filled)
-  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}},
-  "attribution_backend": "cgroup_v2",
-  "per_label": {                    # only populated when listen_socket_path is set
-    "GET /search": {"count": 412, "total_joules": 8.31,
-                    "p50_ms": 21.0, "p95_ms": 84.3},
-  },
-}
-```
-
-### Caveats
-
-- One Monitor per process (raises `RuntimeError` on second `start()`).
-- A failed first read raises `RuntimeError` (no baseline). A failed final read
-  is `PROVIDER_READ_FAILED` (`total_joules` ends at the last valid sample);
-  failed sample reads are the warning `SAMPLES_INVALID`.
-- RAPL is system-wide: overlapping Monitors double-count.
-- Sub-50 ms intervals raise `ValueError`.
-- PID death is caught only on `psutil.NoSuchProcess`; other exceptions
-  propagate.
+A failed first read raises `RuntimeError`. A failed sample read is recorded
+as `{"type": "sample", "t": ..., "valid": false}` and reported as the warning
+`SAMPLES_INVALID`; a failed final read is the reason `PROVIDER_READ_FAILED`.
+Calling `start()` twice on one instance raises `RuntimeError`; monitors on
+the same host each count the full system energy.
 
 ## `codegreen.annotate_request` { #annotate_request }
 
-Context manager that emits `start`/`end` events to a Monitor over a
-Unix-domain socket. Each span becomes a `per_label` bucket in the
-Monitor's summary.
+Context manager that opens a labelled span on a `Monitor` listening on a
+Unix socket; each finished span is added to the monitor's `per_label[name]`.
 
 ```python
 import codegreen
 
-with codegreen.annotate_request("GET /search", socket_path="/tmp/cg.sock"):
-    handle_search(...)
+with codegreen.annotate_request("GET /search"):
+    handle_search()
 ```
-
-Constructor:
 
 | Param | Default | Notes |
 |---|---|---|
-| `name` | required | Label aggregated into `per_label[name]` |
-| `labels` | `None` | Optional extra dict; merged into the bucket metadata |
-| `socket_path` | `"/tmp/codegreen.sock"` | UDS path the Monitor listens on |
-| `timeout_s` | `0.25` | Drop the annotation if the Monitor is unreachable; never block the request |
+| `name` | required | Label to aggregate under |
+| `labels` | `None` | Extra key-value labels (at most `monitor.annotation.max_label_count`) |
+| `socket_path` | per-user default | `$XDG_RUNTIME_DIR/codegreen.sock`, else `/tmp/codegreen-<uid>/codegreen.sock`; matches `--listen-on-socket default` |
+| `timeout_s` | `0.25` | Socket timeout for connect, send and receive |
 
-The full Flask/WSGI recipe and a Monitor-aware example live in
-[08 - Monitor socket](../examples/08_monitor_socket.md).
+Entering raises (for example `FileNotFoundError`) when no monitor listens on
+the socket; wrap it if requests must not fail when the monitor is down. A
+web-framework recipe is in [Example 08](../examples/08_monitor_socket.md).
 
 ## Runtime module (auto-instrumenter)
 
-`codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py`
-
-This module is injected into instrumented code automatically. It uses ctypes to call `libcodegreen-nemb.so`.
-
-### checkpoint()
+`codegreen/instrumentation/language_runtimes/python/codegreen_runtime.py` is
+copied next to the instrumented code by `measure` and `project` and imported
+as `codegreen_runtime`. Instrumented functions call:
 
 ```python
-def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str):
-    """Mark a checkpoint in the energy measurement stream."""
+def checkpoint(checkpoint_id: str, name: str, checkpoint_type: str): ...
 ```
-
-Called by instrumented code at function boundaries:
 
 ```python
-from codegreen_runtime import checkpoint
-
-checkpoint(checkpoint_id="1", name="my_function", checkpoint_type="enter")
-# ... function body ...
-checkpoint(checkpoint_id="2", name="my_function", checkpoint_type="exit")
+def square_sum(n):
+    _codegreen_rt.checkpoint('function_enter_square_sum_2_1', 'square_sum', 'enter')
+    try:
+        return sum(i * i for i in range(n))
+    finally:
+        _codegreen_rt.checkpoint('function_exit_square_sum_frame_2', 'square_sum', 'exit')
 ```
 
-Each call records a ~100ns timestamp signal. The NEMB backend tracks invocations automatically (`#inv_N` suffix).
-
-### measure_checkpoint()
-
-```python
-def measure_checkpoint(checkpoint_id: str, checkpoint_type: str,
-                       name: str, line_number: int, context: str):
-    """Record a checkpoint marker with full metadata."""
-```
-
-Lower-level function with additional context. `checkpoint()` delegates to this.
+`checkpoint()` passes `"<type>:<name>:<id>"` to `nemb_mark_checkpoint`,
+which appends `#inv_<N>_t<thread>` and records the timestamp; no counter is
+read. `measure_checkpoint(checkpoint_id, checkpoint_type, name, line_number,
+context)` is the lower-level call it delegates to.
+`CODEGREEN_CHECKPOINT_THROTTLE_MS` drops repeated checkpoints (see
+[Checkpoint throttling](../user-guide/energy-measurement.md#checkpoint-throttling)).
 
 ## Auto-instrumenter output format
 
-At process exit (`atexit`), the runtime writes checkpoint data to a copy of
-stdout taken at startup (so a workload that closes stdout does not lose it).
-Schema for `libcodegreen-nemb` ABI 4 (`nemb_abi_version() >= 4`; the same
-object is returned by `nemb_get_checkpoints_json`):
+At exit (or on SIGTERM / SIGINT) the runtime writes one result block to a copy
+of stdout taken at import, so a workload that closes stdout does not lose
+it. The block carries `meta`, `measurements`, `sampler` and `validity` (and
+the session's report when a `Session` is active). Its markers and sampler are
+those of `libcodegreen-nemb` ABI 4, the same object `nemb_get_checkpoints_json`
+returns. Trimmed from a real `measure -g fine` run:
 
 ```
 --- CODEGREEN_RESULT_START ---
-{"measurements": [
-  {"checkpoint_id": "enter:main:1#inv_1_t...", "timestamp": 13973..., "joules": 6.80, "watts": 0.76,
-   "ri": 1, "clamp": "none", "provider_j": {"intel_rapl": 6.80}},
-  {"checkpoint_id": "exit:main:2#inv_1_t...", "timestamp": 13973..., "joules": 8.91, "watts": 71.94,
-   "ri": 41, "clamp": "none", "provider_j": {"intel_rapl": 8.91}}
- ],
- "sampler": {"interval_ms": 10, "buffer_capacity": 100000, "readings": 42, "wrapped": false,
-             "rejected_readings": 0, "dropped_checkpoints": 0, "first_ns": 13973..., "last_ns": 13973...,
-             "median_gap_ns": 10061234, "max_gap_ns": 10411021, "affinity_cpus": 8,
-             "sampler_affinity_cpus": 8, "interval_ms_min": 10, "interval_ms_max": 10, "failed_reads": 0,
-             "marker_reads": "interpolated", "config_path": "/.../codegreen/config.json",
+{"meta": {...},
+ "measurements": [
+  {"checkpoint_id": "enter:main:function_enter_main_8_1#inv_1_t15540708132652139232",
+   "timestamp": 37132208765435856, "joules": 2.526685902262177, "watts": 0.12192525190311514,
+   "ri": 2, "clamp": "none", "provider_j": {"intel_rapl": 2.526685902262177}},
+  {"checkpoint_id": "exit:main:function_exit_main_frame_10#inv_1_t15540708132652139232",
+   "timestamp": 37132209525420989, "joules": 61.216009158970536, "watts": 74.33832834205687,
+   "ri": 77, "clamp": "none", "provider_j": {"intel_rapl": 61.216009158970536}}],
+ "sampler": {"interval_ms": 10, "interval_ms_min": 10, "interval_ms_max": 10, "buffer_capacity": 100000,
+             "readings": 78, "wrapped": false, "rejected_readings": 0, "failed_reads": 0,
+             "provider_restarts": 0, "dropped_checkpoints": 0, "first_ns": ..., "last_ns": ...,
+             "median_gap_ns": 10073552, "max_gap_ns": 10077223, "affinity_cpus": 128,
+             "sampler_affinity_cpus": 128, "marker_reads": "interpolated",
              "providers": [{"name": "intel_rapl", "hardware_type": "cpu", "energy_source": "counter",
-                            "boundary_source": "counter", "update_interval_ms": 1, "counter_group": "cpu_package", "rejected": 0, "held": 0,
-                            "boundary_held": 0, "boundary_held_max_ns": 0, "readings": 42, "last_ns": 13973...,
-                            "max_stall_ns": 0, "counter_check": {}}]},
+                            "boundary_source": "counter", "update_interval_ms": 1, "counter_group": "cpu_package",
+                            "rejected": 0, "held": 0, "boundary_held": 0, "boundary_held_max_ns": 0,
+                            "readings": 78, "last_ns": ..., "max_stall_ns": 319411, "counter_check": {}}],
+             "config_path": ".../codegreen/config.json"},
  "validity": {"status": "valid", "reasons": [], "detail": {}, "warnings": {}}}
 --- CODEGREEN_RESULT_END ---
 ```
 
 | Field | Meaning |
 |---|---|
-| `timestamp` | `CLOCK_MONOTONIC` nanoseconds |
+| `checkpoint_id` | `<type>:<name>:<id>#inv_<N>_t<thread>`: checkpoint type, function name, checkpoint id, invocation counter and thread |
+| `timestamp` | Monotonic nanoseconds |
 | `joules` | Cumulative energy interpolated at `timestamp`, the sum of `provider_j`; the difference between two markers is the energy of that window |
-| `ri` | Index of the first sampler reading at or after the marker (`readings` after the last one). The difference between two markers' `ri` is the number of readings inside that window |
-| `clamp` | `none`, or `before_first` / `after_last` when the marker lies outside the sampled range and took the edge reading |
-| `provider_j` | Interpolated cumulative joules per NEMB provider |
-| `sampler` | Background sampler statistics for the process (emitted even with no readings); see [Exit codes and measurement validity](../user-guide/cli-reference.md#exit-codes-and-measurement-validity) |
+| `watts` | Power interpolated from the bracketing readings (the first reading has none, so the earliest markers read low) |
+| `ri` | Index of the first sampler reading at or after the marker; the difference between two markers' `ri` is the number of readings inside that window |
+| `clamp` | `none`, or `before_first` / `after_last` when the marker lies outside the sampled range (the run is then invalid) |
+| `provider_j` | Interpolated cumulative energy per provider |
+| `sampler` | Sampler statistics; fields listed under [Exit codes and measurement validity](../user-guide/cli-reference.md#exit-codes-and-measurement-validity) |
 
-The Python runtime embeds `validity` from in-process facts (the block is
-emitted at exit even with no markers); the CLI adds only process-level
-reasons. NEMB's own block (C, C++, Java) carries no `validity`, and the CLI
-computes it with the same `codegreen_runtime.measurement_validity`. A block
-without `sampler` comes from an older library and is reported as
-`STALE_LIBRARY`.
+The Python runtime computes `validity` from in-process facts and the CLI adds
+process-level reasons (exit code, timeout). NEMB's own block, written by C,
+C++ and Java programs, has no `validity`; the CLI computes it with the same
+`codegreen_runtime.measurement_validity`. A block without `sampler` comes
+from a library older than ABI 4 and is reported as `STALE_LIBRARY`.
 
-## CLI usage
-
-These commands drive the auto-instrumenter; the [Quickstart](../getting-started/quickstart.md) and [CLI reference](../user-guide/cli-reference.md) cover them in full:
-
-```bash
-codegreen measure python script.py                              # basic
-codegreen measure python script.py -g fine --export-plot energy.html
-codegreen measure python script.py --json
-codegreen analyze python script.py --save-instrumented --output-dir ./out
-```
-
-## Package structure
+## Package layout
 
 ```
 codegreen/
-  cli/cli.py                              # Typer CLI
+  cli/cli.py                         # Typer CLI
+  config.json                        # bundled configuration
   instrumentation/
-    engine.py                             # MeasurementEngine
-    language_engine.py                    # Tree-sitter parsing + query matching
-    ast_processor.py                      # Checkpoint injection
-    configs/*.json                        # Language-specific instrumentation configs
+    language_engine.py               # Tree-sitter parsing and query matching
+    ast_processor.py                 # checkpoint insertion
+    configs/*.json                   # per-language instrumentation configs
     language_runtimes/
-      python/codegreen_runtime.py         # Python ctypes bridge to NEMB + Session
-      java/CodeGreenRuntime.java          # Java JNI bridge to NEMB
-  analyzer/plot.py                        # Plotly / matplotlib visualization
-  measurement/src/nemb/
-    codegreen_energy.cpp                  # C API + EnergyMeter implementation
+      python/codegreen_runtime.py    # ctypes bridge to NEMB, Session, Monitor, validity rules
+      c/codegreen_runtime.h          # C checkpoint macro
+      cpp/codegreen/runtime.hpp      # C++ checkpoint function
+      java/codegreen/runtime/        # CodeGreenRuntime (JNI) and CodeGreenStandaloneRuntime
+  analyzer/plot.py                   # --export-plot rendering
+  analysis/                          # profiling metrics (counters, samplers, GPU)
+  measurement/                       # NEMB C++ sources (libcodegreen-nemb)
 ```

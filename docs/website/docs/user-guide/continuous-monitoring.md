@@ -1,21 +1,35 @@
 # Continuous Monitoring
 
-`codegreen monitor` (CLI) and `codegreen.Monitor` (Python) **continuously
-sample host energy** without launching a workload. Use them when:
+`codegreen monitor` (CLI) and `codegreen.Monitor` (Python) sample cumulative
+energy at a fixed interval without launching a workload. Use them for
+processes that are already running (web servers, daemons, inference
+servers) and for per-request attribution in a web application.
 
-- the process you care about is already running (Apache, gunicorn, a
-  background daemon),
-- you cannot edit the source to embed a Session,
-- you want per-request energy attribution in a web framework.
+| Use case | Tool |
+|---|---|
+| Bracket a region inside a Python program | [`codegreen.Session`](../api/python.md#manual-api-codegreensession) |
+| Measure an unmodified command, with repeats and a budget | [`codegreen run`](cli-reference.md#run) |
+| Observe a running service or the whole host | `codegreen monitor` / `codegreen.Monitor` |
+| Energy per HTTP request or batch | Monitor with `--listen-on-socket` plus `codegreen.annotate_request` |
 
-## When to use Monitor vs Session vs `run`
+## What a sample measures
 
-| Use case | Tool | Why |
-|---|---|---|
-| Bracket a region inside a Python script | [Session](../api/python.md#manual-api-codegreensession) | In-process, structured output |
-| Bracket an unmodified shell command | [`codegreen run`](cli-reference.md#run) | N-run stats, `--budget` gating |
-| Already-running daemon, no source access | **Monitor** | External, non-invasive |
-| Per-HTTP-request energy in a web app | **Monitor + annotate_request** | UDS annotation channel |
+Each sample is the change in cumulative energy since the previous sample,
+summed over the providers of `measurement.default_sensors` (default `"all"`:
+every provider that initializes, GPUs included). The reading is host-wide:
+it contains every process on the machine, and two monitors on one host
+observe the same joules. To restrict the sum to CPU energy, set
+`measurement.default_sensors` to `["rapl"]` in your
+[configuration](configuration-reference.md); `monitor` has no `--sensors`
+option.
+
+A failed read is never filled with zero. The sample is written to the JSONL
+file as `{"type": "sample", "t": ..., "valid": false}`, is excluded from
+memory, annotations and exporters, and the next valid sample's
+`joules_delta` spans the gap. The summary's `validity` block reports
+failed sample reads as the warning `SAMPLES_INVALID` and a failed final read
+as the reason `PROVIDER_READ_FAILED` (`total_joules` then ends at the last
+valid sample). A failed first read makes `start()` raise `RuntimeError`.
 
 ## CLI
 
@@ -23,105 +37,149 @@ sample host energy** without launching a workload. Use them when:
 codegreen monitor [OPTIONS]
 ```
 
-| Option | Description |
-|---|---|
-| `-d, --duration FLOAT` | Stop after N seconds (default: run until Ctrl-C) |
-| `-i, --interval INTEGER` | Sample period in ms (config floor enforced; min 50 ms) |
-| `-p, --pid INTEGER` | Attribute energy to this process via CPU share |
-| `-o, --output PATH` | Stream samples as JSON-lines to this file |
-| `--rotate-mb INTEGER` | Rotate JSONL when it exceeds N MB (0 = disabled) |
-| `--max-in-memory INTEGER` | Bound in-memory sample deque (0 = drop when `-o` set) |
-| `--max-labels INTEGER` | Cap distinct annotation labels; overflow rolls into `__other__` (0 = unlimited; default 1000) |
-| `--listen-on-socket TEXT` | Bind a UDS for request-annotation events |
-| `--attribution-mode TEXT` | `auto` (default), `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
-| `--exporter TEXT` | Enable a telemetry exporter sink (repeatable). Known: `otlp`, `prometheus`. See [Exporters](#exporters). |
-| `--otlp-endpoint TEXT` | OTLP/gRPC collector endpoint (requires `--exporter otlp`) |
-| `--prometheus-port INTEGER` | HTTP `/metrics` port (requires `--exporter prometheus`; default from config, 9464) |
-| `--prometheus-listen-addr TEXT` | HTTP bind address (requires `--exporter prometheus`; default `127.0.0.1`; non-loopback emits a `RuntimeWarning`) |
-| `--json` | Print final summary as JSON |
-| `-q, --quiet` | Suppress live sample output |
+| Option | Default | Description |
+|---|---|---|
+| `-d, --duration FLOAT` | run until stopped | Stop after N seconds (must be > 0) |
+| `-i, --interval INT` | `monitor.interval_ms_default` (500) | Sample period in ms; below `monitor.interval_ms_min` (50) is an error |
+| `-p, --pid INT` | none | Attribute a share of each sample to this process (needs `psutil`) |
+| `-o, --output PATH` | none | Stream records as JSON lines to this file |
+| `--rotate-mb INT` | `monitor.rotate_mb_default` (0) | Rotate the JSONL file at N MB; 0 disables |
+| `--max-in-memory INT` | `monitor.max_samples_in_memory` (10000) | Samples kept in memory; 0 keeps none |
+| `--max-labels INT` | `monitor.annotation.max_labels` (1000) | Distinct annotation labels; overflow goes to `__other__`; 0 = unlimited |
+| `--listen-on-socket TEXT` | none | Bind a Unix-domain socket for annotation events; `default` = per-user path |
+| `--attribution-mode TEXT` | `auto` | PID share backend: `auto`, `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
+| `--exporter TEXT` | none | Enable an exporter, repeatable: `otlp`, `prometheus` |
+| `--otlp-endpoint TEXT` | config | Overrides `monitor.exporters.otlp.endpoint`; requires `--exporter otlp` |
+| `--prometheus-port INT` | config (9464) | Overrides `monitor.exporters.prometheus.port`; 0 = ephemeral; requires `--exporter prometheus` |
+| `--prometheus-listen-addr TEXT` | config (`127.0.0.1`) | Overrides `monitor.exporters.prometheus.listen_addr`; requires `--exporter prometheus` |
+| `--json` | off | Print the final summary as one JSON object, with `success` = validity is `valid` |
+| `-q, --quiet` | off | Suppress the live sample lines |
 
-### Common invocations
+SIGINT and SIGTERM stop the monitor and flush the summary. SIGHUP reloads
+configuration (see [Reloading configuration](#reloading-configuration)).
+The command exits 1 when the monitor cannot be constructed or started
+(invalid option, missing optional dependency, unbindable socket or port,
+failed first read) and 0 after a stop, whatever the validity; check
+`success` or `validity.status` in the `--json` summary.
 
 ```bash
-# 30-second host sample at default interval
-codegreen monitor -d 30
-
-# 1Hz sampling for an hour, JSONL output
-codegreen monitor -i 1000 -d 3600 -o energy.jsonl
-
-# Attribute to a running web server
-codegreen monitor --pid $(pgrep -f gunicorn | head -1) -d 600
-
-# Per-request UDS attribution (see annotation section below)
-codegreen monitor --listen-on-socket /tmp/cg.sock -o requests.jsonl
+codegreen monitor -d 30                                   # 30 s at the default interval
+codegreen monitor -i 1000 -d 3600 -o energy.jsonl         # 1 Hz for one hour
+codegreen monitor --pid "$(pgrep -o gunicorn)" -d 600     # attribute to a process tree
+codegreen monitor --listen-on-socket default -o req.jsonl # accept request annotations
 ```
+
+Live output (`-d 1.2 -i 200 -o m.jsonl`; values depend on the host):
+
+```text
+Monitoring (interval=200ms, duration=1.2s)
+  t=   0.4s  dJ=  19.38  W= 100.2
+  t=   0.8s  dJ=  25.58  W=  99.0
+  t=   1.0s  dJ=  20.07  W= 112.8
+
+Summary
+  duration: 1.21 s
+  total energy: 121.536 J (0.0338 Wh)
+  avg power: 100.77 W
+  samples: 5 valid, 0 failed reads
+  samples written: m.jsonl
+```
+
+Without `--quiet` the live display polls every min(1 s, 2 x interval), and
+the final read happens when it notices the end of the run, so the summary
+window can extend past `--duration` by up to one polling period. With
+`--quiet` or `--json` it ends within one interval.
 
 ## Python API
 
 ```python
 import codegreen
 
-m = codegreen.Monitor(interval_ms=200).start()
-# ... your service runs / your test executes ...
+m = codegreen.Monitor(interval_ms=200, output_file="energy.jsonl").start()
+run_load_test()
 summary = m.stop()
-print(summary["total_joules"], summary["mean_watts"])
+print(summary["total_joules"], summary["avg_watts"])
 ```
 
-Constructor parameters:
+`start()` returns the monitor, and the class is also a context manager that
+calls `stop()` on exit. `stop()` returns the summary dict and, with
+`output_file`, appends it as the final `summary` record; keep the dict from
+the first call, because a later `stop()` recomputes `duration_s` up to the
+time of that call. `m.samples` returns the samples kept in memory.
 
-| Param | Default | Notes |
+| Parameter | Default | Notes |
 |---|---|---|
-| `interval_ms` | `200` | Sample period; minimum 50 ms (`ValueError` below) |
-| `duration_s` | `None` | Stop after N seconds; `None` = manual `.stop()` |
-| `pid` | `None` | PID to attribute (requires psutil) |
-| `attribution_mode` | `"auto"` | `auto`, `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
-| `output_path` | `None` | Stream samples as JSON-lines |
-| `rotate_mb` | `0` | Rotate output file when it exceeds N MB |
-| `max_in_memory` | `1000` | Bound the in-memory ring (0 = drop when streaming) |
-| `max_labels` | `1000` | Cap distinct annotation labels; overflow rolls into `__other__` (0 = unlimited) |
-| `listen_socket_path` | `None` | Bind UDS for `annotate_request` events |
+| `interval_ms` | `monitor.interval_ms_default` (500) | `ValueError` below `monitor.interval_ms_min` (50); `RuntimeWarning` below `monitor.interval_ms_warn_below` (100) when `duration_s` is `None` |
+| `duration_s` | `None` | Stop automatically after N seconds; must be > 0 |
+| `pid` | `None` | Process to attribute; requires `psutil` |
+| `include_children` | `True` | Add descendants' CPU% to `proc_cpu_percent` |
+| `output_file` | `None` | JSON-lines output path |
+| `max_samples_in_memory` | `monitor.max_samples_in_memory` (10000) | 0 keeps no samples in memory |
+| `rotate_mb` | `monitor.rotate_mb_default` (0) | Rotate `output_file` at N MB |
+| `listen_socket_path` | `None` | Socket for annotation events; `"default"` = `default_socket_path()` |
+| `attribution_mode` | `monitor.attribution.mode_default` (`"auto"`) | `auto`, `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
+| `max_labels` | `monitor.annotation.max_labels` (1000) | 0 = unlimited |
+| `exporters` | `None` | List of exporter names, e.g. `["prometheus"]` |
+| `exporter_overrides` | `None` | Per-exporter config overrides, e.g. `{"prometheus": {"port": 0}}` |
 
-See the [Python API reference](../api/python.md#codegreenmonitor) for the
-full schema of each sample record and the `stop()` summary.
+A second `start()` on the same instance raises `RuntimeError`.
 
 ## Per-PID attribution
 
-When `--pid` is set, every sample carries an extra share field computed
-from a backend selected at `start()`:
+With `--pid`, each sample also carries the target's share of
+`joules_delta`. The backend is chosen once at `start()`:
 
-| Backend | Source | Best for |
+| Backend | Share of each sample | Source |
 |---|---|---|
-| `cgroup_v2` (preferred) | `cpu.stat:usage_usec` in the unified cgroup | Linux 5.x+ services under any contention |
-| `cgroup_v1` | `cpuacct.usage` (nanoseconds) | Legacy Linux |
-| `cpu_percent` | psutil `proc.cpu_percent() / (100 * ncores)` | Last resort, all platforms |
+| `cgroup_v2` | cgroup CPU time / busy CPU time of the whole host, capped at 1 | `cpu.stat` `usage_usec` of the PID's cgroup, `/proc/stat` |
+| `cgroup_v1` | same, from `cpuacct.usage` | `cpuacct.usage` of the PID's cgroup, `/proc/stat` |
+| `cpu_percent` | process-tree CPU% / (100 x logical CPUs) | `psutil` |
 
-The chosen backend appears as `attribution_backend` on every sample header
-and on the summary record. Override with `--attribution-mode` if you want
-to compare backends side-by-side; otherwise `auto` picks the best
-available.
+`auto` tries `cgroup_v2`, then `cgroup_v1` (unless
+`monitor.attribution.allow_cgroup_v1` is false), then falls back to
+`cpu_percent` with a `RuntimeWarning`. An explicitly requested cgroup
+backend that is unavailable raises `RuntimeError`. The resolved backend is
+in the JSONL header and the summary (`attribution_backend`).
 
-!!! warning "cgroup_v2 vs cpu_percent can diverge by 100x"
-    On heavily-loaded multi-core hosts the two backends can disagree by
-    **two orders of magnitude** on the same workload. A single-threaded
-    burner pinned to one core of a 64-core host:
+The two definitions answer different questions and diverge strongly on a
+mostly idle many-core host. A single-threaded loop on a 128-CPU host, 3 s
+at 200 ms, measured with [example 07](../examples/07_monitor_pid.md):
 
-    - `cgroup_v2`: ~100% of one core -> ~1.6% of system -> ~1.6% of RAPL J
-    - `cpu_percent`: ~1.6% reported, **but normalised again** by some
-      consumers -> ~0.025% in their pipeline -> ~125x undercount.
+| Backend | Attributed | Host total |
+|---|---|---|
+| `cgroup_v2` | 274.6 J | 301.1 J |
+| `cpu_percent` | 2.2 J | 301.2 J |
 
-    Always check `attribution_backend` before trusting the per-PID
-    Joules. The full forensic on this divergence is in the
-    [07 - Monitor PID example](../examples/07_monitor_pid.md).
+`cgroup_v2` charges the process with the host's energy in proportion to its
+share of the busy CPU time, so idle and uncore power go to whoever is busy.
+`cpu_percent` charges it with its share of total CPU capacity. Report which
+backend produced a number.
+
+Two caveats for the cgroup backends:
+
+- They attribute the **cgroup** that contains the PID, not the PID alone. A
+  process started from a login shell shares the session's cgroup with every
+  other process of that session. Run the target in its own cgroup (a
+  systemd service, a container) for a per-service share.
+- The PID's cgroup is resolved through `/proc/<pid>/cgroup` and the cgroup
+  filesystem as the monitor sees them (`monitor.attribution.cgroup_root`,
+  `cgroup_unified_root`). Run the monitor in a namespace where both are
+  visible.
+
+With `cpu_percent`, the summary's `proc_attributed_joules` is summed over
+the samples still in memory, so it covers only the last
+`max_samples_in_memory` samples and is `null` with `--max-in-memory 0`. The
+per-sample `proc_attributed_joules` values in the JSONL file are complete.
+
+When the process exits, the monitor stops with
+`terminated_reason: "pid <N> exited"`.
 
 ## Per-request attribution
 
-For web servers, run one Monitor with `--listen-on-socket` and instrument
-each request with `codegreen.annotate_request`. The Monitor receives
-`start` / `end` events over a Unix-domain socket and aggregates
-**per-label** energy + p50/p95 latency.
-
-### Flask middleware recipe
+Start the monitor with `--listen-on-socket` and wrap each request in
+`codegreen.annotate_request`. The client sends `start` and `end` events over
+the Unix-domain socket; the monitor aggregates `per_label` energy and
+latency.
 
 ```python
 from flask import Flask, g, request
@@ -131,608 +189,320 @@ app = Flask(__name__)
 
 @app.before_request
 def _cg_start():
-    g._cg = codegreen.annotate_request(
-        f"{request.method} {request.path}",
-        socket_path="/tmp/cg.sock",
-    ).__enter__()
+    route = request.url_rule.rule if request.url_rule else "unmatched"
+    g._cg = codegreen.annotate_request(f"{request.method} {route}")
+    g._cg.__enter__()
 
 @app.teardown_request
 def _cg_end(exc):
-    g._cg.__exit__(None, None, None)
+    g._cg.__exit__(type(exc) if exc else None, exc, None)
 ```
 
-Start the Monitor separately (or as a sidecar):
-
 ```bash
-codegreen monitor --listen-on-socket /tmp/cg.sock -o energy.jsonl &
+codegreen monitor --listen-on-socket default -o energy.jsonl --quiet &
 gunicorn -w 4 'app:app'
 ```
 
-The Monitor's final summary (printed on Ctrl-C or after `--duration`) has
-a `per_label` dict:
+`annotate_request(name, labels=None, socket_path=None, timeout_s=0.25)`
+connects to `socket_path`, by default `default_socket_path()`:
+`$XDG_RUNTIME_DIR/codegreen.sock`, else `/tmp/codegreen-<uid>/codegreen.sock`,
+the same path `--listen-on-socket default` binds. It raises when no monitor
+listens there (for example `FileNotFoundError`); the annotation is not
+dropped silently, so a request fails in the middleware above while the
+monitor is down. Use route templates as names (`/users/<id>`, not
+`/users/42`) so the label set stays bounded.
+
+How request energy is computed:
+
+- Every valid sample adds its whole `joules_delta` to every annotation that
+  is open when the sample is taken. A request shorter than the interval
+  gets 0 J or one full interval's energy; aggregate over many requests or
+  shorten the interval.
+- Concurrent requests each receive the full delta, so per-label totals can
+  sum to more than `total_joules`.
+- Request energy is host-wide energy, not the PID share, even with `--pid`.
+
+In this run a 0.15 s request at a 200 ms interval received one full sample:
 
 ```json
-{
-  "per_label": {
-    "GET /search": {"count": 412, "total_joules": 8.31, "p50_ms": 21.0, "p95_ms": 84.3},
-    "POST /api/v1/upload": {"count": 17, "total_joules": 12.07, "p50_ms": 412.0, "p95_ms": 1610.4}
-  }
-}
+{"type":"annotation_end","token":"24afe440731e4bc7a650dc710ded566b","name":"GET /heavy","labels":{},"status":"ok","t_open":0.145709,"t_close":0.298223,"duration_s":0.152514,"joules":20.780622,"n_samples":1,"ts":"2026-11-06T23:18:18.646080+00:00"}
 ```
 
-For a complete worked example with a tiny in-process HTTP server, see
-[08 - Monitor socket](../examples/08_monitor_socket.md).
+### Socket protocol
 
-## Output streams
+One JSON object per line, one reply per line. Any language can be a client.
 
-`-o energy.jsonl` writes one JSON object per line:
+| Request | Reply |
+|---|---|
+| `{"op":"start","name":"GET /users","labels":{...},"token":"optional"}` | `{"ok":true,"token":"..."}` |
+| `{"op":"end","token":"...","status":"ok"}` | `{"ok":true,"joules":...,"duration_s":...}` |
+| malformed or unknown | `{"ok":false,"error":"..."}` |
 
-```jsonl
-{"type": "header", "version": "1", "interval_ms": 200, "attribution_backend": "cgroup_v2", "pid": 1234}
-{"type": "sample", "t": 0.20, "joules_total": 0.84, "joules_delta": 0.84, "watts": 4.2, "proc_cpu_percent": 192.0, "proc_attributed_joules": 0.21}
-{"type": "sample", "t": 0.40, ...}
-...
-{"type": "summary", "duration_s": 30.0, "total_joules": 126.4, "mean_watts": 4.21, "per_label": {...}}
+A label set may hold at most `monitor.annotation.max_label_count` (64)
+entries. The socket is created with mode 0600, so the application must run
+as the same user as the monitor; the per-user default directory must be
+owned by that user with mode 0700, and any other socket directory must
+already exist. A second monitor bound
+to the same path as the same user replaces the socket file, and the first
+monitor stops receiving events without an error, so run one monitor per
+socket. Socket paths are limited to about 108 bytes by the OS.
+
+## Output
+
+`-o` writes one JSON record per line. Records from a real run:
+
+```json
+{"type":"header","interval_ms":200,"pid":null,"start_ts":"2026-11-06T23:14:43.215473+00:00","rotate_mb":0,"max_samples_in_memory":10000,"max_labels":1000,"overflow_bucket":"__other__","listen_socket":null,"attribution_mode_requested":"auto","attribution_backend":null}
+{"type":"sample","t":0.2005,"valid":true,"joules_total":15.792133,"joules_delta":15.792133,"watts":62.6974}
+{"type":"summary","duration_s":1.2061,"total_joules":121.536371,"avg_watts":100.765,"samples":5,"invalid_samples":0,"validity":{"status":"valid","reasons":[],"detail":{},"warnings":{}},"samples_in_memory":5,"pid":null,"proc_attributed_joules":null,"attribution_mode_requested":"auto","attribution_backend":null,"terminated_reason":null,"annotations_open":0,"per_label":{},"max_labels":1000,"overflow_bucket":"__other__","distinct_labels":0,"reload_count":0,"end_ts":"2026-11-06T23:14:44.421532+00:00"}
 ```
 
-The header record always sits at the top of the file; subsequent
-`sample` records carry deltas; the trailing `summary` record is written at
-`stop()` (or on Ctrl-C / `--duration` expiry).
+| Record | Written | Fields |
+|---|---|---|
+| `header` | at start | `interval_ms`, `pid`, `start_ts`, `rotate_mb`, `max_samples_in_memory`, `max_labels`, `overflow_bucket`, `listen_socket`, `attribution_mode_requested`, `attribution_backend` |
+| `sample` | every interval | `t` (s since start), `valid`, `joules_total` (since start), `joules_delta`, `watts` (backend power at the read) |
+| `annotation_start` | request opened | `token`, `name`, `labels`, `t`, `ts` |
+| `annotation_end` | request closed | `token`, `name`, `labels`, `status`, `t_open`, `t_close`, `duration_s`, `joules`, `n_samples`, `ts` |
+| `reload` | after SIGHUP | `ts`, `interval_ms`, `max_samples_in_memory`, `rotate_mb`, `max_labels`, `reload_count` |
+| `header_rotated` | first line of a new file after rotation | `ts`, `interval_ms` |
+| `summary` | at stop | see below |
 
-## Caveats
+With `--pid`, samples also carry `proc_cpu_percent`, `proc_n_children`,
+`proc_attribution_backend`, `proc_attributed_joules` and, for the cgroup
+backends, `proc_cpu_share`, `cgroup_cpu_usec_delta`, `system_cpu_usec_delta`:
 
-- **RAPL is system-wide.** Two `codegreen monitor` processes on the same
-  socket double-count. The Monitor constructor warns when it detects
-  another live CodeGreen PID.
-- **Sub-50 ms intervals raise `ValueError`** -- RAPL noise floor.
-- **PID death** is caught on `psutil.NoSuchProcess`. The Monitor stops
-  cleanly with `terminated_reason = "pid <N> exited"` in the summary.
-- **Forking servers** (Apache prefork, gunicorn workers): use the parent
-  PID; psutil walks children automatically and credits worker energy back
-  to the tree.
+```json
+{"type":"sample","t":0.5004,"valid":true,"joules_total":51.102818,"joules_delta":51.102818,"watts":131.3747,"proc_cpu_percent":100.9,"proc_n_children":0,"proc_attribution_backend":"cgroup_v2","proc_cpu_share":0.98613,"proc_attributed_joules":50.394002,"cgroup_cpu_usec_delta":1498917,"system_cpu_usec_delta":1520000}
+```
 
-## SIGHUP-reload: policy changes without restart
+Summary fields:
 
-`codegreen monitor` follows the POSIX-daemon convention: **SIGHUP
-re-reads `monitor.*` from `codegreen/config.json` and hot-applies
-reloadable fields without dropping in-flight annotations or the open
-JSONL position**.
+| Field | Meaning |
+|---|---|
+| `duration_s`, `total_joules`, `avg_watts` | Window from start to the final read, energy over it, mean power |
+| `samples`, `invalid_samples`, `samples_in_memory` | Valid samples, failed sample reads, samples held in memory |
+| `validity` | `{status, reasons, detail, warnings}`; see [What a sample measures](#what-a-sample-measures) |
+| `pid`, `proc_attributed_joules`, `attribution_mode_requested`, `attribution_backend` | PID attribution; `null` without `--pid` |
+| `terminated_reason` | `null`, or `pid <N> exited` |
+| `annotations_open`, `distinct_labels`, `max_labels`, `overflow_bucket` | Annotation state at stop |
+| `per_label` | Per label: `count`, `joules_total`, `duration_total_s`, `joules_per_call_avg`, `latency_ms_p50`, `latency_ms_p95`; the top `monitor.annotation.summary_top_labels` (50) labels by energy, plus `__other__` if present |
+| `reload_count`, `end_ts` | SIGHUP reloads applied; stop time (UTC) |
+| `exporters` | Per-exporter summary, present when `--exporter` is used |
 
-Reloadable on SIGHUP (no restart needed):
+## Long-running operation
 
-| Field | Source |
+**Rotation.** `--rotate-mb N` rolls `energy.jsonl` to `energy.jsonl.1`,
+shifting older files up to `monitor.rotate_max_backups` (5) and deleting
+the oldest. The new file starts with a `header_rotated` record. The summary
+is written only at stop, to the current file.
+
+**Memory.** The in-memory deque holds at most `--max-in-memory` samples;
+totals do not depend on it.
+
+**Label cardinality.** Once `--max-labels` distinct labels exist, a new label
+is recorded under `__other__` and its requested name is kept in
+`labels["__requested_name__"]` of its annotation records. `--max-labels 0`
+removes the cap; use it only for a label source that is bounded by
+construction.
+
+### Reloading configuration
+
+SIGHUP makes the monitor re-read the configuration (`CODEGREEN_CONFIG`, else
+`~/.codegreen/config.json`, merged over the bundled defaults) at the next
+sample tick and apply four values from it:
+
+| Value | Key |
 |---|---|
 | sample period | `monitor.interval_ms_default` |
 | rotation threshold | `monitor.rotate_mb_default` |
-| in-memory ring size | `monitor.max_samples_in_memory` |
-| label cardinality cap | `monitor.annotation.max_labels` |
+| in-memory samples | `monitor.max_samples_in_memory` |
+| label cap | `monitor.annotation.max_labels` |
 
-Require a full restart (a log line is emitted on SIGHUP if you change
-these):
-
-- `--output / -o` path (kernel-level fd; can't migrate mid-stream)
-- `--listen-on-socket` (UDS bind point; needs re-bind)
-- `--pid` (psutil handle; needs re-attach)
-- `--duration` (one-shot scheduler decision)
-
-Wire `systemctl reload` to it:
+The config values replace the corresponding command-line options: a
+monitor started with `-i 200` samples at `monitor.interval_ms_default` (500
+ms by default) after a SIGHUP. An invalid value is rejected with a
+`RuntimeWarning` and the previous value stays. The open JSONL file and open
+annotations are kept, and a `reload` record is written. `--output`,
+`--listen-on-socket`, `--pid` and `--duration` cannot change without a
+restart.
 
 ```ini
 [Service]
 ExecReload=/bin/kill -HUP $MAINPID
 ```
 
-Then `systemctl --user reload codegreen-monitor` is a zero-downtime
-config push. The monitor emits a `{"type":"reload",...}` record in the
-JSONL so postmortem can pinpoint when the policy changed.
+### Keeping the monitor running
 
-If the new config is invalid (corrupt JSON, type mismatch, value below a
-floor), the Monitor logs a `RuntimeWarning` and keeps the previous
-values — it never crashes mid-run on a bad reload.
+Closing a terminal sends SIGHUP, which the monitor treats as a reload, not
+a stop. With `--quiet` it keeps running after the terminal closes (at the
+reloaded interval). Without `--quiet`, the next live line fails on the
+closed terminal and the process exits without writing a summary record.
 
-## Cardinality cap: high-cardinality labels can't OOM the aggregator
-
-Always-on monitors that label requests by raw URL, request UUID, or
-user-id grow `per_label` without bound. CodeGreen caps the number of
-distinct labels (default `max_labels=1000`); past the cap, new labels
-collapse into a single `__other__` bucket that aggregates count, total
-joules, and duration like any other label. The overflow records carry
-the originally-requested name in
-`labels["__requested_name__"]` so you can still see what was attempted.
-
-```bash
-codegreen monitor --max-labels 1000 -o energy.jsonl --listen-on-socket /tmp/cg.sock
-```
-
-```json
-{
-  "per_label": {
-    "GET /health": {"count": 87412, "joules_total": 4.21, ...},
-    "GET /api/users/:id": {"count": 12044, "joules_total": 17.30, ...},
-    "__other__": {"count": 31, "joules_total": 0.12, ...}
-  }
-}
-```
-
-The right fix is usually to normalise label sources upstream
-(`GET /users/:id` not `GET /users/42`), but the cap is the safety net
-when normalisation lags or breaks.
-
-`--max-labels 0` disables the cap (no overflow bucket). Use only when
-the label source is **already bounded** by your code (route templates,
-enum values).
-
-## Production deployment shapes
-
-Eight shapes appear repeatedly in user reports. Each maps to a tested
-example or a small variant of one.
-
-### 1. Apache / Flask web tier
-
-Apache `mod_wsgi` (or gunicorn / uwsgi) fronts a Flask app on a single
-host. You want **per-request energy attribution + an always-on capture**
-that survives terminal close, SSH drop, and reboot.
-
-```bash
-# /etc/systemd/system/codegreen-monitor.service
-ExecStart=/usr/local/bin/codegreen monitor \
-    --listen-on-socket /run/codegreen/cg.sock \
-    -o /var/log/codegreen/energy.jsonl \
-    --rotate-mb 100 --max-labels 1000 --interval 500 --quiet --json
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-```
-
-Wire a `before_request` / `teardown_request` pair using
-`codegreen.annotate_request` (see the [Flask snippet](#flask-middleware-recipe)
-above).
-
-**Pointer:** [Example 12 — Monitor systemd sidecar](../examples/12_monitor_systemd_sidecar.md).
-
-**Caveats:**
-
-- One monitor per host. Multiple monitors double-count RAPL.
-- Sample interval ≥ request P50 for stable attribution; aggregate over
-  many hits otherwise.
-- Use SIGHUP to push new `--rotate-mb` / `--max-labels` without
-  bouncing the unit.
-
-### 2. Kubernetes SaaS API
-
-A SaaS API pod on a multi-tenant node. You want per-pod energy
-attribution and per-request labels exported to Prometheus.
-
-```yaml
-# Side-car container in the same Pod
-containers:
-- name: codegreen
-  image: ghcr.io/your-org/codegreen:latest
-  command: ["codegreen", "monitor",
-            "--pid", "1",                       # share PID namespace
-            "--attribution-mode", "cgroup_v2",
-            "--listen-on-socket", "/var/run/cg/cg.sock",
-            "-o", "/var/log/codegreen/energy.jsonl",
-            "--rotate-mb", "50", "--max-labels", "5000",
-            "--interval", "250", "--quiet", "--json"]
-  volumeMounts:
-  - {name: cg-run, mountPath: /var/run/cg}
-  - {name: cg-log, mountPath: /var/log/codegreen}
-```
-
-The app container speaks to the sidecar via the shared `cg-run` volume's
-UDS. Energy is per-pod because cgroup_v2 reads the pod's cgroup directly.
-
-**Pointer:** [Example 11 — Monitor socket standalone](../examples/11_monitor_socket_standalone.md)
-is the wire; pod manifest is the harness.
-
-**Caveats:**
-
-- `cgroup_v2` is required for accurate per-pod attribution. On older
-  GKE nodes (cgroup_v1) the backend silently falls back to
-  `cpu_percent` — check `attribution_backend` in the JSONL header.
-- The sidecar restarts independently of the app container; the JSONL
-  records a fresh `header` each time, so analysis tools should not
-  assume monotonic timestamps across container restarts.
-
-### 3. MLOps inference
-
-A long-running PyTorch / TensorFlow inference server. You want per-batch
-energy without re-instrumenting the model code.
-
-```bash
-codegreen monitor \
-    --pid $(pgrep -f 'inference-server') \
-    --listen-on-socket /tmp/cg.sock \
-    -o /var/log/inference-energy.jsonl \
-    --interval 100 \
-    --rotate-mb 200 --max-labels 0 --quiet --json
-```
-
-The model server wraps each batch in `codegreen.annotate_request(...)`
-with a stable label like `model=resnet50,batch=32`. `--max-labels 0` is
-safe because the label source is the model registry (bounded).
-
-**Pointer:** [Example 08 — Monitor socket](../examples/08_monitor_socket.md)
-for the in-process variant; the staged-inference workflow is in
-[Example 05 — GPT-2 staged](../examples/05_gpt2_staged.md).
-
-**Caveats:**
-
-- Sub-100 ms inference batches under-sample at the default 500 ms
-  interval. Drop to `--interval 50` (the noise floor) and aggregate.
-- GPU energy is **not** counted by RAPL. CodeGreen reports CPU + DRAM
-  only; pair with `nvidia-smi --query-gpu=power.draw` if you need a
-  full picture.
-
-### 4. Batch ETL
-
-A Kafka-fed ETL pipeline that processes streams in 30-minute windows.
-You want per-window energy and per-stage labels.
-
-```bash
-codegreen monitor -d 1800 \
-    --listen-on-socket /tmp/cg.sock \
-    -o "/var/log/etl/window_$(date -u +%Y%m%d_%H%M).jsonl" \
-    --max-labels 200 --rotate-mb 0 --interval 1000 --quiet --json
-```
-
-`--duration 1800` bounds the run; the cron / Airflow operator that
-restarts it for the next window is upstream of CodeGreen.
-
-**Pointer:** [Example 06 — Monitor host](../examples/06_monitor_host.md)
-is the simplest version; layer in `--listen-on-socket` for per-stage
-labels.
-
-**Caveats:**
-
-- Discrete files per window are easier to ingest than one rotated file.
-- `--max-labels` should match your bounded stage count, not the input
-  cardinality.
-
-### 5. IoT / edge
-
-A small Linux SBC (Raspberry Pi 4 / 5, NVIDIA Jetson) sampling its own
-power for thermal / battery budgeting.
-
-```bash
-codegreen monitor -d 0 -i 1000 \
-    -o /var/lib/codegreen/edge.jsonl \
-    --rotate-mb 10 --max-in-memory 0 --max-labels 64 \
-    --quiet --json
-```
-
-`--rotate-mb 10` plus the default `rotate_max_backups=5` bounds disk
-usage at ≈ 50 MB. `--max-in-memory 0` flushes the deque so a sudden
-power loss can't lose more than a single sample.
-
-**Pointer:** [Example 06 — Monitor host](../examples/06_monitor_host.md).
-
-**Caveats:**
-
-- RAPL is x86-only. On ARM SBCs CodeGreen falls back to whatever
-  hardware energy interface exists; see the [hardware support matrix](../user-guide/energy-measurement.md).
-- Sub-second intervals on a small core can dominate the very workload
-  you're measuring. Default 1 Hz here.
-
-### 6. CI / CD energy gating
-
-A GitHub Actions / Jenkins job that runs the test suite + measures its
-energy + fails the PR if `total_joules` regressed by > 10 %.
-
-```bash
-codegreen monitor -d 0 -o ci-energy.jsonl --quiet --json &
-MON=$!
-pytest tests/ -q
-kill -TERM $MON
-wait $MON
-codegreen run --json -- python compare_against_baseline.py ci-energy.jsonl
-```
-
-For long-running CI containers (always-on test farms) wire the same
-SIGHUP-reload pattern as the production case: `kill -HUP $MAINPID` from
-your config-management tool when you ship new rotation policies.
-
-**Pointer:** [CI/CD integration guide](cicd-integration.md).
-
-**Caveats:**
-
-- VMs without RAPL passthrough produce no readings; CodeGreen fails
-  loud. CI runners on bare-metal-like infrastructure (GitHub Larger
-  runners, BuildJet, self-hosted) are the practical floor.
-
-### 7. Live energy dashboards
-
-Grafana / Datadog ingesting CodeGreen's JSONL through Promtail / Vector
-/ Fluent Bit. Always-on, label-per-route exposed as Prometheus metrics.
-
-```bash
-codegreen monitor \
-    --listen-on-socket /run/codegreen/cg.sock \
-    -o /var/log/codegreen/dashboard.jsonl \
-    --rotate-mb 100 --max-labels 5000 \
-    --interval 500 --quiet --json
-```
-
-Then point Promtail at the JSONL with a `labels = {type, name}` pipeline
-stage. The `summary` record at JSONL rotation gives you a periodic roll-up
-without parsing every sample.
-
-**Caveats:**
-
-- High-cardinality dashboards push `max_labels` up — but Prometheus
-  itself has a `label_limit` that fires earlier. Use the SIGHUP-reload
-  hook to bump both in lockstep.
-- Drop samples below your dashboard's resolution at ingest time
-  (`Vector transforms`) rather than at CodeGreen — the durable JSONL is
-  cheap.
-
-### 8. Compliance reporting (ISO 14064 / GHG Protocol)
-
-Audited monthly energy reports for sustainability disclosure. Always-on
-capture, append-only, externally rotated.
-
-```bash
-codegreen monitor -d 0 \
-    -o /var/lib/codegreen/compliance/$(date -u +%Y%m).jsonl \
-    --rotate-mb 0 --max-in-memory 0 --max-labels 0 \
-    --interval 1000 --quiet --json
-```
-
-`--rotate-mb 0` disables in-tool rotation; an external logrotate /
-systemd-tmpfiles policy owns retention. `--max-labels 0` avoids dropping
-any label (the auditor wants the full distribution).
-
-**Caveats:**
-
-- Without the cardinality cap, a bug in your label source can OOM the
-  aggregator. Pair this shape with a strict label-normaliser upstream
-  (route templates, no raw URLs, no UUIDs).
-- The JSONL is append-only; a separate cron-rolled file per month is
-  what auditors usually expect.
+| Mode | Survives terminal close | Survives reboot |
+|---|---|---|
+| `codegreen monitor ...` (live output) | No, and no summary record | No |
+| `codegreen monitor --quiet ...` or `nohup codegreen monitor ... &` | Yes; the hangup is a reload | No |
+| `tmux` / `screen` session | Yes | No |
+| systemd unit ([example 12](../examples/12_monitor_systemd_sidecar.md)) | Yes | Yes (user units need `loginctl enable-linger`) |
 
 ## Exporters
 
-The Monitor's default sink is the in-process JSONL writer. To push the
-same telemetry stream to an external collector, pass `--exporter NAME`
-(repeatable). Every exporter reads its parameters from
-`monitor.exporters.NAME.*` in `codegreen/config.json`; CLI flags override
-specific fields. The fan-out happens AFTER the JSONL write, on a bounded
-queue with a drop-newest policy — a slow or unreachable backend can
-never wedge the sample loop.
+`--exporter NAME` (repeatable) sends the same stream to an external system
+in addition to the JSONL file. Each exporter reads `monitor.exporters.NAME.*`
+from the configuration; the CLI flags override single keys. A missing
+optional dependency makes `start()` raise `RuntimeError` with the install
+command; an unknown exporter name raises `ValueError`. The exporter's
+summary is returned under `summary["exporters"][NAME]`.
 
-### OTLP (OpenTelemetry over gRPC)
-
-Install the optional dependency:
+### OTLP
 
 ```bash
 pip install 'codegreen[otlp]'
+codegreen monitor --exporter otlp --otlp-endpoint http://otel-collector:4317 \
+    -o /var/log/codegreen/energy.jsonl
 ```
 
-Enable and point at any OTLP/gRPC endpoint (real OTel Collector,
-Datadog Agent, Honeycomb, Grafana Cloud, Lightstep, …):
+| Metric | Instrument | Unit | Source |
+|---|---|---|---|
+| `codegreen.energy.joules` | Counter | J | sample `joules_delta` |
+| `codegreen.power.watts` | Observable gauge | W | last sample `watts` |
+| `codegreen.request.energy.joules` | Counter | J | `annotation_end` `joules` (spans with 0 J are not added) |
+| `codegreen.request.duration.seconds` | Histogram | s | `annotation_end` `duration_s` |
 
-```bash
-codegreen monitor --exporter otlp \
-    --otlp-endpoint http://otel-collector.svc:4317 \
-    -o /var/log/codegreen/energy.jsonl --rotate-mb 100 --max-labels 1000
-```
+Meter name `codegreen.monitor`. Request metrics carry the attributes `route`
+(the annotation name) and `status`. Resource attributes: `service.name`
+(`codegreen-monitor`), `host.name`, `process.pid` (the `--pid` target, else
+the monitor), `attribution_backend` (`host` without `--pid`),
+`codegreen.version`, plus the SDK's defaults and `OTEL_RESOURCE_ATTRIBUTES`.
 
-Standard OTel env vars are honoured by the underlying
-`opentelemetry-exporter-otlp-proto-grpc` package:
-`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`,
-`OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_RESOURCE_ATTRIBUTES`.
+Settings live under `monitor.exporters.otlp`
+([key list](configuration-reference.md#monitor)). How they interact with the
+OpenTelemetry environment variables:
 
-**Metric catalog**
+- `endpoint` (default `http://localhost:4317`) is always passed explicitly,
+  so `OTEL_EXPORTER_OTLP_ENDPOINT` has no effect; an `http://` endpoint
+  disables TLS. `protocol` accepts only `grpc`.
+- `headers` (a dict; not in the bundled config) and `tls.ca_file` fall back
+  to `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_CERTIFICATE` when
+  unset.
+- `export_interval_ms` has a floor of 100; the per-export timeout is
+  `timeout_s` capped at 2 s.
 
-| Metric                                | Kind             | Unit | Source                                 |
-|---------------------------------------|------------------|------|----------------------------------------|
-| `codegreen.energy.joules`             | Counter          | J    | per-sample `joules_delta`              |
-| `codegreen.power.watts`               | Observable gauge | W    | last `watts`                           |
-| `codegreen.request.energy.joules`     | Counter          | J    | per-`annotate_end` `joules`            |
-| `codegreen.request.duration.seconds`  | Histogram        | s    | per-`annotate_end` `duration_s`        |
+Events enter a bounded queue (`queue_size`) without blocking; when it is full the newest
+event is dropped and counted. The exporter summary reports `endpoint`,
+`protocol`, `queue_size`, `batch_size`, `dropped_samples`,
+`dropped_annotations`, `exported_samples` and `exported_annotations`. At
+stop, the final flush and shutdown run on a thread that is joined for at
+most one second, so an unreachable collector cannot block `stop()`.
 
-Resource attributes: `service.name=codegreen-monitor`, `host.name`,
-`process.pid`, `attribution_backend`, `codegreen.version`. Per-metric
-attribute: `route` (capped by `--max-labels`; overflow rolls into
-`__other__`).
+See [example 13](../examples/13_monitor_otlp_export.md).
 
-**Failure policy**
-
-- Missing OTel deps → `Monitor.start()` raises `RuntimeError` with the
-  exact `pip install` command. Never silently disabled.
-- Unreachable collector → bounded queue drops; counts surface as
-  `exporters.otlp.dropped_samples` / `dropped_annotations` in the
-  summary. Sample loop never blocks.
-
-Tunables under `monitor.exporters.otlp.*`: `endpoint`, `protocol` (gRPC
-only today; HTTP/protobuf deferred), `headers`,
-`timeout_s`, `queue_size` (default 10 000), `batch_size` (default 128),
-`export_interval_ms` (default 1000), and a `tls: {ca_file, cert_file,
-key_file}` block.
-
-**Pointer:** [Example 13 — Monitor OTLP export](../examples/13_monitor_otlp_export.md).
-
-### Prometheus pull endpoint
-
-Install the optional dependency:
+### Prometheus
 
 ```bash
 pip install 'codegreen[prometheus]'
-```
-
-Enable the exporter and pick a port (loopback bind by default):
-
-```bash
 codegreen monitor --exporter prometheus --prometheus-port 9464 \
-    -o /var/log/codegreen/energy.jsonl --rotate-mb 100 --max-labels 1000
+    -o /var/log/codegreen/energy.jsonl
 ```
-
-Scrape with vanilla Prometheus, Grafana Agent, Datadog Agent (Prometheus
-mode), or the OTel Collector's Prometheus receiver:
 
 ```yaml
 # prometheus.yml
 scrape_configs:
   - job_name: codegreen
-    metrics_path: /metrics
     static_configs:
       - targets: ["app-host:9464"]
-    # optional, for the auth_token configuration:
+    # with monitor.exporters.prometheus.auth_token set:
     # authorization:
     #   type: Bearer
     #   credentials: <token>
 ```
 
-**Metric catalog**
+| Metric | Type | Labels |
+|---|---|---|
+| `codegreen_energy_joules_total` | Counter | `host`, `pid`, `attribution_backend` |
+| `codegreen_power_watts` | Gauge | `host`, `pid`, `attribution_backend` |
+| `codegreen_request_energy_joules_total` | Counter | + `route`, `status` |
+| `codegreen_request_duration_seconds` | Histogram | + `route`, `status` |
+| `codegreen_monitor_uptime_seconds` | Gauge | `host`, `pid`, `attribution_backend` |
+| `codegreen_distinct_labels` | Gauge | `host`, `pid`, `attribution_backend` |
+| `codegreen_overflow_label_count_total` | Counter, annotations recorded under `__other__` | `host`, `pid`, `attribution_backend` |
+| `codegreen_dropped_samples_total` | Counter, never incremented (pull exporter) | + `sink` |
 
-| Metric                                  | Kind      | Unit | Labels (in addition to host/pid/attribution_backend) |
-|-----------------------------------------|-----------|------|-------------------------------------------------------|
-| `codegreen_energy_joules_total`         | Counter   | J    | —                                                     |
-| `codegreen_power_watts`                 | Gauge     | W    | —                                                     |
-| `codegreen_request_energy_joules_total` | Counter   | J    | `route`, `status`                                     |
-| `codegreen_request_duration_seconds`    | Histogram | s    | `route`, `status`                                     |
-| `codegreen_monitor_uptime_seconds`      | Gauge     | s    | —                                                     |
-| `codegreen_distinct_labels`             | Gauge     | -    | —                                                     |
-| `codegreen_overflow_label_count_total`  | Counter   | -    | —                                                     |
-| `codegreen_dropped_samples_total`       | Counter   | -    | `sink`                                                |
+Settings live under `monitor.exporters.prometheus`
+([key list](configuration-reference.md#monitor)):
 
-Resource labels carried on every metric: `host`, `pid`,
-`attribution_backend`. Histogram buckets configurable via
-`monitor.exporters.prometheus.histogram_buckets_request_duration_seconds`.
+- `listen_addr` defaults to `127.0.0.1`; a non-loopback address emits a
+  `RuntimeWarning`. A `port` in use fails at start; `0` picks a free port.
+- `auth_token`, when set, makes `/metrics` require
+  `Authorization: Bearer <token>` (constant-time comparison). The health
+  endpoint (`/healthz`) stays open for liveness probes and returns
+  `{"status":"healthy","uptime_s":...,"samples_seen":...,"annotations_seen":...}`.
+- `redact_resource_attrs` takes any of `host`, `pid`, `attribution_backend`;
+  their label values become `__redacted__`.
+- `histogram_buckets_request_duration_seconds` sets the buckets of
+  `codegreen_request_duration_seconds`.
 
-**Failure policy**
+The exporter uses its own registry, mutates the metrics in place on each
+sample and serves them from a daemon HTTP thread; it never opens outbound
+connections. There is no TLS; terminate TLS at a reverse proxy and restrict
+the port to the scraper.
 
-- Missing `prometheus_client` → `Monitor.start()` raises `RuntimeError`
-  with the exact `pip install` command. Never silently disabled.
-- Pull semantics: the scraper controls cadence, so the exporter never
-  drops on the producer side. `dropped_samples` is always `0` in the
-  Prometheus exporter's per-sink summary.
-- Address-in-use on the bind port → fail-loud at start, no fallback to a
-  random port (the operator chose the address; surprises here are bugs).
+See [example 14](../examples/14_monitor_prometheus_scrape.md).
 
-#### Compliance posture
+`monitor.exporters.remote_push` is a placeholder; `--exporter remote_push`
+is rejected.
 
-The Prometheus exporter is the most network-exposed sink CodeGreen ships;
-it gets four layered defaults so that "install + enable" is safe in a
-shared environment.
+## Deployment notes
 
-- **Default loopback bind.** `listen_addr=127.0.0.1`. Exposing on
-  `0.0.0.0` (or any non-loopback) emits a `RuntimeWarning` at start so
-  the choice appears in the audit trail.
-- **Cardinality cap protects against URL-PII explosion.** Annotation
-  labels are already capped by `monitor.annotation.max_labels` (default
-  1000); labels beyond the cap collapse into the `__other__` overflow
-  bucket. This means a buggy upstream that emits one label per request
-  UUID can never blow up your Prometheus storage — neither the JSONL nor
-  the exporter exceed the cap.
-- **Optional bearer-token auth.** Set
-  `monitor.exporters.prometheus.auth_token` to require an
-  `Authorization: Bearer <token>` header on both `/metrics` and
-  `/healthz`. Comparison uses `hmac.compare_digest` (constant-time).
-  Pair with TLS termination at the reverse proxy (nginx, Envoy, Caddy)
-  for transport-layer secrecy.
-- **Resource-attribute redaction.** Set
-  `monitor.exporters.prometheus.redact_resource_attrs` to any subset of
-  `["host", "pid", "attribution_backend"]`; matching labels render as
-  `__redacted__` in the exposed metrics. The Monitor's internal
-  bookkeeping still uses the real values, so attribution is unchanged.
-- **Pull, not push, means no surprise outbound.** The exporter never
-  initiates a connection; only the scraper reaches in. Firewall the bind
-  port to the scraper's IP and CodeGreen cannot exfiltrate anything.
-- **No new audit-log behaviour.** The exporter is a read view over state
-  already captured by the JSONL writer; nothing observable here that
-  isn't also durable on disk.
+- **Web tier on one host.** Run the monitor as a systemd unit with
+  `--listen-on-socket`, `-o`, `--rotate-mb`, `--max-labels` and `--quiet`,
+  and annotate requests in the application
+  ([example 11](../examples/11_monitor_socket_standalone.md),
+  [example 12](../examples/12_monitor_systemd_sidecar.md)). Choose an
+  interval below the typical request duration, or aggregate many requests.
+- **Containers.** The energy counters must be readable inside the container
+  (`codegreen capabilities energy` lists the providers that initialize).
+  For per-PID attribution, see the cgroup caveats under
+  [Per-PID attribution](#per-pid-attribution).
+- **Batch windows.** Start one monitor per window with `-d` and a distinct
+  `-o` file per window; the scheduler that starts the next window is
+  outside CodeGreen.
+- **CI gating.** To fail a build on energy, measure the step with
+  [`codegreen run --budget`](cicd-integration.md), which sets the exit code.
+  The monitor's exit code does not reflect energy or validity.
 
-**Pointer:** [Example 14 — Monitor Prometheus scrape](../examples/14_monitor_prometheus_scrape.md).
+## Troubleshooting
 
-### Remote agent-to-server push
+**The JSONL file keeps growing.** Rotation is off by default
+(`monitor.rotate_mb_default` is 0). Start the monitor with `--rotate-mb N`;
+at most `monitor.rotate_max_backups` (5) rotated files are kept.
 
-Coming in [todo.txt item Q1](https://github.com/SMART-Dal/codegreen).
-Direct fleet-telemetry batch protocol, distinct from OTLP (for offline /
-edge / air-gapped fleets). Wired through the same Sink ABC.
+**`per_label` has too many labels.** The label source emits unbounded names,
+usually raw URLs (`/users/42`) instead of route templates. Emit route
+templates in the middleware (`request.url_rule.rule` in Flask, as above);
+`--max-labels` caps the damage meanwhile: labels seen before the cap keep
+their own entry, and new ones are counted under `__other__`.
 
-### Backpressure semantics
+**The monitor died when the terminal closed.** It was printing live lines;
+see [Keeping the monitor running](#keeping-the-monitor-running). Use
+`--quiet`, `nohup`, tmux or a systemd unit.
 
-Push-mode exporters (OTLP, the future remote-push) share a contract:
-
-- A bounded `queue.Queue(maxsize=monitor.exporters.<name>.queue_size)`
-  decouples the sample loop from the exporter's IO path.
-- `feed_*` calls are wait-free (`put_nowait`). On `queue.Full`, the
-  newest event is dropped and counted; existing in-flight events are
-  preserved.
-- `dropped_samples` and `dropped_annotations` surface in
-  `summary["exporters"][<name>]` so you can alert on lossy collectors.
-- The Monitor's <=1% sample-cadence perturbation budget (the same
-  threshold as the prior self-overhead audit) is honoured: the OTel
-  reader thread is promoted to daemon at sink-construction time, the
-  OTel `force_flush`/`shutdown` calls in close() are bounded to 300 ms
-  each, and the gRPC channel uses `insecure=True` for `http://`
-  endpoints by default.
-
-The Prometheus exporter is pull-mode: the scraper controls cadence, so
-there is no producer-side queue and `dropped_samples` is always 0.
-`feed_*` mutates internally-thread-safe Counter/Gauge/Histogram objects
-in place; reads happen on the HTTP server thread via
-`generate_latest(self._registry)` over the same registry. No lock
-contention with the sample loop.
-
-## What to do when…
-
-### …my JSONL keeps growing
-
-Set `--rotate-mb N` to roll the file at N MB. CodeGreen keeps up to
-`monitor.rotate_max_backups` (default 5) generations
-(`energy.jsonl.1` … `.5`). Older generations are deleted automatically.
-
-### …my `per_label` is exploding
-
-The label source is producing too many distinct names — usually raw URLs
-(`/users/42`) instead of route templates (`/users/:id`). Two fixes:
-
-1. **Normalise upstream.** Best long-term: fix the middleware to emit
-   bounded labels. For Flask, use `request.url_rule.rule`. For FastAPI
-   use `request.scope["route"].path`.
-2. **Cap with `--max-labels`.** Defensive net. Overflow rolls into
-   `__other__` with count + total joules so you still see it happen.
-   Combine with [SIGHUP-reload](#sighup-reload-policy-changes-without-restart)
-   to raise the cap online when you fix the upstream bug.
-
-### …I closed my terminal and the monitor died
-
-Four ways to keep it alive. Reproduce of the table in
-[example 11](../examples/11_monitor_socket_standalone.md#will-the-monitor-keep-running-if-i-close-the-terminal):
-
-| Mode                              | Survives terminal close? | Survives reboot? | Use for                              |
-|-----------------------------------|--------------------------|------------------|---------------------------------------|
-| `codegreen monitor ...`           | No                       | No               | Interactive debugging                 |
-| `nohup codegreen monitor ... &`   | Yes (ignores SIGHUP)     | No               | One-off long capture                  |
-| `tmux new -d 'codegreen monitor ...'` | Yes (tmux owns it)   | No               | Personal dev box                      |
-| `systemctl --user start codegreen-monitor.service` | Yes | **Yes** (auto-restart on crash) | **Production webapps** |
-
-The systemd path is in [example 12](../examples/12_monitor_systemd_sidecar.md).
-
-### …I want to update the rotation policy without losing data
-
-Edit `monitor.rotate_mb_default` in `codegreen/config.json`, then send
-`SIGHUP` to the monitor:
-
-```bash
-kill -HUP "$(pgrep -f 'codegreen monitor')"
-# or under systemd:
-systemctl --user reload codegreen-monitor
-```
-
-The new value applies on the next sample tick. The open JSONL file is
-**not** closed or rotated by the reload itself — it rotates the next
-time it hits the new threshold. In-flight annotations keep their open
-tokens.
+**Changing the rotation threshold without a restart.** Set
+`monitor.rotate_mb_default` in the configuration and send SIGHUP
+(`kill -HUP <pid>`, or `systemctl reload` with the `ExecReload` line above).
+The open file is kept and rotates once it crosses the new threshold. The
+reload also applies the configured interval, in-memory limit and label cap
+in place of their command-line values; `monitor.rotate_max_backups` is read
+only at start.
 
 ## See also
 
-- [06 - Monitor host](../examples/06_monitor_host.md)
-- [07 - Monitor PID](../examples/07_monitor_pid.md)
-- [08 - Monitor socket](../examples/08_monitor_socket.md)
-- [11 - Monitor socket (standalone)](../examples/11_monitor_socket_standalone.md)
-- [12 - Monitor systemd sidecar](../examples/12_monitor_systemd_sidecar.md)
-- [Python API: Monitor](../api/python.md#codegreenmonitor)
-- [Python API: annotate_request](../api/python.md#annotate_request)
+- Examples: [06 host](../examples/06_monitor_host.md),
+  [07 PID](../examples/07_monitor_pid.md),
+  [08 socket in-process](../examples/08_monitor_socket.md),
+  [11 socket sidecar](../examples/11_monitor_socket_standalone.md),
+  [12 systemd](../examples/12_monitor_systemd_sidecar.md),
+  [13 OTLP](../examples/13_monitor_otlp_export.md),
+  [14 Prometheus](../examples/14_monitor_prometheus_scrape.md)
+- [Python API: Monitor](../api/python.md#codegreenmonitor),
+  [annotate_request](../api/python.md#annotate_request)

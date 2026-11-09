@@ -1,51 +1,82 @@
-# CodeGreen Demo
+# Demo
 
-## Demo
+A short terminal tour of CodeGreen 0.5.0. Every output below is from a real
+run on an AMD EPYC 9554P host with an NVIDIA RTX 5000 Ada GPU; long outputs
+are trimmed to their result lines.
 
-<video width="100%" controls autoplay loop muted>
-  <source src="assets/demo_full.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
-*Watch CodeGreen in action: A complete walkthrough from installation to detailed energy analysis.*
+## 1. Check the installation
 
-### Walkthrough
+```console
+$ codegreen --version
+CodeGreen version 0.5.0
+$ codegreen doctor
+...
+Sensor selection: all (every provider that initializes)
+  - amd_gpu: did not initialize: initialize or self_test failed; the provider logged no reason
+  - amd_rapl: did not initialize: amd_rapl: /dev/cpu/0/msr: Permission denied (needs the msr module,
+read access to the device and CAP_SYS_RAWIO)
+  - arm_eas: did not initialize: initialize or self_test failed; the provider logged no reason
+   intel_rapl: initialized
+   nvidia_gpu: initialized
+ NVIDIA GPU: NVIDIA RTX 5000 Ada Generation
+ RAPL access: Can access 1 RAPL energy files
 
-#### 1. Automated Installation
-![Installation](assets/screenshots/00_install.png)
-*Installing CodeGreen via the automated installer script which handles dependencies and C++ compilation.*
+Diagnosis Summary:
+ No issues found! CodeGreen appears to be properly installed.
+```
 
-#### 2. Comprehensive Help
-![Help Menu](assets/screenshots/01_help.png)
-*Exploring available commands and options through the built-in help system.*
+`intel_rapl` is the Linux powercap RAPL interface, used on AMD CPUs too. On
+Linux, `sudo codegreen init-sensors` grants RAPL read access once.
 
-#### 3. Hardware Sensor Initialization
-![Initialize Sensors](assets/screenshots/02_init_sensors.png)
-*Detecting and initializing hardware sensors (RAPL, NVML) with proper system permissions.*
+## 2. Measure any command
 
-#### 4. Version Verification
-![Version Info](assets/screenshots/03_version.png)
-*Checking the installed version of CodeGreen.*
+```console
+$ codegreen run --repeat 5 --sensors rapl -- python3 lookup_list.py
+...
+Energy: 85.3807 J +/- 1.3071 J
+  CV:    1.5% (excellent)
+Time:   1.0806 s +/- 0.0022 s
+Validity: valid
+```
 
-#### 5. System & Sensor Information
-![System Info](assets/screenshots/04_info.png)
-*Displaying detailed information about the installation, hardware, and available energy providers.*
+## 3. Find the expensive function
 
-#### 6. Workload Benchmarking
-![Benchmark](assets/screenshots/05_benchmark.png)
-*Running built-in synthetic workloads to verify sensor precision and system overhead.*
+```console
+$ codegreen analyze python sorting_comparison.py
+...
+Instrumentation points: 8
+...
+$ codegreen measure python sorting_comparison.py -g fine --sensors rapl
+...
+Energy: 82.6265 J
+Time:   1.0699 s
+Power:  77.23 W
 
-#### 7. Static Code Analysis
-![Code Analysis](assets/screenshots/06_analyze.png)
-*Statically analyzing source code to identify function boundaries and instrumentation points using Tree-sitter.*
+  Function                         Excl J     Incl J    Calls  Quality
+  bubble_sort                     81.1461    81.1461        1  measured
+  quick_sort                       1.3354    16.1971     5581  aggregate_only
+  generate_data                    0.1394     0.1394        1  below_resolution
+  main                             0.0056    82.6265        1  measured
+Validity: valid
+```
 
-#### 8. Fine-Grained Energy Measurement
-![Energy Measurement](assets/screenshots/07_measure.png)
-*Executing and measuring real-time energy consumption with function-level attribution.*
+## 4. Profile a project
 
-#### 9. Configuration Management
-![Configuration](assets/screenshots/08_config.png)
-*Viewing and managing global configuration settings for measurement precision and sensor domains.*
+```console
+$ codegreen project python . --run-cmd "python3 main.py" --sensors rapl
+...
+  Rank  Function                              Excl%   Incl%   Self  Verdict    Calls    uJ/call
+  ----------------------------------------------------------------------------------------------------
+  1     heavy                                 96.3%   96.3%  1.00 TYPE_2_INEFFICIENT        1 19834337.0
+  2     medium                                 3.7%    3.7%  1.00    minor        1   757954.0
+  3     light                                  0.0%    0.0%  1.00    minor        1     1762.0
+Validity: valid
+```
 
-#### 10. System Diagnostics
-![Doctor](assets/screenshots/09_doctor.png)
-*Running the CodeGreen Doctor to diagnose and fix potential configuration or dependency issues.*
+## Where next
+
+- The scripts: [Python deep dive](examples/python.md) (steps 2 and 3),
+  [09 - Project hotspots (Python)](examples/09_project_hotspots_python.md)
+  (step 4).
+- [Quick Start](getting-started/quickstart.md) and the
+  [CLI reference](user-guide/cli-reference.md).

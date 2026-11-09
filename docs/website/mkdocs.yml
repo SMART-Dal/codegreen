@@ -1,5 +1,5 @@
 site_name: CodeGreen
-site_description: Energy-aware software development tool for measuring and optimizing code energy consumption
+site_description: Hardware energy measurement for software, down to individual functions
 site_author: CodeGreen Team
 site_url: https://smart-dal.github.io/codegreen/
 
@@ -150,14 +150,14 @@ nav:
     - Quick Start: getting-started/quickstart.md
     - Configuration: getting-started/configuration.md
   - User Guide:
-    - CLI Reference: user-guide/cli-reference.md
-    - Configuration Reference: user-guide/configuration-reference.md
     - Energy Measurement: user-guide/energy-measurement.md
-    - Continuous Monitoring: user-guide/continuous-monitoring.md
+    - CLI Reference: user-guide/cli-reference.md
     - Project Profiling: user-guide/project-profiling.md
-    - Code Analysis: user-guide/code-analysis.md
+    - Continuous Monitoring: user-guide/continuous-monitoring.md
     - Reports and Visualization: user-guide/reports.md
+    - Code Analysis: user-guide/code-analysis.md
     - CI/CD Integration: user-guide/cicd-integration.md
+    - Configuration Reference: user-guide/configuration-reference.md
   - API Reference:
     - Python API: api/python.md
     - Core Engine: api/core.md
@@ -186,6 +186,7 @@ nav:
       - Python (manual + auto): examples/python.md
       - C/C++: examples/cpp.md
       - Java: examples/java.md
+  - Blog: blog/energy-numbers-you-can-trust.md
   - About:
     - Changelog: about/changelog.md
     - License: about/LICENSE

@@ -1,53 +1,50 @@
 # Building from Source
 
+`./install.sh` does all of this in one step; see
+[Installation](../getting-started/installation.md#from-source). The manual
+steps:
+
 ## Prerequisites
 
-- Python 3.8+
-- CMake 3.16+
-- GCC 7+ or Clang (C++17)
-- System libraries: `libjsoncpp-dev`, `libcurl4-openssl-dev`, `libsqlite3-dev`
+- Python 3.9 or later
+- CMake 3.16 or later, `make` and a C++17 compiler (GCC or Clang)
+- Optional: a JDK (`JNI`) for the Java runtime bridge, the NVIDIA driver for
+  NVML
 
-## Build Steps
+## Build
 
 ```bash
 git clone https://github.com/SMART-Dal/codegreen.git
 cd codegreen
-git submodule update --init --recursive
+git submodule update --init --recursive    # Tree-sitter grammars
 
-# Build C++ backend
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release        # Debug or RelWithDebInfo also work
+make -j"$(nproc)"
 cd ..
 
-# Install Python CLI
-pip install -e .
-
-# Initialize sensors
-sudo codegreen init-sensors
+pip install -e .                           # the codegreen CLI
+sudo codegreen init-sensors                # Linux: RAPL read access
 ```
-
-## Build Output
 
 | Artifact | Path |
-|----------|------|
-| NEMB shared library | `lib/libcodegreen-nemb.so` |
-| CLI entry point | `codegreen` (via pip) |
+|---|---|
+| NEMB shared library | `build/lib/libcodegreen-nemb.so`, copied to `lib/libcodegreen-nemb.so` |
+| CLI | `codegreen` on the environment's `PATH` (from `pip install -e .`) |
 
-## Build Options
-
-```bash
-# Debug build
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-
-# Release with debug info
-cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
-```
-
-## Verification
+## Verify
 
 ```bash
 codegreen --version
-codegreen doctor
+codegreen doctor --test-sensors
 codegreen measure-workload --duration 3
+```
+
+## Tests
+
+```bash
+pip install -e ".[dev,all]"
+pytest tests --ignore=tests/test_examples.py   # as in CI; energy tests skip without RAPL or NVML
+pytest tests/test_examples.py                  # runs the examples/ scripts
+cd build && make nemb-validation-test && ./bin/nemb-validation-test   # native validation tests
 ```

@@ -1,652 +1,190 @@
 # CI/CD Integration
 
-Guide to integrating CodeGreen energy measurements into your CI/CD pipelines.
+CodeGreen can fail a pipeline when a workload uses more energy than a budget,
+or more than the base branch. This page shows the gate, a regression check,
+per-function budgets, and what the runner must provide.
 
-## Overview
+## Runner requirements
 
-CodeGreen can be integrated into continuous integration pipelines to:
-- Track energy consumption trends over time
-- Detect energy regressions in pull requests
-- Enforce energy budgets for critical functions
-- Generate energy reports in CI artifacts
+Energy is read from hardware counters, so the job must run where they are
+readable:
 
----
+- **Bare metal or a VM that exposes RAPL.** Hosted cloud runners usually do
+  not expose energy counters; use a self-hosted runner on a physical machine.
+- **Counter access.** Run `sudo codegreen init-sensors` once on the runner
+  host (it adds the runner's user to the `codegreen` group and installs a udev
+  rule), then restart the runner service so it picks up the group. Check with
+  `codegreen doctor`.
+- **Containers** need read access to `/sys/class/powercap` (and the NVIDIA
+  driver for GPU energy), for example by running privileged.
+- **A quiet machine.** RAPL counts the whole package, including other jobs on
+  the same host. Run energy jobs one at a time on dedicated, identical
+  hardware, ideally with a fixed CPU frequency governor
+  (`sudo cpupower frequency-set --governor performance`).
+
+Install with `pip install codegreen` in the job (wheels for Linux x86_64 and
+aarch64).
+
+## Exit codes
+
+| Exit | Meaning | Pipeline action |
+|---|---|---|
+| 0 | Valid measurement, within budget | pass |
+| 1 | Mean energy above `--budget`, the command failed, or no energy could be read | fail |
+| 3 | Invalid measurement (see `validity.reasons`), checked before the budget | fail, or retry: the number is not a measurement |
+
+A gate that treats any non-zero exit as failure is correct; distinguish 3
+when you want to retry instead of reporting a regression. Setting
+`measurement.report.validity.fail_on_invalid` to `false` turns exit 3 into 0,
+which lets invalid numbers pass silently, so keep the default in CI.
+
+## Energy budget gate
+
+```bash
+codegreen run --repeat 10 --warmup 1 --sensors rapl --budget 60 -- python3 sums.py
+```
+
+```bash
+set +e
+codegreen run --repeat 10 --sensors rapl --budget 60 --json -- python3 sums.py > energy.json
+status=$?
+set -e
+case $status in
+  0) echo "within budget" ;;
+  1) echo "over budget or command failed"; exit 1 ;;
+  3) echo "invalid measurement: $(python3 -c 'import json; print(json.load(open("energy.json"))["validity"]["reasons"])')"; exit 1 ;;
+esac
+```
+
+`--sensors rapl` keeps GPU energy out of a CPU workload's total; omit it (or
+list `rapl nvidia`) when the GPU is part of the workload. Set the budget from
+several runs on the same runner: look at `energy_j.mean`,
+`energy_j.cv_percent_across_runs` and the 95 % interval in the JSON.
+
+## Regression check against the base branch
+
+Measure the base and the head on the same runner in the same job, then
+compare the means. This script fails only when the head is more than the
+given percentage above the base and the two 95 % intervals do not overlap:
+
+```python
+# compare_energy.py BASE.json HEAD.json MAX_INCREASE_PCT
+import json, sys
+
+def mean_energy(path):
+    r = json.load(open(path))
+    if r["validity"]["status"] != "valid":
+        sys.exit(f"{path}: invalid measurement: {r['validity']['reasons']}")
+    return r["energy_j"]["mean"], r["energy_j"]["ci95_upper"] - r["energy_j"]["mean"]
+
+base, base_ci = mean_energy(sys.argv[1])
+head, head_ci = mean_energy(sys.argv[2])
+limit = float(sys.argv[3])
+change = (head - base) / base * 100
+print(f"base {base:.2f} J (+/-{base_ci:.2f}), head {head:.2f} J (+/-{head_ci:.2f}), change {change:+.1f}%")
+sys.exit(1 if change > limit and head - head_ci > base + base_ci else 0)
+```
+
+```bash
+git worktree add ../base "origin/$BASE_BRANCH"
+(cd ../base && codegreen run --repeat 10 --sensors rapl --json -- python3 bench.py) > base.json
+codegreen run --repeat 10 --sensors rapl --json -- python3 bench.py > head.json
+python3 compare_energy.py base.json head.json 5
+```
+
+Two back-to-back measurements of the same program on an AMD EPYC 9554P:
+
+```console
+$ python3 compare_energy.py base.json head.json 5
+base 59.08 J (+/-0.61), head 60.27 J (+/-1.93), change +2.0%
+```
+
+## Per-function budgets
+
+`codegreen measure -g fine --json` reports each function's exclusive energy.
+A budget file maps function names to joules:
+
+```python
+# check_functions.py REPORT.json BUDGETS.json
+import json, sys
+
+report, budgets = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+if report["validity"]["status"] != "valid":
+    sys.exit(f"invalid measurement: {report['validity']['reasons']}")
+over = {f: report["per_function_energy"][f]["exclusive_j"] for f, limit in budgets.items()
+        if report["per_function_energy"][f]["exclusive_j"] > limit}
+for f, j in over.items():
+    print(f"{f}: {j:.2f} J exclusive > budget {budgets[f]} J")
+sys.exit(1 if over else 0)
+```
+
+```console
+$ codegreen measure python sums.py -g fine --sensors rapl --json > report.json
+$ echo '{"square_sum": 30.0, "cube_sum": 25.0}' > budgets.json
+$ python3 check_functions.py report.json budgets.json
+square_sum: 35.82 J exclusive > budget 30.0 J
+```
+
+Only budget functions whose `quality` is `measured` (or at least
+`aggregate_only`); `measure` exits 3 on an invalid run, so check its exit
+code before running the script. For multi-file projects use
+`codegreen project --json` and its `exclusive_energy_j` field.
 
 ## GitHub Actions
 
-### Basic Energy Measurement
-
 ```yaml
-name: Energy Profiling
-
-on:
-  pull_request:
-    branches: [ main ]
-  push:
-    branches: [ main ]
+name: energy
+on: [pull_request]
 
 jobs:
-  energy-profile:
-    runs-on: ubuntu-latest
-
+  energy:
+    runs-on: [self-hosted, energy]      # bare-metal runner with init-sensors applied
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Install CodeGreen
-        run: |
-          git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
-          cd /tmp/codegreen
-          ./install.sh
-          echo "/tmp/codegreen/bin" >> $GITHUB_PATH
-
-      - name: Initialize Sensors
-        run: sudo codegreen init-sensors
-
-      - name: Measure Energy
-        run: |
-          codegreen measure python tests/benchmark.py \
-            -g fine \
-            --output results/energy.json \
-            --json
-
-      - name: Upload Energy Report
-        uses: actions/upload-artifact@v3
+      - uses: actions/checkout@v4
         with:
-          name: energy-report
-          path: results/energy.json
-```
-
-### Energy Regression Detection
-
-```yaml
-name: Energy Regression Check
-
-on:
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  energy-regression:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install CodeGreen
+          fetch-depth: 0
+      - run: pip install codegreen
+      - name: Measure base and head
         run: |
-          # ... installation steps ...
-
-      - name: Measure PR Energy
-        run: |
-          codegreen measure python src/main.py \
-            --output pr-energy.json --json
-
-      - name: Checkout Main Branch
-        run: |
-          git fetch origin main
-          git checkout main
-
-      - name: Measure Main Energy
-        run: |
-          codegreen measure python src/main.py \
-            --output main-energy.json --json
-
-      - name: Compare Energy
-        run: |
-          python3 scripts/compare_energy.py \
-            main-energy.json pr-energy.json \
-            --threshold 10
-```
-
-**Energy Comparison Script** (`scripts/compare_energy.py`):
-```python
-import json, sys
-
-def get_energy(path):
-    data = json.load(open(path))
-    cps = data.get("measurement", {}).get("checkpoints", [])
-    if len(cps) >= 2:
-        return cps[-1]["joules"] - cps[0]["joules"]
-    return 0.0
-
-def compare_energy(main_file, pr_file, threshold):
-    main_e = get_energy(main_file)
-    pr_e = get_energy(pr_file)
-    change = ((pr_e - main_e) / main_e * 100) if main_e > 0 else 0
-    print(f"Main: {main_e:.2f} J | PR: {pr_e:.2f} J | Change: {change:+.1f}%")
-    if change > threshold:
-        print(f"Energy regression: {change:.1f}% > {threshold}%")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    compare_energy(sys.argv[1], sys.argv[2], float(sys.argv[3]))
-```
-
-### Matrix Testing Across Hardware
-
-```yaml
-name: Multi-Platform Energy Testing
-
-on: [push]
-
-jobs:
-  energy-test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, ubuntu-22.04]
-        granularity: [coarse, fine]
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install CodeGreen
-        run: ./scripts/install_codegreen.sh
-
-      - name: Run Energy Tests
-        run: |
-          codegreen measure python tests/suite.py \
-            -g ${{ matrix.granularity }} \
-            -o energy-${{ matrix.os }}-${{ matrix.granularity }}.json \
-            --json
-
-      - name: Upload Results
-        uses: actions/upload-artifact@v3
+          git worktree add ../base "origin/${{ github.base_ref }}"
+          (cd ../base && codegreen run --repeat 10 --sensors rapl --json -- python3 bench.py) > base.json
+          codegreen run --repeat 10 --sensors rapl --json -- python3 bench.py > head.json
+      - name: Compare
+        run: python3 compare_energy.py base.json head.json 5
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: energy-results-${{ matrix.os }}-${{ matrix.granularity }}
-          path: energy-*.json
+          name: energy
+          path: "*.json"
 ```
-
----
 
 ## GitLab CI
 
-### Basic Pipeline
-
 ```yaml
-# .gitlab-ci.yml
-
-stages:
-  - setup
-  - measure
-  - report
-
-install_codegreen:
-  stage: setup
+energy:
+  tags: [energy]                        # bare-metal runner with init-sensors applied
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
-    - git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
-    - cd /tmp/codegreen && ./install.sh
+    - pip install codegreen
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - git worktree add ../base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - (cd ../base && codegreen run --repeat 10 --sensors rapl --json -- python3 bench.py) > base.json
+    - codegreen run --repeat 10 --sensors rapl --json -- python3 bench.py > head.json
+    - python3 compare_energy.py base.json head.json 5
   artifacts:
-    paths:
-      - /tmp/codegreen/bin/codegreen
-    expire_in: 1 hour
-
-measure_energy:
-  stage: measure
-  dependencies:
-    - install_codegreen
-  script:
-    - export PATH="/tmp/codegreen/bin:$PATH"
-    - sudo codegreen init-sensors
-    - codegreen measure python app/main.py --output energy.json --json
-  artifacts:
-    reports:
-      metrics: energy.json
-    paths:
-      - energy.json
-    expire_in: 30 days
-
-generate_report:
-  stage: report
-  dependencies:
-    - measure_energy
-  script:
-    - python3 scripts/generate_energy_report.py energy.json > report.md
-  artifacts:
-    paths:
-      - report.md
-    expire_in: 30 days
+    when: always
+    paths: ["*.json"]
 ```
 
-### Merge Request Energy Check
-
-```yaml
-energy_mr_check:
-  stage: measure
-  only:
-    - merge_requests
-  script:
-    - export PATH="/tmp/codegreen/bin:$PATH"
-    - sudo codegreen init-sensors
-
-    # Measure MR branch
-    - codegreen measure python app/main.py --output mr_energy.json --json
-
-    # Fetch and measure target branch
-    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
-    - git checkout $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
-    - codegreen measure python app/main.py --output target_energy.json --json
-
-    # Compare
-    - python3 scripts/compare_energy.py target_energy.json mr_energy.json --threshold 15
-  allow_failure: true
-```
-
----
-
-## Jenkins Pipeline
-
-### Declarative Pipeline
-
-```groovy
-pipeline {
-    agent any
-
-    stages {
-        stage('Install CodeGreen') {
-            steps {
-                sh '''
-                    git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
-                    cd /tmp/codegreen
-                    ./install.sh
-                '''
-            }
-        }
-
-        stage('Initialize Sensors') {
-            steps {
-                sh 'sudo /tmp/codegreen/bin/codegreen init-sensors'
-            }
-        }
-
-        stage('Energy Measurement') {
-            steps {
-                sh '''
-                    export PATH="/tmp/codegreen/bin:$PATH"
-                    codegreen measure python src/application.py \
-                        -g fine \
-                        --output energy-${BUILD_NUMBER}.json \
-                        --json
-                '''
-            }
-        }
-
-        stage('Archive Results') {
-            steps {
-                archiveArtifacts artifacts: 'energy-*.json', fingerprint: true
-            }
-        }
-
-        stage('Trend Analysis') {
-            steps {
-                sh '''
-                    python3 -c "
-import json
-data = json.load(open('energy-${BUILD_NUMBER}.json'))
-cps = data.get('measurement', {}).get('checkpoints', [])
-if len(cps) >= 2:
-    energy = cps[-1]['joules'] - cps[0]['joules']
-    print(f'Total Energy: {energy:.2f} J')
-"
-                '''
-            }
-        }
-    }
-
-    post {
-        always {
-            cleanWs()
-        }
-    }
-}
-```
-
----
-
-## Docker Integration
-
-### Dockerfile for CI
-
-```dockerfile
-FROM ubuntu:22.04
-
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    pkg-config \
-    libjsoncpp-dev \
-    libcurl4-openssl-dev \
-    libsqlite3-dev \
-    python3 \
-    python3-pip \
-    git
-
-# Install CodeGreen
-RUN git clone https://github.com/SMART-Dal/codegreen.git /opt/codegreen && \
-    cd /opt/codegreen && \
-    ./install.sh
-
-ENV PATH="/opt/codegreen/bin:${PATH}"
-
-# Initialize sensors (requires privileged mode)
-# Note: Run container with --privileged flag
-RUN codegreen doctor
-
-WORKDIR /workspace
-```
-
-### Docker Compose for CI
-
-```yaml
-version: '3.8'
-
-services:
-  codegreen-ci:
-    build:
-      context: .
-      dockerfile: Dockerfile.codegreen
-    privileged: true
-    volumes:
-      - ./src:/workspace/src
-      - ./results:/workspace/results
-    command: |
-      bash -c "
-        sudo codegreen init-sensors &&
-        codegreen measure python /workspace/src/main.py \
-          --output /workspace/results/energy.json \
-          --json
-      "
-```
-
-**Run:**
-```bash
-docker-compose run codegreen-ci
-```
-
----
-
-## Travis CI
-
-```yaml
-# .travis.yml
-
-language: python
-python:
-  - "3.9"
-
-before_install:
-  - git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
-  - cd /tmp/codegreen && ./install.sh
-  - export PATH="/tmp/codegreen/bin:$PATH"
-
-install:
-  - pip install -r requirements.txt
-
-before_script:
-  - sudo codegreen init-sensors
-
-script:
-  - codegreen measure python tests/benchmark.py --output energy.json --json
-
-after_success:
-  - python scripts/upload_energy_metrics.py energy.json
-```
-
----
-
-## CircleCI
-
-```yaml
-# .circleci/config.yml
-
-version: 2.1
-
-jobs:
-  energy-measurement:
-    docker:
-      - image: ubuntu:22.04
-    steps:
-      - checkout
-
-      - run:
-          name: Install CodeGreen
-          command: |
-            apt-get update
-            apt-get install -y git build-essential cmake python3
-            git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
-            cd /tmp/codegreen && ./install.sh
-            echo 'export PATH="/tmp/codegreen/bin:$PATH"' >> $BASH_ENV
-
-      - run:
-          name: Initialize Sensors
-          command: codegreen init-sensors
-
-      - run:
-          name: Measure Energy
-          command: |
-            codegreen measure python app/main.py \
-              --output /tmp/energy.json \
-              --json
-
-      - store_artifacts:
-          path: /tmp/energy.json
-          destination: energy-report
-
-workflows:
-  version: 2
-  energy-workflow:
-    jobs:
-      - energy-measurement
-```
-
----
-
-## Best Practices
-
-### 1. Sensor Initialization
-
-Always initialize sensors before measurements:
-```bash
-sudo codegreen init-sensors
-# OR
-sudo codegreen init-sensors
-```
-
-### 2. Consistent Hardware
-
-Run energy measurements on consistent hardware:
-- Use dedicated CI runners with RAPL support
-- Pin to specific runner tags
-- Document hardware specifications
-
-```yaml
-# GitHub Actions
-runs-on: [self-hosted, energy-capable]
-
-# GitLab CI
-tags:
-  - energy-capable
-  - ubuntu
-```
-
-### 3. Baseline Measurements
-
-Establish energy baselines:
-```bash
-# Store baseline
-codegreen measure python tests/baseline.py --output baseline.json
-
-# Compare against baseline
-python scripts/compare_energy.py baseline.json current.json
-```
-
-### 4. Energy Budgets
-
-Use `codegreen run --budget` for built-in energy budget enforcement. The command exits with a non-zero status if mean energy exceeds the budget, making it suitable for CI gates:
-
-```bash
-# Fail the pipeline if mean energy exceeds 10 Joules
-codegreen run --budget 10.0 --json python tests/benchmark.py
-
-# With multiple repetitions for statistical confidence
-codegreen run --budget 5.0 --repeat 20 --warmup 3 ./my_binary
-```
-
-For per-function budgets with `codegreen measure`:
-```bash
-codegreen measure python app.py --output results.json
-python scripts/check_budget.py results.json energy_budget.json
-```
-
-### 5. Artifact Management
-
-Archive energy reports for historical tracking:
-```yaml
-# GitHub Actions
-- uses: actions/upload-artifact@v3
-  with:
-    name: energy-report-${{ github.sha }}
-    path: energy.json
-    retention-days: 90
-```
-
----
-
-## Troubleshooting CI
-
-### Permission Denied (RAPL)
-
-**Problem:** CI runner can't access `/sys/class/powercap/`
-
-**Solution 1 - Persistent Permissions:**
-```bash
-# Add to runner setup script
-sudo chmod -R 644 /sys/class/powercap/intel-rapl:*/energy_uj
-```
-
-**Solution 2 - Init Sensors:**
-```bash
-sudo codegreen init-sensors
-```
-
-### Docker Privileged Mode
-
-**Problem:** Docker container can't access hardware sensors
-
-**Solution:**
-```yaml
-services:
-  ci:
-    image: ubuntu:22.04
-    privileged: true  # Required for RAPL access
-```
-
-### Inconsistent Results
-
-**Problem:** Energy measurements vary widely between runs
-
-**Solutions:**
-1. Increase measurement duration
-2. Use multiple runs and average
-3. Run on dedicated hardware
-4. Set CPU frequency scaling to performance mode
-
-```bash
-# Set performance mode
-sudo cpupower frequency-set --governor performance
-
-# Run multiple times
-for i in {1..5}; do
-  codegreen measure python app.py --output run-$i.json
-done
-
-# Average results
-python scripts/average_energy.py run-*.json
-```
-
----
-
-## Example: Complete GitHub Actions Workflow
-
-```yaml
-name: Energy CI/CD
-
-on:
-  pull_request:
-    branches: [ main ]
-  push:
-    branches: [ main ]
-
-jobs:
-  energy-check:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: Install CodeGreen
-        run: |
-          git clone https://github.com/SMART-Dal/codegreen.git /tmp/codegreen
-          cd /tmp/codegreen && ./install.sh
-          echo "/tmp/codegreen/bin" >> $GITHUB_PATH
-
-      - name: Initialize Sensors
-        run: sudo codegreen init-sensors
-
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run Energy Measurements
-        run: |
-          mkdir -p results
-          codegreen measure python tests/benchmark.py \
-            -g fine \
-            --output results/energy.json \
-            --json
-
-      - name: Check Energy Budget
-        run: |
-          python scripts/check_budget.py \
-            results/energy.json \
-            config/energy_budget.json
-
-      - name: Generate Report
-        run: |
-          python scripts/generate_report.py \
-            results/energy.json \
-            > results/report.md
-
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            const report = fs.readFileSync('results/report.md', 'utf8');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: report
-            });
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: energy-results
-          path: results/
-```
-
----
-
-## See Also
-
-- [CLI Reference](cli-reference.md) - Complete command reference
-- [Configuration Reference](configuration-reference.md) - Complete configuration guide
-- [Examples](../examples/python.md) - Usage examples
+Other CI systems follow the same pattern: install, run the measurement on a
+dedicated runner, and act on the exit code.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `No energy data collected` (exit 1) | The counters are not readable: run `sudo codegreen init-sensors` on the host and restart the runner; in a container, expose `/sys/class/powercap` |
+| Exit 3 with `RUN_BELOW_RESOLUTION` | The command finishes in a few milliseconds; measure a larger input or loop the work |
+| Warning `GPU_IN_TOTAL` | The total includes GPU energy; pass `--sensors rapl` for CPU-only workloads |
+| High `cv_percent_across_runs` | Other load on the host, frequency scaling or too few runs: use a dedicated runner, the `performance` governor and more `--repeat` |

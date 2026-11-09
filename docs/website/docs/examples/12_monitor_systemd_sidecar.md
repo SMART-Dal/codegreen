@@ -1,142 +1,96 @@
-# 12 — Monitor systemd sidecar (production-shaped, no root)
+# 12 - Monitor systemd sidecar
 
-**Who this is for.** You ran [example 11](11_monitor_socket_standalone.md)
-and want the sidecar to actually behave like a production unit:
-auto-restart on crash, auto-start on boot (with linger), clean SIGTERM
-shutdown, no orphaned processes when your terminal closes or your SSH
-session drops.
+Run the [example 11](11_monitor_socket_standalone.md) sidecar under
+user-mode systemd: restart on failure, clean SIGTERM shutdown, and
+independence from the terminal and the SSH session. No root is needed.
 
-This example wires `codegreen monitor` into a **user-mode** systemd unit
-under `~/.config/systemd/user/`. No `sudo`, no system-wide install, no
-admin assistance. The same unit file (or a near-mirror with `--system`
-paths) is what you ship in production.
+## Source
 
-## Quick run
+[`examples/12_monitor_systemd_sidecar/main.py`](https://github.com/SMART-Dal/codegreen/blob/main/examples/12_monitor_systemd_sidecar/main.py)
+
+```python
+--8<-- "examples/12_monitor_systemd_sidecar/main.py"
+```
+
+## Run
 
 ```bash
-cd codegreen
 python examples/12_monitor_systemd_sidecar/main.py
 ```
 
-Expected last line on a Linux host with systemd:
+The script:
+
+1. Writes `~/.config/systemd/user/codegreen-monitor-<pid>.service` whose
+   `ExecStart` is the `codegreen` on `PATH` with `--listen-on-socket
+   <runtime>/cg.sock -o <runtime>/energy.jsonl --rotate-mb 50
+   --max-in-memory 0 --max-labels 100 --interval 250 --quiet --json`, where
+   `<runtime>` is a directory under `$XDG_RUNTIME_DIR`.
+2. Runs `systemctl --user daemon-reload` and `start`, waits for the socket,
+   and sends 5 requests through a stdlib HTTP server that annotates each one.
+3. Stops the unit, reads the `summary` record from the JSONL file, then
+   disables and deletes the unit and the runtime directory.
+
+It prints a line of the form
 
 ```text
-OK: monitor_systemd_sidecar; labels=3; samples=5; annotation_starts=5; annotation_ends=5; total_j=192.4; unit=codegreen-monitor-1559456.service
+OK: monitor_systemd_sidecar; labels=<n>; samples=<n>; annotation_starts=5; annotation_ends=5; total_j=<J>; unit=codegreen-monitor-<pid>.service
 ```
 
-On macOS, BSD, or a Linux host without per-user systemd
-(`XDG_RUNTIME_DIR` missing), the script prints
-`SKIP: systemd not available` and exits 0. The test harness treats both
-as success.
+and prints `SKIP: systemd not available ...` and exits 0 when
+`systemctl --user` or `XDG_RUNTIME_DIR` is unavailable (macOS, most
+containers).
 
-## What the example does
+## Lifetime
 
-1. Writes a transient `codegreen-monitor-<pid>.service` to
-   `~/.config/systemd/user/`. The unit's `ExecStart` points at the local
-   `codegreen` binary plus the production flag set: `--listen-on-socket
-   <runtime>/cg.sock -o <runtime>/energy.jsonl --rotate-mb 50
-   --max-labels 100 --interval 250 --quiet --json`.
-2. Runs `systemctl --user daemon-reload` + `systemctl --user start
-   codegreen-monitor-<pid>`.
-3. Waits for the monitor to bind the UDS, then drives 5 HTTP requests
-   against an in-process `ThreadingHTTPServer`. The middleware opens an
-   annotation span per request via the socket — same wire as
-   [example 11](11_monitor_socket_standalone.md).
-4. Stops the unit (`systemctl --user stop`), waits for the JSONL summary
-   to land, parses it.
-5. Cleans up: `disable`, removes the unit file, `daemon-reload`,
-   removes the temporary runtime dir.
+| Event | Monitor keeps running | Notes |
+|---|---|---|
+| Terminal close, SSH drop | Yes | systemd owns the process |
+| `systemctl --user stop` | No | SIGTERM: summary written, file closed |
+| Monitor crash | Yes | `Restart=on-failure` |
+| Logout of the last session, reboot | Only with linger | `sudo loginctl enable-linger $USER`, plus `systemctl --user enable` for start at boot |
 
-## Will the monitor survive terminal close, SSH drop, or reboot?
+## System unit
 
-Yes — **with one caveat**.
-
-| Event                | Survives by default? | How to fix                                  |
-|----------------------|----------------------|---------------------------------------------|
-| Terminal close       | Yes                  | systemd owns the process, not your shell.   |
-| SSH session drop     | Yes                  | Same: detached from your login session.     |
-| `systemctl --user stop` | No (by design)    | Clean shutdown path; summary flushed.       |
-| Crash inside monitor | Yes (auto-restart)   | `Restart=on-failure` + `RestartSec=2`.      |
-| Reboot               | Only with linger     | `sudo loginctl enable-linger $USER` once.   |
-
-Without `enable-linger`, the per-user systemd manager exits when your
-last login session ends, taking your monitor with it. With linger,
-the manager stays up across reboots and your unit's `WantedBy=default.target`
-+ `systemctl --user enable` will auto-start it.
-
-## Reusing the unit in production
-
-Production hosts usually want a **system** unit (under `/etc/systemd/system/`)
-running as a dedicated `codegreen` user. The example's unit is the
-template; in production you only swap paths and the `User=` line.
+A system unit runs the monitor as a service account. Because the
+annotation socket has mode 0600, that account must be the one the
+application runs as, and it needs read access to the energy counters
+(`sudo codegreen init-sensors` adds the invoking user to the `codegreen`
+group; add the service account to that group).
 
 ```ini
+# /etc/systemd/system/codegreen-monitor.service
 [Unit]
-Description=CodeGreen continuous monitor (annotation socket sidecar)
-After=network.target
+Description=CodeGreen monitor (annotation socket)
 
 [Service]
-Type=simple
-User=codegreen
+User=www-data
+RuntimeDirectory=codegreen
+LogsDirectory=codegreen
 ExecStart=/usr/local/bin/codegreen monitor \
     --listen-on-socket /run/codegreen/cg.sock \
     -o /var/log/codegreen/energy.jsonl \
-    --rotate-mb 100 --max-in-memory 0 --max-labels 1000 \
-    --interval 500 --quiet --json
+    --rotate-mb 100 --max-in-memory 0 --max-labels 1000 --quiet
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=5
-LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Three things to notice:
-
-- **`ExecReload=/bin/kill -HUP $MAINPID`** — wires `systemctl reload` to
-  SIGHUP, which the Monitor reads as "re-read config without dropping
-  in-flight annotations or the JSONL position". See
-  [continuous-monitoring guide → SIGHUP-reload](../user-guide/continuous-monitoring.md#sighup-reload-policy-changes-without-restart).
-- **`--max-labels 1000`** — caps annotation cardinality so a label
-  source with raw URLs or per-user UUIDs cannot OOM the aggregator.
-  Overflow rolls into a single `__other__` bucket carrying a count + total
-  joules so you still see it happen.
-- **`--rotate-mb 100`** — JSONL rotates at 100 MB; older files keep up to
-  `monitor.rotate_max_backups` (default 5) generations.
-
-## What you get out
-
-Identical to [example 11](11_monitor_socket_standalone.md):
-
-- **`/var/log/codegreen/energy.jsonl`** — durable record, one JSON per line
-  (`header`, `sample`, `annotation_start`, `annotation_end`, optional
-  `reload`, trailing `summary`).
-- **summary.per_label** — aggregated `count`, `joules_total`,
-  `joules_per_call_avg`, `latency_ms_p50`, `latency_ms_p95` per route,
-  plus the `__other__` overflow bucket if the cardinality cap fired.
+- `RuntimeDirectory` and `LogsDirectory` create `/run/codegreen` and
+  `/var/log/codegreen` for the service user; the monitor does not create
+  either directory.
+- The application passes `socket_path="/run/codegreen/cg.sock"` to
+  `codegreen.annotate_request`.
+- `ExecReload` maps `systemctl reload` to SIGHUP, which re-reads
+  `monitor.interval_ms_default`, `monitor.rotate_mb_default`,
+  `monitor.max_samples_in_memory` and `monitor.annotation.max_labels` from
+  the configuration. Those values then replace the command-line options;
+  see [Reloading configuration](../user-guide/continuous-monitoring.md#reloading-configuration).
 
 ## Caveats
 
-- **Linux-only.** macOS uses `launchd`, BSDs use `rc.d`. The wire
-  protocol (UDS annotation socket) is identical across platforms — the
-  example's harness layer is what changes. The test harness `SKIP`s
-  cleanly when systemd is absent.
-- **User mode vs system mode.** User-mode is convenient (no root) but
-  the unit dies when your last login session ends unless linger is
-  enabled. For real production, use a system unit + a dedicated service
-  account.
-- **One monitor per host.** Multiple monitors double-count RAPL. The
-  unit's `Restart=on-failure` plus the socket-uniqueness check in the
-  Monitor prevent two from coming up on the same socket.
-
-## Next steps
-
-- [Continuous monitoring guide](../user-guide/continuous-monitoring.md)
-  — full Monitor / annotation reference + the eight production
-  deployment shapes (Apache/Flask, K8s SaaS, MLOps, batch ETL,
-  IoT/edge, CI/CD, dashboards, compliance).
-- [Example 11](11_monitor_socket_standalone.md) — same sidecar wire,
-  unsupervised (Python subprocess for tests).
-- [Example 08](08_monitor_socket.md) — same UDS protocol, but with the
-  Monitor embedded in the application process.
+- Linux with systemd only; the socket protocol itself is the same
+  everywhere.
+- One monitor per socket path, and energy is host-wide; see
+  [example 11](11_monitor_socket_standalone.md#caveats).

@@ -1,19 +1,19 @@
 # 06 - Monitor host
 
-Run `codegreen.Monitor` (or `codegreen monitor`) to **continuously sample
-host-wide energy** without launching a workload. Useful for already-running
-daemons (Apache, gunicorn, system services) where you can't embed a Session.
+Sample host-wide energy for a fixed duration with `codegreen monitor` and
+read the result from the JSON summary and the JSONL stream. Use this shape
+for a service you cannot modify, or to record the baseline load of a host.
 
 ## What you learn
 
-- `codegreen.Monitor(interval_ms=...)` programmatic form.
-- The shape of each sample: `t`, `joules_total`, `joules_delta`, `watts`.
-- How to stream samples to a JSONL file for offline analysis.
+- Running `codegreen monitor` for a bounded window (`-d`, `-i`).
+- The JSONL stream (`header`, `sample`, `summary` records) and the
+  `--json` summary.
 
 ## Prerequisites
 
 - `pip install codegreen`
-- A backend (RAPL on Linux, IOReport on macOS, EMI on Windows).
+- A working energy provider (`codegreen capabilities energy`).
 
 ## Source
 
@@ -29,30 +29,24 @@ daemons (Apache, gunicorn, system services) where you can't embed a Session.
 python examples/06_monitor_host/main.py
 ```
 
-## Equivalent CLI
+The script runs:
 
 ```bash
-codegreen monitor -d 3 -i 200 -o host.jsonl
+codegreen monitor -d 3 -i 250 -o energy.jsonl --quiet --json
 ```
 
-## Expected output
+## Output
 
+From a run on an AMD EPYC host with an NVIDIA GPU (default sensors, so the
+GPU is in the total); energy depends on the host:
+
+```text
+OK: monitor_host; duration_s=3.00; total_joules=251.925; samples=11; jsonl_samples=11
 ```
-OK: monitor_host; duration_s=3.00; total_joules=0.453; samples=12; jsonl_samples=12
-```
 
-## Why it matters
+Energy is host-wide: every process on the machine is in the total, and two
+monitors on one host observe the same joules. The
+[Continuous Monitoring guide](../user-guide/continuous-monitoring.md)
+documents every record and summary field.
 
-Continuous monitoring closes the gap between **measurement** (you wrote the
-code, you bracket it) and **observation** (you didn't write the daemon,
-you still want to know its energy footprint). The Monitor pulls cumulative
-energy out of the NEMB backend at a fixed interval and computes deltas, so
-you can plot host power over arbitrary windows.
-
-!!! warning "RAPL is system-wide"
-    Monitor reports the host's total CPU package energy. Two Monitor
-    processes on the same socket will both observe the same Joules --
-    they don't subtract each other out.
-
-See also: [User guide: Continuous Monitoring](../user-guide/continuous-monitoring.md),
-[07 - Monitor PID](07_monitor_pid.md).
+See also: [07 - Monitor PID](07_monitor_pid.md).

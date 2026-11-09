@@ -1,178 +1,56 @@
 # Configuration
 
-CodeGreen uses a JSON configuration file to customize behavior and sensor settings.
-This page is the minimum you need on day one; the
-[Configuration Reference](../user-guide/configuration-reference.md) covers
-every key (env vars, paths, language plumbing, migration from older configs).
+CodeGreen works without any configuration. Its defaults live in the bundled
+`codegreen/config.json`; to change one, put only the keys you change in
+`~/.codegreen/config.json`. The [Configuration Reference](../user-guide/configuration-reference.md)
+lists every key, and [Configuration API](../api/config.md) covers file
+resolution and environment variables.
 
-## Configuration File Location
+## Which file is used
 
-- **User override**: `~/.codegreen/config.json` (only the keys you change; the bundled `codegreen/config.json` supplies the rest)
-- **Custom**: `codegreen --config /path/to/config.json ...` or `CODEGREEN_CONFIG=/path/to/config.json`
+The first of:
 
-## Basic Configuration
+1. `codegreen --config PATH ...` or `CODEGREEN_CONFIG=PATH` (a missing file is an error)
+2. `~/.codegreen/config.json`
+3. the bundled `codegreen/config.json`
 
-```json
-{
-  "measurement": {
-    "nemb": {
-      "enabled": true,
-      "coordinator": {
-        "measurement_interval_ms": 1,
-        "measurement_buffer_size": 100000,
-        "auto_restart_failed_providers": true
-      },
-      "timing": {
-        "precision": "high",
-        "clock_source": "auto"
-      },
-      "providers": {
-        "intel_rapl": {
-          "enabled": true,
-          "domains": ["package", "pp0", "dram"]
-        },
-        "nvidia_gpu": {
-          "enabled": true
-        },
-        "amd_gpu": {
-          "enabled": false
-        }
-      }
-    }
-  },
-  "instrumentation": {
-    "checkpoint_strategy": "functions",
-    "language_specific": {
-      "python": {
-        "instrument_loops": false,
-        "max_depth": 10
-      }
-    }
-  },
-  "output": {
-    "format": "json",
-    "verbose": false
-  }
-}
-```
+A user file only needs the keys it changes: the bundled defaults fill in the
+rest.
 
-## Sensor Configuration
+## Common settings
 
-### Available Sensors (NEMB Providers)
-
-- **intel_rapl**: Intel/AMD CPU energy monitoring via RAPL interface
-  - Domains: package, pp0 (cores), pp1 (GPU), dram, psys (platform)
-  - Interface: `/sys/class/powercap/intel-rapl:*`
-  - Platforms: Linux (Intel/AMD x86_64)
-
-- **nvidia_gpu**: NVIDIA GPU monitoring via NVML
-  - Requires: NVIDIA drivers and CUDA toolkit
-  - Platforms: Linux
-
-- **amd_gpu**: AMD GPU via ROCm
-  - Requires: ROCm drivers and libraries
-  - Platforms: Linux only
-
-### Sensor Settings
+Measure the CPU package only, unless `--sensors` says otherwise:
 
 ```json
-{
-  "measurement": {
-    "nemb": {
-      "providers": {
-        "intel_rapl": {
-          "enabled": true,
-          "domains": ["package", "pp0", "pp1", "dram", "psys"]
-        },
-        "nvidia_gpu": {
-          "enabled": true,
-          "device_indices": [0]
-        },
-        "amd_gpu": {
-          "enabled": false
-        }
-      }
-    }
-  }
-}
+{"measurement": {"default_sensors": ["rapl"]}}
 ```
 
-**Sensor Details:**
-- **intel_rapl**: Reads `/sys/class/powercap/intel-rapl:*` (requires permissions)
-- **nvidia_gpu**: Uses NVIDIA Management Library (requires CUDA drivers)
-- **amd_gpu**: AMD GPU via ROCm (Linux only)
+The sensor names are `rapl`, `amd_cpu`, `nvidia` and `amd_gpu`
+(`measurement.sensor_providers`). The default, `"all"`, sums every provider
+that initializes, GPUs included.
 
-## Measurement Settings
+Sample the counters every 5 ms instead of 10 ms (finer per-function
+resolution, more sampler overhead):
 
 ```json
-{
-  "measurement": {
-    "nemb": {
-      "coordinator": {
-        "measurement_interval_ms": 1,
-        "measurement_buffer_size": 100000,
-        "auto_restart_failed_providers": true,
-        "provider_restart_interval": 5000
-      },
-      "timing": {
-        "precision": "high",
-        "clock_source": "auto"
-      }
-    }
-  }
-}
+{"measurement": {"nemb": {"coordinator": {"measurement_interval_ms": 5}}}}
 ```
 
-**Precision Levels:**
-- `low`: 100ms sampling, ~0.01% overhead, ±10% accuracy
-- `medium`: 10ms sampling, ~0.1% overhead, ±5% accuracy
-- `high`: 1ms sampling, ~1% overhead, ±2% accuracy
-
-**Clock Sources:**
-- `auto`: Automatically select best available (TSC → MONOTONIC_RAW → MONOTONIC)
-- `tsc`: Time Stamp Counter (x86/x64 only, highest precision)
-- `monotonic`: CLOCK_MONOTONIC (all platforms)
-
-## Output Settings
+Report invalid measurements without failing the command (exit 0 instead of 3):
 
 ```json
-{
-  "output": {
-    "format": "json",       // json, table, csv
-    "verbose": false,       // detailed output
-    "save_to_file": true,   // save results to file
-    "output_dir": "~/.codegreen/results"
-  }
-}
+{"measurement": {"report": {"validity": {"fail_on_invalid": false}}}}
 ```
 
-## Environment Variables
-
-- `CODEGREEN_CONFIG`: Path to configuration file
-- `CODEGREEN_DEBUG`: Enable debug output
-- `CODEGREEN_LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
-- `CODEGREEN_CHECKPOINT_THROTTLE_MS`: Minimum interval (ms) between checkpoint recordings; reduces overhead for high-frequency checkpoints
-
-## Configuration Commands
+## Commands
 
 ```bash
-# Show current configuration
-codegreen config --show
-
-# Edit configuration in default editor
-codegreen config --edit
-
-# Validate configuration syntax
-python3 -m json.tool ~/.codegreen/config.json
-
-# Reset to default configuration
-codegreen config --reset
+codegreen config            # summary of the active settings
+codegreen config --show     # full JSON of the active file
+codegreen config --edit     # open ~/.codegreen/config.json in $EDITOR (a full copy of the active file if missing)
+codegreen config --reset    # delete ~/.codegreen/config.json
+codegreen init              # detect providers and write them to the user config
 ```
 
-## Configuration File Locations (Priority Order)
-
-1. `--config PATH` or `CODEGREEN_CONFIG`
-2. `~/.codegreen/config.json` (user configuration)
-3. the bundled `codegreen/config.json` (package defaults)
-
-See [Configuration File Locations](../user-guide/configuration-reference.md#configuration-file-locations).
+A file that is not valid JSON raises an error naming it; there is no silent
+fallback to defaults.

@@ -1,278 +1,140 @@
 # Python deep dive
 
-A detailed walk-through of every Python entry point that ships with
-CodeGreen. New here? Start with the [Quickstart](../getting-started/quickstart.md)
-or the [Examples index](index.md) for short, runnable scripts. Looking up
-a parameter or field? Jump to the [Python API](../api/python.md).
+Python has three entry points, each measuring a different window:
 
-This page complements the numbered, single-purpose examples
-([01](01_quickstart_measure.md)-[10](10_codegreen_vs_perf.md)). The 10
-canonical scripts show *how to use a feature in 30 lines*; this page
-shows *every form, every flag, every caveat*.
+| Entry point | Window | Code changes |
+|---|---|---|
+| `codegreen run -- python3 script.py` | The whole process, per run, with repeat statistics | none |
+| `codegreen.Session` | The tasks you mark inside the process | a few lines |
+| `codegreen measure python script.py` | `main` (coarse) or every function (`-g fine`) | none (instrumented copy) |
 
-The first half of this page covers the in-process `codegreen.Session`, the recommended interface. The second half covers the `codegreen measure` auto-instrumenter for legacy / no-source-edit scenarios.
+The [numbered examples](index.md) are short runnable scripts; this page
+covers each entry point in more depth. Field-by-field schemas are in the
+[Python API](../api/python.md). The outputs below come from an AMD EPYC
+9554P host with `--sensors rapl` (or `measurement.default_sensors` set to
+`["rapl"]`).
 
-## Manual measurement with `codegreen.Session`
+## `codegreen.Session` { #manual-measurement-with-codegreensession }
 
-`Session` brackets in-process code regions and reads RAPL/NVML hardware counters directly. No CLI wrapper, no AST instrumentation, no extra subprocess.
+`Session` reads the energy counters at the start and end of each task in
+the running process. No subprocess, no instrumentation.
 
-### Context-manager form (recommended)
+### Task forms
 
 ```python
 import codegreen
 
+# 1. Context manager
 with codegreen.Session("training-run") as s:
     with s.task("data_load"):
         load_data()
     with s.task("train"):
         train_model()
-    with s.task("eval"):
-        evaluate()
-# at exit: writes codegreen_<pid>.json with per-task energy + per-domain breakdown
-```
 
-### Explicit `start_task` / `stop_task`
-
-For sequential measurement points where a `with` block is awkward:
-
-```python
-import codegreen
-
+# 2. Explicit start/stop
 s = codegreen.Session("pipeline").start()
-
 s.start_task("preprocess")
-preprocess_data()
-s.stop_task("preprocess")          # name is asserted; mismatch raises RuntimeError
+preprocess()
+s.stop_task("preprocess")      # optional name check: a mismatch raises RuntimeError
+report = s.stop()              # the report dict; also written to codegreen_<pid>.json
 
-s.start_task("train")
-model.fit(...)
-s.stop_task("train")
-
-s.start_task("eval")
-score = model.evaluate(...)
-s.stop_task("eval")
-
-report = s.stop()                  # returns dict; writes codegreen_<pid>.json
-```
-
-Identical semantics to the context-manager form — both call the same internal `_begin_task` / `_end_task`. Pass `expected_name` to `stop_task()` to assert you're closing the right task; omit it to just close the innermost.
-
-### Decorator form
-
-```python
-import codegreen
-
+# 3. Decorator: each call is one task of the active Session
 @codegreen.task("inference")
 def infer(batch): ...
 
 with codegreen.Session("svc"):
     for b in batches:
-        infer(b)        # each call is one task
+        infer(b)
 ```
 
-### Accessing raw results
+Tasks nest: a task opened inside another gets `depth` and `parent`, and
+`totals` sum only depth-0 tasks.
 
-`Session.stop()` returns a dict you can inspect directly. The same dict gets written to `codegreen_<pid>.json` (or your `output_file=`).
+### Reading results
+
+`stop()` returns the report and writes it to `codegreen_<pid>.json` (or
+`output_file=`; a `.csv` path writes one row per task). The report has the
+top-level keys `meta`, `tasks`, `totals`, `sampler` and `validity`.
+`s.tasks` gives the same tasks as `TaskResult` objects:
 
 ```python
-import json, os
-import codegreen
-
-with codegreen.Session("training", record_time_series=True) as s:
-    with s.task("epoch1"): train_epoch()
-    with s.task("epoch2"): train_epoch()
-
-# Mid-flight access via .tasks (list of TaskResult dataclasses)
 for t in s.tasks:
-    print(t.name, t.energy_j, t.avg_power_w, t.duration_s)
-    print("  per-domain (J):", t.domains)        # {"package-0": ..., "core": ..., "gpu0": ...}
-    if t.timeseries:
-        for sample in t.timeseries[:3]:
-            print("  sample:", sample)
-            # {"t_ns":     20364878312447553,                  # CLOCK_MONOTONIC ns
-            #  "energy_j": 7.94,                                # cumulative system energy (J)
-            #  "power_w":  37.4,                                # system instantaneous power (W)
-            #  "domain_j": {"package-0": 7.92, "core": 0.0018, "gpu0": 0.022},  # cumulative J per domain
-            #  "domain_w": {"package-0": 31.5, "core": 0.27,   "gpu0": 5.6}}    # avg W per domain
-
-# Or load from disk afterwards
-with open(f"codegreen_{os.getpid()}.json") as f:
-    report = json.load(f)
+    print(t.name, t.energy_j, t.avg_power_w, t.duration_s, t.domains)
 ```
 
-For the full `TaskResult` schema, see the [Python API → TaskResult fields](../api/python.md#taskresult-fields).
+Check `report["validity"]["status"]` before using the numbers. `stop()` also
+raises each validity reason and warning as a `RuntimeWarning`
+(`codegreen: CODE: text`). A task shorter than ten provider update
+intervals, for example, is named in `TASK_BELOW_RESOLUTION`.
 
-To get power-vs-time arrays for any plotting library:
+### Time series and plots
+
+`record_time_series=True` stores the sampler readings inside each task
+(sampler period `measurement.nemb.coordinator.measurement_interval_ms`,
+10 ms by default). A sample from a CPU and GPU host:
 
 ```python
-import numpy as np
-
-t = s.tasks[0]
-times_s = [(p["t_ns"] - t.timeseries[0]["t_ns"]) / 1e9 for p in t.timeseries]
-powers  = [p["power_w"] for p in t.timeseries]
-energy  = np.trapz(powers, times_s)   # ~ t.energy_j to within ~0.2%
-
-# Per-domain power straight off the sample (e.g. GPU only):
-gpu_w = [p["domain_w"].get("gpu0", 0.0) for p in t.timeseries]
+{'t_ns': 37131993282157589, 'energy_j': 48.3493825807655, 'power_w': 104.141271051358,
+ 'domain_j': {'core': 0.025084, 'package-0': 41.301301, 'gpu0': 7.0480815807655},
+ 'domain_w': {'core': 0.015189966917642, 'package-0': 78.9542710513576, 'gpu0': 25.187}}
 ```
 
-### Plot export — `Session.export_plot(path)`
+`t_ns` is a monotonic timestamp, `energy_j` and `domain_j` are cumulative
+from the start of the session, `power_w` and `domain_w` are averages since
+the previous sample. Power and energy arrays for any plotting library:
 
-The format is chosen from the file extension; no extra arguments:
+```python
+t = s.tasks[0]
+ts = t.timeseries
+times_s = [(p["t_ns"] - ts[0]["t_ns"]) / 1e9 for p in ts]
+power_w = [p["power_w"] for p in ts]
+gpu_w = [p["domain_w"].get("gpu0", 0.0) for p in ts]
+```
+
+Integrating `power_w` over the samples gives the energy between the first
+and the last sample. A task's `energy_j` also covers the few milliseconds
+before its first and after its last sample. In a two-task CPU run (0.89 s
+and 1.80 s, 88 and 178 samples) the trapezoidal integral was 67.86 J vs
+`energy_j` 68.86 J, and 137.80 J vs 138.82 J.
+
+`Session.export_plot(path)` draws power over time, one trace per task. The
+extension selects the format: `.html` (Plotly), `.png`, `.svg` or `.pdf`
+(matplotlib); any other extension writes HTML to the path with `.html` as
+its extension. Install the plotting
+libraries with `pip install plotly matplotlib` (or the `viz` extra when
+installing from source); without them, and without
+`record_time_series=True`, `export_plot` writes nothing.
 
 ```python
 with codegreen.Session("infer", record_time_series=True) as s:
-    with s.task("warmup"): warmup()
-    with s.task("batch1"): infer(batch1)
-    with s.task("batch2"): infer(batch2)
-
-    s.export_plot("infer.html")    # interactive Plotly (zoom/pan/hover)
-    s.export_plot("infer.png")     # static matplotlib
-    s.export_plot("infer.svg")     # vector
-    s.export_plot("infer.pdf")     # publication-ready
+    with s.task("batch1"):
+        infer(batch1)
+    with s.task("batch2"):
+        infer(batch2)
+    s.export_plot("infer.html")
 ```
 
-Each task is a separate trace. Y-axis = power (W), x-axis = wall time relative to first sample. **Area under each task's curve = that task's energy** (verified <=0.2% deviation against the NEMB-reported total via trapezoidal integration on a 5 s task with ~4,800 samples).
+Each task with time series also gets a `noise` summary (power CV, samples
+captured vs expected, quality label); see
+[Noise / quality reporting](../api/python.md#noise--quality-reporting).
 
-`export_plot` requires `record_time_series=True`. Without time series, the call is a no-op.
+### Behavior
 
-> **Note.** Enabling `record_time_series=True` runs an in-process drain thread that pulls samples out of the C++ ring buffer. The mean of total energy is unchanged (≤ 0.3 % vs sampling off, well within run-to-run jitter), but the run-to-run **spread is slightly wider** because the drain thread occasionally competes with the workload for CPU. Use it during development for plots and the noise/quality summary; turn it off for production benchmark runs that want the tightest possible CV. See the [API reference](../api/python.md#noise--quality-reporting) for the full breakdown.
+- One Session per process; a second one raises `RuntimeError`.
+- Each thread keeps its own task stack.
+- A Session that is never stopped is finalized at exit and its file is
+  written.
+- In a forked child, tasks are no-ops; only the parent reports.
+- Without the native library the Session warns once and records nothing.
+- Energy counters are system-wide: two CodeGreen processes measuring at the
+  same time both count each other's work. The constructor warns when it
+  finds another one.
 
-### Real-world example: text generation with per-domain attribution
+## `codegreen measure`: per-function energy
 
-A mixed CPU/GPU workload: tokenization runs on the CPU, the transformer forward pass runs on the GPU when present, and CodeGreen breaks the resulting energy down by hardware domain so you can see where the joules went.
-
-```python
-import codegreen, torch
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-tok    = GPT2Tokenizer.from_pretrained("gpt2")
-tok.pad_token = tok.eos_token
-model  = GPT2LMHeadModel.from_pretrained("gpt2").to(device).eval()
-
-prompts = [
-    "Energy-aware computing is",
-    "The cheapest way to train a model is",
-    "Hardware energy counters report",
-]
-
-with codegreen.Session("gpt2-gen", record_time_series=True) as s:
-    with s.task("tokenize"):
-        batch = tok(prompts, padding=True, return_tensors="pt").to(device)
-    with s.task("generate"):
-        with torch.no_grad():
-            out = model.generate(**batch, max_new_tokens=64, do_sample=False)
-    with s.task("decode"):
-        completions = tok.batch_decode(out, skip_special_tokens=True)
-    s.export_plot("gpt2-gen.html")
-
-for t in s.tasks:
-    print(f"{t.name:<10} {t.energy_j:7.2f} J   {t.avg_power_w:6.1f} W   "
-          f"{t.duration_s:5.2f} s   domains={t.domains}")
-```
-
-Measured output on an AMD EPYC 9554P + NVIDIA RTX 5000 Ada host (3 prompts, 64 new tokens each):
-
-```
-tokenize      0.12 J    84.3 W   0.00 s   domains={'core': 0.0003, 'gpu0': 0.044,  'package-0': 0.080}
-generate     84.78 J   123.3 W   0.69 s   domains={'core': 0.174,  'gpu0': 29.85,  'package-0': 54.93}
-decode        0.25 J   163.7 W   0.00 s   domains={'core': 0.0004, 'gpu0': 0.088,  'package-0': 0.159}
-```
-
-`package-0` and `core` are RAPL CPU-package readings (Intel/AMD); `dram-0` appears on Intel hosts with separate DRAM counters; `gpu0` is NVML for the first NVIDIA GPU. On a CPU-only host the GPU domain simply isn't present — same code, the report just narrows.
-
-#### Per-domain power directly from `domain_w`
-
-Each timeseries sample carries a `domain_w` map giving the average watts for each hardware domain since the previous sample, so you can extract a per-domain power trace with no manual `Δenergy/Δt` arithmetic:
-
-```python
-gen = next(t for t in s.tasks if t.name == "generate")
-ts  = gen.timeseries
-
-t0     = ts[0]["t_ns"]
-times  = [(p["t_ns"] - t0) / 1e9 for p in ts]
-gpu_w  = [p["domain_w"].get("gpu0", 0.0)      for p in ts]    # NVIDIA GPU only
-cpu_w  = [p["domain_w"].get("package-0", 0.0) for p in ts]    # CPU package only
-total_w = [p["power_w"]                       for p in ts]    # sum of all domains
-```
-
-`domain_w` is computed in C++ as `(domain_j[now] - domain_j[prev]) / (t_ns[now] - t_ns[prev])` — i.e. an interval-average from the underlying counter, not a derived figure — so trapezoidal integration recovers `domain_j` to within 0.05 % across 1 ms / 5 ms / 20 ms sampling rates. Domains whose provider does not expose per-domain wattage (Darwin IOReport, Windows EMI, AMD RAPL) are absent rather than reported as `0.0`, so a missing key means "not measured", not "zero watts".
-
-#### Sanity-check: same workload, different access modes
-
-The shipped `benchmark/cg_modes_compare.py` runs an identical GPT-2 generation workload three times — once via `codegreen run`, once bracketed under `codegreen.Session` from inside the script, and once with bare `time.perf_counter()` for a wall-clock control:
-
-```bash
-python -m benchmark.cg_modes_compare      # 3 repeats per mode
-```
-
-Real run, same hardware, 32 prompts x 128 tokens:
-
-| mode                     | energy (J)        | power (W) | wall (s) | runs |
-|--------------------------|-------------------|----------:|---------:|------|
-| Bare (timing only)       | n/a               | n/a       | 5.64     | 3/3  |
-| `codegreen run` (CLI)    | 831.56 +/- 2.36   | 148.6     | 5.59     | 3/3  |
-| `codegreen.Session`      | 667.26 +/- 5.11   | 139.6     | 4.78     | 3/3  |
-
-Three observations:
-
-- **Coefficient of variation is 0.3% / 0.8%** across repeats — the readings are tight and reproducible. Instrumentation isn't adding noise.
-- **The two modes agree on power** (within ~6%): both are reading the same RAPL/NVML counters. The small spread is the natural difference between busy and idle phases of the process.
-- **The 19.8% gap in total joules is not error — it's span.** `codegreen run` brackets the entire Python subprocess (interpreter startup, every `import`, atexit, GC); `Session` brackets only the in-process region you put around the script body. The 0.81 s wall-time difference, multiplied by ~140 W steady-state power, accounts for ~113 J of the ~164 J delta — exactly what you'd expect from measuring different windows.
-
-Pick the mode that matches the question: "what does this script cost end-to-end?" -> `codegreen run`; "what does this code region cost?" -> `Session`.
-
-### Caveats
-
-- **One Session per process.** Constructing a second while one is active raises `RuntimeError`.
-- **Mismatched `stop_task("X")`** raises `RuntimeError` naming the actually-innermost task.
-- **Forgotten `stop()`** is recovered by an `atexit` hook; file written, drain thread joined.
-- **Forked children** become no-ops automatically; only the parent reports.
-- **Concurrent CodeGreen processes on the same host** trigger a warning at construction (RAPL is system-wide; readings overlap).
-- **No NEMB lib loaded** -> graceful no-op with a one-time warning; your program still runs.
-
-## Auto-instrumentation via `codegreen measure`
-
-For scripts where you don't want to (or can't) edit the source, `codegreen measure` parses the file with tree-sitter and injects checkpoints at function boundaries.
-
-### Basic auto-instrumentation
-
-```python
-# hello_energy.py
-def greet(name):
-    message = f"Hello, {name}!"
-    return message
-
-def calculate_sum(n):
-    total = sum(range(n))
-    return total
-
-def main():
-    result = greet("CodeGreen")
-    print(result)
-    total = calculate_sum(1000000)
-    print(f"Sum: {total}")
-
-if __name__ == "__main__":
-    main()
-```
-
-**Measure:**
-```bash
-# Coarse mode: total program energy
-codegreen measure python hello_energy.py
-
-# Fine mode: per-function breakdown
-codegreen measure python hello_energy.py -g fine
-
-# With visualization
-codegreen measure python hello_energy.py -g fine --export-plot energy.html
-```
-
-## Algorithm comparison
-
-Compare energy consumption of different sorting implementations:
+`codegreen measure python script.py` instruments a temporary copy of the
+script and runs it. Coarse granularity (the default) brackets `main`;
+`-g fine` brackets every function.
 
 ```python
 # sorting_comparison.py
@@ -302,183 +164,165 @@ def quick_sort(arr):
 
 def main():
     data = generate_data(5000)
-    bubble_result = bubble_sort(data)
-    print(f"Bubble sort first: {bubble_result[0]}")
-    quick_result = quick_sort(data)
-    print(f"Quick sort first: {quick_result[0]}")
-
-if __name__ == "__main__":
-    main()
-```
-
-**Measure with per-function breakdown:**
-```bash
-codegreen measure python sorting_comparison.py -g fine --export-plot sorting.html
-```
-
-The energy timeline will show `bubble_sort` consuming significantly more energy than `quick_sort` due to O(n^2) vs O(n log n) complexity.
-
-## Optimization before/after
-
-**Before (inefficient):**
-```python
-# string_concat_slow.py
-def concatenate_slow(n):
-    result = ""
-    for i in range(n):
-        result += f"item{i},"
-    return result
-
-def main():
-    result = concatenate_slow(50000)
-    print(f"Length: {len(result)}")
-
-if __name__ == "__main__":
-    main()
-```
-
-**After (optimized):**
-```python
-# string_concat_fast.py
-def concatenate_fast(n):
-    parts = []
-    for i in range(n):
-        parts.append(f"item{i},")
-    return "".join(parts)
-
-def main():
-    result = concatenate_fast(50000)
-    print(f"Length: {len(result)}")
-
-if __name__ == "__main__":
-    main()
-```
-
-**Compare:**
-```bash
-codegreen measure python string_concat_slow.py -o slow.json
-codegreen measure python string_concat_fast.py -o fast.json
-```
-
-The join-based version typically uses 70-85% less energy.
-
-## Matrix operations
-
-CPU-intensive computation:
-
-```python
-# matrix_multiply.py
-def create_matrix(rows, cols, value):
-    return [[value] * cols for _ in range(rows)]
-
-def matrix_multiply(a, b):
-    rows_a, cols_a = len(a), len(a[0])
-    cols_b = len(b[0])
-    result = [[0] * cols_b for _ in range(rows_a)]
-    for i in range(rows_a):
-        for j in range(cols_b):
-            for k in range(cols_a):
-                result[i][j] += a[i][k] * b[k][j]
-    return result
-
-def main():
-    size = 200
-    a = create_matrix(size, size, 1.5)
-    b = create_matrix(size, size, 2.0)
-    result = matrix_multiply(a, b)
-    print(f"Result[0][0]: {result[0][0]}")
+    print(bubble_sort(data)[0], quick_sort(data)[0])
 
 if __name__ == "__main__":
     main()
 ```
 
 ```bash
-codegreen measure python matrix_multiply.py -g fine --export-plot matrix.html
+codegreen measure python sorting_comparison.py -g fine --sensors rapl
 ```
 
-## Recursive vs iterative
+```text
+Energy: 82.6265 J
+Time:   1.0699 s
+Power:  77.23 W
+
+  Function                         Excl J     Incl J    Calls  Quality
+  bubble_sort                     81.1461    81.1461        1  measured
+  quick_sort                       1.3354    16.1971     5581  aggregate_only
+  generate_data                    0.1394     0.1394        1  below_resolution
+  main                             0.0056    82.6265        1  measured
+Validity: valid
+```
+
+How to read it:
+
+- **Exclusive** energy (`Excl J`, `exclusive_j`) is the energy inside a
+  function minus its instrumented callees. Exclusive energies partition the
+  run: here they sum to the 82.63 J total.
+- **Inclusive** energy (`Incl J`, `inclusive_j`, also reported as
+  `energy_j`) adds the callees and is summed over every call. For a
+  recursive function each nested call's window is counted again, so
+  `quick_sort` shows 16.20 J inclusive against 1.34 J exclusive. Inclusive
+  sums are not shares of the total.
+- **Quality**: `measured` when each call spans enough sampler readings,
+  `aggregate_only` when only the summed time of all calls does (5581 short
+  recursive calls), `below_resolution` when not even that (`generate_data`
+  ran for a few milliseconds).
+
+The JSON report (`--json` or `-o file.json`) carries the same values per
+function in `per_function_energy`, plus `validity`; see
+[Reports](../user-guide/reports.md).
+
+### Overhead of fine granularity
+
+Fine mode adds an enter and an exit checkpoint to every call, so call-heavy
+code slows down and its energy rises with it. A recursive `fib(25)` that
+runs in 0.02 s uninstrumented took 0.49 s under `-g fine`:
+
+```text
+Energy: 37.9124 J
+Time:   0.4883 s
+Power:  77.64 W
+
+  Function                         Excl J     Incl J    Calls  Quality
+  fib                             37.9085   647.3114   242785  aggregate_only
+  main                             0.0039    37.9124        1  measured
+Validity: valid
+```
+
+`fib(30)` (about 2.7 million calls) exceeds
+`measurement.report.max_checkpoints` and the run is invalid with
+`CHECKPOINT_CAP` (exit code 3). Use coarse mode or `codegreen run` for
+totals, and fine mode to locate hotspots in code with moderate call counts.
+
+A run that is too short to resolve is also invalid: a 12 ms script fails
+with `TOTAL_BELOW_RESOLUTION` (the root window must span at least two
+sampler readings, 10 ms apart by default).
+
+## Before and after: `codegreen run`
+
+To compare two versions of a program, measure each with `codegreen run` and
+several repeats. It needs no instrumentation and resolves short runs
+(RAPL counters update every millisecond).
 
 ```python
-# fibonacci.py
-def fibonacci_recursive(n):
-    if n <= 1:
-        return n
-    return fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2)
-
-def fibonacci_iterative(n):
-    if n <= 1:
-        return n
-    a, b = 0, 1
-    for _ in range(2, n + 1):
-        a, b = b, a + b
-    return b
+# lookup_list.py; lookup_set.py is identical with set(...) instead of list(...)
+def count_hits(queries, allowed):
+    return sum(1 for q in queries if q in allowed)
 
 def main():
-    n = 30
-    print(f"Recursive: {fibonacci_recursive(n)}")
-    print(f"Iterative: {fibonacci_iterative(n)}")
+    allowed = list(range(0, 20_000, 2))
+    print(count_hits(range(20_000), allowed))
 
 if __name__ == "__main__":
     main()
 ```
 
 ```bash
-codegreen measure python fibonacci.py -g fine --export-plot fib.html
+codegreen run --repeat 5 --sensors rapl -- python3 lookup_list.py
+codegreen run --repeat 5 --sensors rapl -- python3 lookup_set.py
 ```
 
-The recursive version consumes orders of magnitude more energy due to exponential function calls.
+| Version | Energy (J) | Time (s) | CV | Validity |
+|---|---:|---:|---:|---|
+| `list` membership | 85.38 +/- 1.31 | 1.0806 | 1.5% | valid |
+| `set` membership | 1.064 +/- 0.044 | 0.0133 | 4.1% | valid |
 
-## Common CLI patterns
+To see which function a change moved, save one `measure` report per
+version and compare the JSON. `count_counter.py` replaces the body of
+`count` in `count_loop.py` with `return Counter(words)`:
+
+```python
+# count_loop.py
+def count(words):
+    counts = {}
+    for w in words:
+        counts[w] = counts.get(w, 0) + 1
+    return counts
+
+def main():
+    words = [f"w{i % 5000}" for i in range(4_000_000)]
+    print(len(count(words)))
+
+if __name__ == "__main__":
+    main()
+```
 
 ```bash
-# Quick energy measurement of any command (no instrumentation)
-codegreen run python script.py --repeat 10
-
-# Energy budget enforcement (exits non-zero if exceeded)
-codegreen run --budget 5.0 python script.py
-
-# Basic measurement (coarse, 2 checkpoints)
-codegreen measure python script.py
-
-# Fine granularity (all functions)
-codegreen measure python script.py -g fine
-
-# JSON output to stdout
-codegreen measure python script.py --json
-
-# Save results to file
-codegreen measure python script.py -o results.json
-
-# Interactive HTML plot
-codegreen measure python script.py -g fine --export-plot energy.html
-
-# Static PNG plot (requires matplotlib)
-codegreen measure python script.py -g fine --export-plot energy.png
-
-# Keep instrumented code for inspection
-codegreen measure python script.py --no-cleanup
-
-# Pass arguments to the script
-codegreen measure python script.py -- arg1 arg2
-
-# Analyze without running (static analysis only)
-codegreen analyze python script.py --verbose
+codegreen measure python count_loop.py -g fine --sensors rapl -o loop.json
+codegreen measure python count_counter.py -g fine --sensors rapl -o counter.json
 ```
 
-## Best practices
+```python
+import json
 
-1. **Use fine mode for profiling**: `-g fine` shows per-function energy breakdown.
-2. **Use coarse mode for totals**: default mode gives total energy with minimal overhead.
-3. **Consistent data**: use the same seeds for random inputs when comparing.
-4. **Multiple runs**: average 3-5 runs for stable results.
-5. **Avoid I/O during profiling**: file I/O adds measurement noise.
-6. **Return results**: use function return values to prevent dead-code elimination.
+for path in ("loop.json", "counter.json"):
+    r = json.load(open(path))
+    f = r["per_function_energy"]["count"]
+    print(f'{path:13} {r["validity"]["status"]:6} total {r["summary"]["total_energy_j"]:6.2f} J'
+          f'  count {f["exclusive_j"]:6.2f} J ({f["quality"]})')
+```
+
+```text
+loop.json     valid  total  61.94 J  count  23.87 J (measured)
+counter.json  valid  total  54.93 J  count  17.99 J (measured)
+```
+
+The total includes building the word list in `main`, which did not change;
+`count` alone fell from 23.87 J to 17.99 J. These are single runs: repeat
+them, or use `codegreen run --repeat`, before trusting a difference this
+size.
+
+Measure every candidate the same way: an optimization that seems obvious
+can cost more. On CPython 3.13, building a 2-million-item string with `+=`
+used 20.36 J and the same with `"".join` used 23.46 J (five runs each).
+
+## Practices
+
+- Pass `--sensors rapl` (or set `measurement.default_sensors`) unless you
+  want GPU energy in the total.
+- Check `validity` (or the exit code: 3 means invalid) before reading
+  numbers.
+- Make workloads long enough: a few hundred milliseconds or more for
+  `measure` and Session tasks; GPU providers update slower than RAPL.
+- Use the same inputs and seeds when comparing versions, and repeat runs.
 
 ## See also
 
-- [Quickstart](../getting-started/quickstart.md)
 - [Python API](../api/python.md)
 - [CLI reference](../user-guide/cli-reference.md)
 - [Reports and visualization](../user-guide/reports.md)
-- [C/C++ examples](cpp.md)
-- [Java examples](java.md)
+- [C/C++](cpp.md), [Java](java.md)

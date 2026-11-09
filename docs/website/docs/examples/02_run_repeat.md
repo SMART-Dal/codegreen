@@ -1,20 +1,20 @@
 # 02 - Run with repeats
 
-Get a tight mean and coefficient-of-variation across multiple runs of the
-same command. Demonstrates the `--repeat` / `--warmup` knobs and the
-outlier-removed statistics that ship with `codegreen run`.
+Run the same command several times and report the mean energy and its
+coefficient of variation (CV) with `codegreen run --repeat 5 --warmup 1`.
 
-## What you learn
-
-- How `--warmup` discards the first N runs (filesystem cache, JIT, etc.).
-- How `--repeat` builds a sample for mean / std / 95% CI.
-- How to read `energy_j.mean`, `energy_j.std`, `energy_j.ci95`, and the
-  outlier-removed counts.
+- `--warmup N` runs the command N times unmeasured first (file cache, JIT).
+  Warmup runs never enter the statistics.
+- `--repeat N` measured runs give the mean, standard deviation, min, max and
+  95% confidence interval in `energy_j`, `duration_s` and `power_w`.
+- Only runs that read a positive energy enter the statistics. Failed, zero
+  or negative readings are listed in `runs.status` and make the result
+  invalid (exit code 3); when no run reads energy, `run` exits 1.
 
 ## Prerequisites
 
-- `pip install codegreen`
-- Linux RAPL or macOS IOReport.
+- `pip install codegreen` and a working energy backend (see
+  [Installation](../getting-started/installation.md)).
 
 ## Source
 
@@ -30,20 +30,27 @@ outlier-removed statistics that ship with `codegreen run`.
 python examples/02_run_repeat/main.py
 ```
 
-## Expected output
-
-```
-OK: run_repeat; mean_energy_j=0.8123; cv_pct=2.40; n=5
+```text
+OK: run_repeat; mean_energy_j=14.5196; cv_pct=6.36; n=5
 ```
 
-## Why it matters
+The JSON fields the script reads:
 
-The killer feature of CodeGreen's CLI mode is **stable means without
-manual scripting**. Hyperfine pioneered this for wall time; `codegreen run`
-extends it to RAPL energy. A CV under 5% on a sub-second workload tells you
-the measurement is repeatable. CV above 20% is a signal that the workload
-is too short, the host is contended, or another CodeGreen session is
-overlapping.
+| Field | Meaning |
+|---|---|
+| `energy_j.mean` | Mean energy over the measured runs (J) |
+| `energy_j.cv_percent_across_runs` | Standard deviation / mean, in percent |
+| `runs.measurement_runs` | The `--repeat` value |
+| `runs.energy_valid` | Runs that entered the statistics |
+
+## Reading the CV
+
+With three or more runs the text report labels the CV: excellent below 5%,
+good below 15%, moderate below 30%, high noise above. A high CV usually means the workload is too
+short, the host is busy, or another process reads the same counters. Raise
+`--repeat`, lengthen the workload, or quiet the host. Outlier filtering is
+off by default; `measurement.report.outlier_method: "iqr_<k>"` adds a
+`filtered` block next to the unfiltered statistics.
 
 See also: [01 - Quickstart](01_quickstart_measure.md),
 [CLI reference: `run`](../user-guide/cli-reference.md#run).

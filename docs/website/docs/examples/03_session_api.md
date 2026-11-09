@@ -1,20 +1,20 @@
 # 03 - Session API
 
-Use `codegreen.Session` from inside a long-running Python program to attribute
-energy to **specific code regions** instead of the whole subprocess. Shows
-the context-manager form and the `@codegreen.task` decorator side-by-side.
+Measure regions inside a running Python program with `codegreen.Session`
+instead of the whole process. The example uses two of the three task forms:
+explicit `start_task` / `stop_task` and the `@codegreen.task` decorator
+(the third is `with s.task(...)`).
 
-## What you learn
-
-- `codegreen.Session("name")` as a top-level context.
-- `with s.task("region"):` to bracket a region.
-- `@codegreen.task("name")` to bracket a whole function.
-- Where the per-task JSON lands on disk (`codegreen_<pid>.json`).
+`codegreen run` covers the whole process, including interpreter start-up and
+imports. A Session reads the same counters in-process, only at the
+boundaries of the tasks you mark, and writes a JSON report without spawning
+a child process.
 
 ## Prerequisites
 
-- `pip install codegreen` and a working backend (Linux RAPL / macOS IOReport).
-- One Session per process -- the CLI wrapper and this API cannot overlap.
+- `pip install codegreen` and a working energy backend.
+- One Session per process: a second `Session` raises `RuntimeError` while
+  the first is active.
 
 ## Source
 
@@ -30,22 +30,20 @@ the context-manager form and the `@codegreen.task` decorator side-by-side.
 python examples/03_session_api/main.py
 ```
 
-## Expected output
+Output with `measurement.default_sensors` set to `["rapl"]`:
 
+```text
+.../codegreen_runtime.py:1431: RuntimeWarning: codegreen: TASK_BELOW_RESOLUTION: 1 task(s) shorter than 10 provider resolutions (first ['warmup']): their energy is not resolved
+OK: session_api; tasks=2; total_energy_j=8.1415; hot_loop_result=2666664666667000000
 ```
-OK: session_api; tasks=2; total_energy_j=0.9320; hot_loop_result=1333332333333000000
-```
 
-A `codegreen_<pid>.json` is left in the working directory with the full
-per-task breakdown, per-domain energy, and metadata.
-
-## Why it matters
-
-`codegreen run` measures *the whole subprocess*, including interpreter
-startup and imports. For libraries and ML scripts you usually only care
-about the inner region. Session API brackets just that region, reads the
-same RAPL/NVML counters in-process, and writes a structured JSON without
-spawning a child process.
+The report is also written to `codegreen_<pid>.json` in the working
+directory, with the top-level keys `meta`, `tasks`, `totals`, `sampler` and
+`validity`. The `warmup` task lasted 1.2 ms, under ten RAPL update intervals,
+so `validity.warnings` names it in `TASK_BELOW_RESOLUTION`; its energy is
+reported but not resolved. `stop()` also raises every validity reason and
+warning as a Python `RuntimeWarning`.
 
 See also: [Python API: Session](../api/python.md#manual-api-codegreensession),
-[05 - GPT-2 staged](05_gpt2_staged.md) for the same API on a real ML workload.
+[Python deep dive](python.md),
+[05 - GPT-2 staged](05_gpt2_staged.md) for the same API on an ML workload.

@@ -2,11 +2,12 @@
 
 Complete reference for the `codegreen` command-line interface.
 
-The CLI is grouped into four panels: **Measurement** (`measure`, `analyze`,
-`run`, `monitor`, `project`, `timeline`), **Setup** (`init`, `config`,
-`init-sensors`), **Diagnostics** (`info`, `capabilities`, `doctor`), and **Validation**
-(`benchmark`; `validate`/`validate-accuracy`/`measure-workload` are hidden
-but still functional).
+`codegreen --help` groups the commands into four panels: **Measurement**
+(`measure`, `analyze`, `run`, `monitor`, `project`, `timeline`), **Setup**
+(`init`, `config`, `init-sensors`), **Diagnostics** (`info`, `capabilities`,
+`doctor`) and **Validation** (`benchmark`). Three more commands
+(`measure-workload`, `validate`, `validate-accuracy`) are hidden from the
+help but work. Every command accepts `-h`/`--help`.
 
 ## Global Options
 
@@ -16,10 +17,10 @@ codegreen [OPTIONS] COMMAND [ARGS]...
 
 | Option | Description |
 |--------|-------------|
-| `--debug, --verbose` | Enable verbose diagnostic output |
-| `--config PATH` | Path to configuration file |
+| `--debug, --verbose` | Verbose diagnostic output (sets `CODEGREEN_DEBUG=1`, which also shows the native library's provider messages) |
+| `--config PATH` | Configuration file to use (sets `CODEGREEN_CONFIG`) |
 | `-v, --version` | Show version and exit |
-| `--log-level [DEBUG\|INFO\|WARNING\|ERROR]` | Set logging level (default: INFO) |
+| `--log-level [DEBUG|INFO|WARNING|ERROR]` | Accepted; has no effect in 0.5.0 (it sets `CODEGREEN_LOG_LEVEL`, which nothing reads) |
 | `--install-completion` | Install shell completion |
 | `--show-completion` | Print shell completion script |
 | `-h, --help` | Show help message |
@@ -28,7 +29,7 @@ codegreen [OPTIONS] COMMAND [ARGS]...
 
 ### `measure`
 
-Instruments code, executes it, and measures energy consumption using hardware sensors.
+Instruments a single source file, runs it, and reports its energy, per function with `-g fine`.
 
 ```bash
 codegreen measure [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} SCRIPT [ARGS]...
@@ -38,16 +39,16 @@ codegreen measure [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} SCRIPT [ARGS
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output PATH` | Output file for results |
-| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors to measure (repeatable; the keys of `measurement.sensor_providers`). Default: `measurement.default_sensors` |
-| `-p, --precision [low\|medium\|high]` | Measurement precision (default: high) |
-| `-g, --granularity [coarse\|fine]` | Instrumentation level (default: coarse) |
+| `-o, --output PATH` | Also write the `--json` report to this file |
+| `-s, --sensors [rapl|nvidia|amd_gpu|amd_cpu]` | Sensors to measure (repeatable; the keys of `measurement.sensor_providers`). Default: `measurement.default_sensors` |
+| `-p, --precision [low|medium|high]` | Accepted for compatibility; has no effect in 0.5.0 (the sampler period is `measurement.nemb.coordinator.measurement_interval_ms`) |
+| `-g, --granularity [coarse|fine]` | Instrumentation level (default: coarse) |
 | `--export-plot PATH` | Export energy timeline (HTML default, or PNG/PDF) |
-| `-t, --timeout INTEGER` | Timeout in seconds |
+| `-t, --timeout INTEGER` | Kill the program after this many seconds (default: 300); the result is then invalid (`INCOMPLETE_TIMEOUT`) |
 | `--verbose` | Verbose output |
 | `--json` | Output results in JSON format |
-| `--no-cleanup` | Keep temporary files |
-| `--instrumented` | Script is already instrumented |
+| `--no-cleanup` | Keep the instrumented copy and other temporary files |
+| `--instrumented` | Run the file as given, without instrumenting it (it already contains checkpoint calls) |
 
 **Granularity:**
 
@@ -73,14 +74,21 @@ that mixes GPU and CPU providers carries the warning `GPU_IN_TOTAL`. Use
 `--sensors rapl` for CPU-only energy. The same option exists on `run` and
 `project`.
 
-**JSON output.** Besides `instrumentation_audit` and `error`:
+**JSON output.** Top-level keys: `success`, `file`, `language`,
+`granularity`, `source_fingerprint` (SHA-256 of the source), `system`
+(`kernel`, `cpu_model`, `governor`), `instrumentation_points`,
+`optimization_suggestions`, `instrumentation_audit`, `error` when the run
+failed, and:
 
 - `summary`: `total_energy_j`, `wall_time_s`, `avg_power_w`,
   `checkpoint_count`, `energy_by_provider`, `providers`, `sensors_requested`,
   `exclusive_sum_j`, `exclusive_sum_ratio`, `overlapping_threads`.
-- `per_function_energy`: per function `inclusive_j`, `exclusive_j`,
-  `energy_j` (= inclusive), `wall_time_s`, `avg_power_w`, `calls`, `quality`.
-  Every call on every thread is replayed. `quality` is the per-function
+- `per_function_energy`: per function `inclusive_j` (energy including
+  callees, summed over every call), `exclusive_j` (without callees; the
+  exclusive energies partition the run), `energy_j` (= `inclusive_j`),
+  `wall_time_s` (summed over calls), `avg_power_w`, `calls` and `quality`.
+  Every call on every thread is replayed, so a recursive function's inclusive
+  energy counts each nested frame and can exceed the total. `quality` is the
   verdict shared with `project` (see [Per-function quality](#per-function-quality)).
 - `checkpoints`: the NEMB result block (`checkpoint_id`, `timestamp`,
   `joules`, `watts`, `ri`, `clamp`, `provider_j`).
@@ -117,7 +125,7 @@ codegreen measure python main.py -o results.json
 
 ### `run`
 
-Measure energy consumption of any shell command with hardware-level precision via RAPL, NVML, or IOReport. No code instrumentation required.
+Runs a command `--repeat` times and reports the mean energy, time and power with their spread. No instrumentation: energy is read at the start and end of each run.
 
 ```bash
 codegreen run [OPTIONS] COMMAND...
@@ -131,21 +139,23 @@ Use `--` before commands that have their own flags; otherwise flags such as
 | Option | Description |
 |--------|-------------|
 | `-n, --repeat INTEGER` | Number of repetitions (default: 10) |
-| `-w, --warmup INTEGER` | Unmeasured warmup runs before the measured ones (default: 1; `runs.warmup_runs`) |
+| `-w, --warmup INTEGER` | Unmeasured warmup runs before the measured ones, each limited to 300 s (default: 1; `runs.warmup_runs`) |
 | `--stdin TEXT` | Bind this file as the subprocess's stdin on every repeat (cat/hash/ETL workloads) |
 | `--json` | Output results as JSON |
-| `--budget FLOAT` | Energy budget in Joules; exits with error if mean exceeds budget |
+| `--budget FLOAT` | Energy budget in joules; exit 1 when the mean energy exceeds it |
 | `--validate / --no-validate` | Execute the command once, unmeasured, before measuring (default: validate). A failing command is also caught by the first measured run |
 | `--validate-timeout INTEGER` | Seconds allowed for the validation run (default: 300) |
 | `--timeout INTEGER` | Per-run limit in seconds (default: none) |
-| `-s, --sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors summed into the energy (default: `measurement.default_sensors`) |
+| `-s, --sensors [rapl|nvidia|amd_gpu|amd_cpu]` | Sensors summed into the energy (default: `measurement.default_sensors`) |
 
-**Output includes:**
+**Output.** Mean energy with standard deviation, min/max range, 95 %
+confidence interval and coefficient of variation; mean time and power; the
+per-domain breakdown; the validity verdict. With `--json`:
 
-- Mean energy (Joules) with standard deviation
-- 95% confidence interval
-- Min/max range
-- Mean wall time with standard deviation
+- `meta`, `command`, `backend` (`name`, `driver`, `domains_seen`), `runs`
+  (`attempted`, `energy_valid`, `excluded`, `energies_j`, `status`,
+  `warmup_runs`, `measurement_runs`, ...), `budget_exceeded`, `budget_j`
+  with `--budget`, `sampler` and `validity`.
 - `energy_j`, `duration_s`, `power_w` (mean of per-run energy/time),
   `domains` (mean joules) and `domains_power_w` (mean of per-run domain
   joules/time) cover every `ok` run, unfiltered. With
@@ -157,25 +167,27 @@ Use `--` before commands that have their own flags; otherwise flags such as
   `negative_energy`, `read_failed`). Only `ok` runs enter the statistics.
 - A `validity` block (`--json`) with `checks.affinity_cpus` and
   `checks.resolution_ms`. Fatal reasons: `RUN_BELOW_RESOLUTION` (mean run
-  shorter than `min_run_updates` resolutions; the resolution is the slowest
-  selected provider's update interval, plus the sampler interval when a
-  provider integrates power), `ZERO_ENERGY_RUNS`, `NEGATIVE_ENERGY_RUNS` and
-  `PROVIDER_READ_FAILED`. A backend without provider facts (perf,
-  powermetrics) gets the warning `RESOLUTION_UNKNOWN`. An invalid result exits
-  3 with `success: false` and `error: "invalid_measurement: ..."`, before the
-  `--budget` check. `sampler` carries the provider facts.
+  shorter than `min_run_updates` update intervals of the finest selected
+  provider; for a provider that integrates power, the sampler interval when
+  that is longer), `ZERO_ENERGY_RUNS`, `NEGATIVE_ENERGY_RUNS` and
+  `PROVIDER_READ_FAILED`. Warnings include `COARSE_PROVIDER_RESOLUTION`
+  (runs too short for a slower selected provider, typically a GPU) and, for a
+  backend without provider facts (perf, powermetrics), `RESOLUTION_UNKNOWN`.
+  An invalid result exits 3 with `success: false` and
+  `error: "invalid_measurement: ..."`, before the `--budget` check.
 
 Energy is read synchronously at each run boundary. During the runs the NEMB
 background sampler is slowed to `measurement.run_path.sampler_interval_ms`
 (reported as `meta.run_sampler_interval_ms`; `null` when unchanged, which
 happens when a selected provider has `boundary_source: integrated_power`, since
-its run energy is integrated from the samples). For short commands use `--repeat`
-and `--warmup` rather than one long-tailed run.
+its run energy is integrated from the samples). A command that ends in a few
+milliseconds is `RUN_BELOW_RESOLUTION` (10 RAPL updates are 10 ms on a 1 ms
+counter); put a loop around the work or measure a longer input.
 
 **Examples:**
 ```bash
-# Measure a Python script with 10 runs
-codegreen run python script.py
+# Measure a Python script with 10 runs, CPU package only
+codegreen run --sensors rapl -- python3 script.py
 
 # Command with its own flags
 codegreen run -- python3 -c "sum(range(10**7))"
@@ -201,58 +213,24 @@ codegreen run --no-validate --timeout 600 -- ./long_job
 
 ### `monitor`
 
-Continuously sample system energy without launching a workload. Use for
-already-running services where `Session` cannot be embedded. See the
-[Continuous Monitoring guide](continuous-monitoring.md) for the full
-walkthrough.
+Samples system energy continuously without launching a workload, for
+services that are already running. Samples sum the providers of
+`measurement.default_sensors` (there is no `--sensors` option). The options
+(`--duration`, `--interval`, `--pid`, `--output`, `--rotate-mb`,
+`--max-in-memory`, `--max-labels`, `--listen-on-socket`,
+`--attribution-mode`, `--exporter`, `--otlp-endpoint`, `--prometheus-port`,
+`--prometheus-listen-addr`, `--json`, `--quiet`) are described in
+[Continuous Monitoring: CLI](continuous-monitoring.md#cli).
 
 ```bash
-codegreen monitor [OPTIONS]
-```
-
-| Option | Description |
-|--------|-------------|
-| `-d, --duration FLOAT` | Stop after N seconds (default: run until Ctrl-C) |
-| `-i, --interval INTEGER` | Sample period in ms (config floor of 50 ms enforced) |
-| `-p, --pid INTEGER` | Attribute energy to this process via CPU% share |
-| `-o, --output PATH` | Stream samples as JSON-lines to this file |
-| `--rotate-mb INTEGER` | Rotate JSONL when it exceeds N MB (0 = disabled) |
-| `--max-in-memory INTEGER` | Bound in-memory sample deque (0 = drop when `-o` set) |
-| `--max-labels INTEGER` | Cap distinct annotation labels; overflow collapses into `__other__` (0 = unlimited) |
-| `--listen-on-socket TEXT` | Bind a UDS for request-annotation events |
-| `--attribution-mode TEXT` | PID share backend: `auto` (default), `cgroup_v2`, `cgroup_v1`, `cpu_percent` |
-| `--exporter TEXT` | Enable a telemetry exporter sink (repeatable). Known: `otlp`, `prometheus`. Needs `pip install codegreen[otlp]` or `codegreen[prometheus]` |
-| `--otlp-endpoint TEXT` | OTLP/gRPC collector endpoint (overrides `monitor.exporters.otlp.endpoint`) |
-| `--prometheus-port INTEGER` | Prometheus `/metrics` port (overrides `monitor.exporters.prometheus.port`; 0 = ephemeral) |
-| `--prometheus-listen-addr TEXT` | Prometheus bind address (default `127.0.0.1`; non-loopback emits a runtime warning) |
-| `--json` | Print final summary as JSON |
-| `-q, --quiet` | Suppress live sample output |
-
-**Examples:**
-```bash
-# 30-second host sample
-codegreen monitor -d 30
-
-# 1Hz for an hour, JSONL output
-codegreen monitor -i 1000 -d 3600 -o energy.jsonl
-
-# Per-PID attribution
-codegreen monitor --pid 1234 -o pid.jsonl
-
-# Per-request UDS attribution (see Flask recipe in the guide)
-codegreen monitor --listen-on-socket /tmp/cg.sock -o requests.jsonl
-
-# Cap distinct labels at 1000
-codegreen monitor --max-labels 1000
-
-# Export over OTLP and expose a Prometheus endpoint
-codegreen monitor --exporter otlp --otlp-endpoint http://localhost:4317
+codegreen monitor -d 30                                  # 30 s host sample
+codegreen monitor --pid 1234 -o pid.jsonl                # per-PID attribution
+codegreen monitor --listen-on-socket default -o req.jsonl   # per-request annotations
 codegreen monitor --exporter prometheus --prometheus-port 9464
 ```
 
-SIGINT and SIGTERM stop cleanly and flush the summary. SIGHUP re-reads
-`monitor.*` from `config.json` and hot-applies `--interval`, `--rotate-mb`,
-`--max-in-memory` and `--max-labels` without dropping in-flight annotations.
+`monitor` exits 0 even when its summary is invalid; read `validity` (with
+`--json`, `success` is `false`).
 
 ### `project`
 
@@ -267,33 +245,29 @@ codegreen project [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} PROJECT_DIR
 | Option | Description |
 |--------|-------------|
 | `-b, --build-cmd TEXT` | Build command (e.g. `mvn package -DskipTests`) |
-| `-r, --run-cmd TEXT` | Run command (e.g. `java -jar target/benchmarks.jar`); required |
+| `-r, --run-cmd TEXT` | Run command, executed in `PROJECT_DIR` (e.g. `java -jar target/benchmarks.jar`); required |
 | `-s, --source-glob TEXT` | Source file glob pattern, project-relative (repeatable) |
-| `-g, --granularity [coarse\|fine]` | Instrumentation level (default: fine) |
+| `-g, --granularity [coarse|fine]` | Instrumentation level (default: fine) |
 | `--cores TEXT` | CPU cores for taskset (e.g. `0-7`) |
-| `-n, --repeat INTEGER` | Measurement repetitions (default: 1) |
+| `-n, --repeat INTEGER` | Measurement repetitions, 30 s apart (default: 1) |
 | `--json` | Output as JSON |
 | `--no-cleanup` | Keep instrumented files |
-| `-o, --output PATH` | Output directory for results |
+| `-o, --output PATH` | Directory for `project_results.json` |
 | `--sync-device TEXT` | Accelerator to synchronise at every probe (Python: `cuda`). Runs `torch.cuda.synchronize()` before each enter/exit timestamp so a frame owns the device work it launched. Costs one device drain per probe (no CPU/GPU overlap). Fails if no synchronisation ran. Off by default |
 | `--min-attribution-pct FLOAT` | Floor for `attribution_pct` (exclusive function energy / total run energy; default: 25.0). Below it the result carries an `attribution_warning` |
-| `--sensors [rapl\|nvidia\|amd_gpu\|amd_cpu]` | Sensors summed into the energy, as on `measure` (default: `measurement.default_sensors`) |
+| `--sensors [rapl|nvidia|amd_gpu|amd_cpu]` | Sensors summed into the energy, as on `measure` (default: `measurement.default_sensors`) |
 
 `--source-glob` is repeatable. If an explicit glob matches no files, or no
-checkpoint records are captured, the command exits 1. JSON output includes
-`attribution_pct`, `attribution_warning`, `sync_device` and
-`skipped_functions` (async functions, generators, coroutines, C++
-`constexpr`/`consteval` and some C functions are not instrumented).
+checkpoint records are captured, the command exits 1. The output fields are
+described in [Project Profiling](project-profiling.md#output);
+`skipped_functions` lists functions that are not instrumented (async
+functions, generators, coroutines, C++ `constexpr`/`consteval` and some C
+functions).
 
 Each entry of `runs` carries `sampler`, `validity`, `resolution_ns` and
-`overlapping_threads`. The top-level `validity` merges every run (each text is
-prefixed `run N:`), and an invalid result exits 3 with `success: false` like
-`measure`. Java standalone runs build `sampler` from each JVM's
-`CG_CP_META|<json>` record (`marker_reads: "last_poll"`); the poller settings
-come from `project_config.runtime_injection.env` in `java.json` (a value
-`{config:a.b.c}` is that key of the active config, as for the RAPL zone rule
-`measurement.nemb.providers.intel_rapl`), and the caller's environment
-overrides them. Each function has `quality`.
+`overlapping_threads`, and each function a `quality`. The top-level
+`validity` merges every run (each text is prefixed `run N:`), and an invalid
+result exits 3 with `success: false` like `measure`.
 
 #### Per-function quality
 
@@ -363,7 +337,7 @@ codegreen timeline --nemb nemb.json --torch kineto.json --torch-offset-ns 42000 
 
 ### `analyze`
 
-Static analysis via Tree-sitter AST parsing. Identifies instrumentation points without executing code.
+Lists the instrumentation points Tree-sitter finds, without running the code. See [Code Analysis](code-analysis.md).
 
 ```bash
 codegreen analyze [OPTIONS] LANGUAGE:{python|cpp|java|c|javascript} SCRIPT
@@ -390,9 +364,13 @@ codegreen analyze python app.py --save-instrumented --output-dir ./instrumented
 
 ### `init`
 
-Comprehensive system initialization: detects the environment and hardware, validates permissions, and merges the detected providers (`measurement.nemb.providers.<name>.enabled`) and their sensors (`measurement.default_sensors`) into `--config`, else `CODEGREEN_CONFIG`, else `~/.codegreen/config.json`; the bundled config is never written.
-A provider is detected when NEMB initializes it, probed alone; the sensor table shows NEMB's reason for every
-other one (for `amd_rapl` without MSR access: `/dev/cpu/0/msr: Permission denied`).
+Detects the environment and the energy providers, checks permissions, and
+merges the detected providers (`measurement.nemb.providers.<name>.enabled`)
+and their sensors (`measurement.default_sensors`) into `--config`, else
+`CODEGREEN_CONFIG`, else `~/.codegreen/config.json`; the bundled config is
+never written. A provider counts as detected when NEMB initializes it on its
+own; the sensor table shows NEMB's reason for every other one (for
+`amd_rapl` without MSR access: `/dev/cpu/0/msr: Permission denied`).
 
 ```bash
 codegreen init [OPTIONS]
@@ -408,19 +386,28 @@ codegreen init [OPTIONS]
 
 ### `init-sensors`
 
-Create a `codegreen` group, add the current user, and set read permissions on the RAPL sysfs files. A udev rule keeps the permissions across reboots. **Run once with sudo.**
+Linux: creates a `codegreen` group, adds the current user, makes the RAPL
+powercap files readable by the group and installs a udev rule that keeps the
+permissions across reboots. Run it once with sudo, then log out and back in.
 
 ```bash
 sudo codegreen init-sensors
 ```
 
-Performs:
+### `config`
 
-- Creates the `codegreen` group and adds the current user
-- Sets `/sys/class/powercap` read permissions on RAPL files
-- Installs a udev rule so the permissions persist across reboots
+Without options, prints the active config file, the user override and the
+sampler settings. See [Configuration](../getting-started/configuration.md).
 
-**This must be run before any energy measurements.**
+```bash
+codegreen config [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--show` | Print the active config file as JSON |
+| `--edit` | Open `~/.codegreen/config.json` in `$EDITOR` (or `$VISUAL`, else `nano`), first copying the active file there if it does not exist |
+| `--reset` | Delete `~/.codegreen/config.json` |
 
 ### `info`
 
@@ -472,7 +459,7 @@ earlier alternative initialized. A sensor with no working provider is an issue.
 
 ### `benchmark`
 
-Run benchmarks comparing CodeGreen against perf RAPL. Suites: `benchmarksgame` (default) and `perfopt` (Java JMH benchmarks).
+Run benchmark programs under CodeGreen and `perf` RAPL and compare the readings. Suites: `benchmarksgame` (default) and `perfopt` (Java JMH benchmarks). The `benchmarksgame` suite reads its programs from `benchmark/benchmarksgame/` of a source checkout, which is not in the git repository or the wheel; without them it reports 0 runs.
 
 ```bash
 codegreen benchmark [OPTIONS]
@@ -559,27 +546,16 @@ codegreen validate-accuracy [OPTIONS] [EXPERIMENT]
 | `--plots` | Generate plots |
 | `-r, --reps INTEGER` | Repetitions per test (default: 30) |
 
-### `config`
-
-Manage CodeGreen configuration.
-
-```bash
-codegreen config [OPTIONS]
-```
-
-| Option | Description |
-|--------|-------------|
-| `--show` | Display current configuration |
-| `--edit` | Open configuration in editor |
-| `--reset` | Reset to default configuration |
-
 ## Exit codes and measurement validity
 
 | Exit code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Error: bad arguments, build or run failure, `--budget` exceeded |
-| 3 | `measure`, `run` or `project`: invalid measurement (`measurement.report.validity.fail_on_invalid`, default `true`) |
+| 1 | Error: bad arguments, a failed `project` build, a `run` command that exits non-zero, no energy read at all, `--budget` exceeded |
+| 3 | `measure`, `run`, `project` (and `measure-workload`): invalid measurement (`measurement.report.validity.fail_on_invalid`, default `true`). For `measure` this includes a program that does not compile (`COMPILE_FAILED`), crashes (`INCOMPLETE_CRASH`) or times out (`INCOMPLETE_TIMEOUT`) |
+
+`monitor` and the Python API do not change the exit code; read their
+`validity` block.
 
 The `validity` block is `{"status": "valid"|"invalid", "reasons": [...],
 "detail": {code: text}, "warnings": {code: text}}`. Every reason is fatal;
@@ -607,7 +583,7 @@ energy, calls and `quality`.
 | `TOTAL_BELOW_RESOLUTION` | measure, project | Root window (or the whole run, for aggregating runtimes) spans fewer than `min_window_samples` readings |
 | `ZERO_ENERGY` | measure, project | Root window measured 0 J |
 | `NEGATIVE_ENERGY` | measure, project, Session | Cumulative energy decreases between markers, or a task's energy is negative |
-| `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` resolutions |
+| `RUN_BELOW_RESOLUTION` | run | Mean run shorter than `min_run_updates` resolutions of the finest selected provider |
 | `COUNTER_INTEGRAL_DIVERGED` | measure, run, project, Session | A provider's boundary energy counter and its power integral (`providers[].counter_check`) differ by more than `counter_check.tolerance` of the integral plus one update interval of energy per counter read and at the end (a counter read discards what accrued since its last update). Another process reading the counter or instant power (`nvidia-smi --query-gpu=power.draw.instant`, DCGM) makes the NVML counter lose energy. Severity `counter_check.severity` (default fatal) |
 | `ZERO_ENERGY_RUNS` | run | At least one run read 0 J |
 | `NEGATIVE_ENERGY_RUNS` | run | At least one run read negative energy |
@@ -620,6 +596,7 @@ energy, calls and `quality`.
 | `BOUNDARY_READ_HELD` (warning) | measure, run, project, Session | A boundary read answered from a previous read (`providers[].boundary_held`) spanned more than the provider's update interval (`boundary_held_max_ns`), so it misses energy beyond the counter's resolution. Holds within one update period (back-to-back `run --repeat` boundaries) are counted, not warned |
 | `TASK_POWER_INTEGRATED` (warning) | Session | Tasks whose energy integrates sampled power: a provider whose `boundary_source` is `integrated_power`, or an `integrated_power` provider for a task with `shared_boundary` (read while another task was open, so its energy counter was not read) |
 | `TASK_BELOW_RESOLUTION` (warning) | Session | Tasks shorter than `min_run_updates` resolutions of the selected providers |
+| `COARSE_PROVIDER_RESOLUTION` (warning) | run | Mean run shorter than `min_run_updates` update intervals of a slower selected provider (such as a GPU): that provider's share is not resolved |
 | `RUN_POWER_INTEGRATED` (warning) | run | A provider's run energy is integrated from sampled power (`boundary_source: integrated_power`), so it depends on the sampler interval |
 | `OVERLAPPING_THREADS` (warning) | measure, project | Several threads inside instrumented frames at once; each is charged the whole package energy |
 | `RESOLUTION_UNKNOWN` (warning) | run | The backend reports no provider facts, so `RUN_BELOW_RESOLUTION` is not checked |
@@ -633,7 +610,7 @@ the same functions (`codegreen_runtime.measurement_validity`).
 `sampler` (`measure`, `run`, and each `project` run) describes the sampler for
 that run: `interval_ms` (configured), `interval_ms_min`, `interval_ms_max`,
 `buffer_capacity`, `readings`, `wrapped`, `rejected_readings`, `failed_reads`,
-`dropped_checkpoints`, `first_ns`, `last_ns`, `median_gap_ns`, `max_gap_ns`
+`provider_restarts`, `dropped_checkpoints`, `first_ns`, `last_ns`, `median_gap_ns`, `max_gap_ns`
 (NEMB: over the readings bracketing the markers, so setup before the root
 window does not count; the whole sampler life when there are no markers),
 `affinity_cpus` (CPUs the measured process may run on),

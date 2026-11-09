@@ -1,18 +1,13 @@
 # 09 - Project hotspots (Python)
 
-`codegreen project python` against a small multi-file Python package.
-Per-function attribution via tree-sitter instrumentation, no source edits.
-
-## What you learn
-
-- The Python flavour of `codegreen project` (no compile step, no JNI).
-- Per-function energy ranking and hotspot detection.
-- How `--source-glob` filters which files get instrumented.
+Run `codegreen project python` on a generated one-file program with three
+functions of different cost. Python needs no build step, so only
+`--run-cmd` is given. The script prints the instrumentation summary from
+the JSON report.
 
 ## Prerequisites
 
 - `pip install codegreen`
-- Linux / macOS / Windows with a working backend.
 
 ## Source
 
@@ -28,21 +23,40 @@ Per-function attribution via tree-sitter instrumentation, no source edits.
 python examples/09_project_hotspots_python/main.py
 ```
 
-## Expected output
-
-```
-OK: project_hotspots_python; source_files=1; instrumented_files=1; checkpoints=8
+```text
+OK: project_hotspots_python; source_files=1; instrumented_files=1; checkpoints=6
 ```
 
-## Why it matters
+Six checkpoints: an enter and an exit for each of `light`, `medium` and
+`heavy`. To see the ranking, save `PROG` from the script as `main.py` in a
+directory and run:
 
-This is the **Python equivalent of `codegreen measure -g fine`** scaled
-from a single file to a whole project. The discover phase walks
-`--source-glob`, the instrument phase rewrites each file with checkpoint
-calls injected at function boundaries, and the measure phase runs the
-project under the NEMB backend. The output JSON has the same
-per-function schema as the single-file `measure` command, so any
-downstream tooling that consumes `measure` output works on projects too.
+```bash
+codegreen project python . --run-cmd "python3 main.py" --sensors rapl
+```
 
-See also: [User guide: Project Profiling](../user-guide/project-profiling.md),
+```text
+Phase 3: Measuring energy...
+    Energy: 34.31 J, Attributed: 20.59 J (60%), Functions: 3
+
+Results
+  Total energy: 34.31 J (avg over 1 runs)
+  Functions profiled: 3
+
+Top hotspots by exclusive energy:
+  Rank  Function                              Excl%   Incl%   Self  Verdict    Calls    uJ/call
+  ----------------------------------------------------------------------------------------------------
+  1     heavy                                 96.3%   96.3%  1.00 TYPE_2_INEFFICIENT        1 19834337.0
+  2     medium                                 3.7%    3.7%  1.00    minor        1   757954.0
+  3     light                                  0.0%    0.0%  1.00    minor        1     1762.0
+Validity: valid
+```
+
+With `--json` each entry of `hotspots` also carries `quality`. In a JSON run
+of the same program `heavy` (0.26 s) was `measured`, while `medium` (10 ms)
+and `light` (21 us) were `below_resolution`: their energy is reported but
+is too short to resolve against the 10 ms sampler.
+
+See also: [Project Profiling](../user-guide/project-profiling.md),
+[CLI reference: `project`](../user-guide/cli-reference.md#project),
 [04 - Project hotspots (Java)](04_project_hotspots_java.md).

@@ -1,21 +1,20 @@
-# 08 - Monitor socket (Flask / WSGI request attribution)
+# 08 - Monitor socket (in-process)
 
-Run a Monitor with `--listen-on-socket`, send `start`/`end` events from a
-tiny HTTP server, and get **per-request energy + p50/p95 latency**. This is
-the recipe for Apache+mod_wsgi+Flask and any other already-running web
-server -- exactly the use case from GitHub Discussion #5.
+Run a Monitor with an annotation socket inside the same Python process as a
+small HTTP server, wrap each request in a `start`/`end` annotation, and
+read per-route energy and latency from the summary. No Flask required.
 
 ## What you learn
 
-- Monitor's Unix-domain-socket annotation channel.
-- The `codegreen.annotate_request("label")` context manager.
-- The `per_label` summary in the Monitor's stop record: `count`,
-  `total_joules`, `p50_ms`, `p95_ms`.
+- The Monitor's Unix-domain-socket annotation channel (`listen_socket_path`).
+- The line-delimited JSON protocol (`op: start` / `op: end`).
+- The `per_label` summary: `count`, `joules_total`, `duration_total_s`,
+  `joules_per_call_avg`, `latency_ms_p50`, `latency_ms_p95`.
 
 ## Prerequisites
 
-- `pip install codegreen` (stdlib only; no Flask required).
-- Linux or macOS with a working backend.
+- `pip install codegreen`
+- Linux or macOS (Unix-domain sockets) with a working energy provider.
 
 ## Source
 
@@ -31,52 +30,50 @@ server -- exactly the use case from GitHub Discussion #5.
 python examples/08_monitor_socket/main.py
 ```
 
-## Equivalent CLI
+## Output
 
-```bash
-codegreen monitor --listen-on-socket /tmp/cg.sock -o requests.jsonl
+From a run on an AMD EPYC host (interval 150 ms):
+
+```text
+{
+  "labels": {
+    "GET /heavy": {
+      "count": 2,
+      "joules_total": 14.458636,
+      "duration_total_s": 0.193379,
+      "joules_per_call_avg": 7.229318,
+      "latency_ms_p50": 96.994,
+      "latency_ms_p95": 96.385
+    },
+    "GET /light": {
+      "count": 1,
+      "joules_total": 0.0,
+      "duration_total_s": 0.000855,
+      "joules_per_call_avg": 0.0,
+      "latency_ms_p50": 0.855,
+      "latency_ms_p95": 0.855
+    },
+    "GET /medium": {
+      "count": 2,
+      "joules_total": 0.0,
+      "duration_total_s": 0.020084,
+      "joules_per_call_avg": 0.0,
+      "latency_ms_p50": 10.105,
+      "latency_ms_p95": 9.979
+    }
+  }
+}
+OK: monitor_socket; labels=3; total_j=86.469; requests=5
 ```
 
-## Flask middleware recipe
+`/light` and `/medium` finish well inside one 150 ms interval, so no sample
+was taken while they were open and they received 0 J. A span receives the
+whole energy of each sample taken while it is open; see
+[Per-request attribution](../user-guide/continuous-monitoring.md#per-request-attribution)
+for the rules and the Flask middleware.
 
-```python
-from flask import Flask, g, request
-import codegreen
+This example embeds the Monitor in the application process, which suits
+tests. For a running server, run the monitor as a separate process:
+[11 - Monitor socket (standalone)](11_monitor_socket_standalone.md).
 
-app = Flask(__name__)
-
-@app.before_request
-def _cg_start():
-    g._cg = codegreen.annotate_request(
-        f"{request.method} {request.path}",
-        socket_path="/tmp/cg.sock",
-    ).__enter__()
-
-@app.teardown_request
-def _cg_end(exc):
-    g._cg.__exit__(None, None, None)
-```
-
-Start the Monitor separately:
-
-```bash
-codegreen monitor --listen-on-socket /tmp/cg.sock -o energy.jsonl &
-gunicorn -w 4 'app:app'
-```
-
-## Expected output
-
-```
-{"labels": {"GET /light": {"count": 1, ...}, "GET /heavy": {"count": 2, ...}}}
-OK: monitor_socket; labels=3; total_j=0.321; requests=5
-```
-
-## Why it matters
-
-This is the **first per-request energy primitive** that works with the
-"server is already running, you can't embed instrumentation" case. The UDS
-listener is non-blocking, daemon-thread-local, and racing-safe; a single
-Monitor process can serve hundreds of workers via a shared socket.
-
-See also: [User guide: Continuous Monitoring](../user-guide/continuous-monitoring.md#per-request-attribution),
-[Python API: annotate_request](../api/python.md#annotate_request).
+See also: [Python API: annotate_request](../api/python.md#annotate_request).

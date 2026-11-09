@@ -1,21 +1,14 @@
 # 10 - CodeGreen vs perf
 
-Cross-validate CodeGreen's reported mean energy against `perf stat
-power/energy-pkg/` on the same workload. If the two disagree by more than a
-few percent, something is wrong on this host.
-
-## What you learn
-
-- How to read `perf stat -j -e power/energy-pkg/` Joules.
-- How to compare it to `codegreen run --json` `energy_j.mean`.
-- The expected relative error on a well-behaved RAPL system (< 1% on
-  Skylake-SP and EPYC Zen 4 from our benchmark suite).
+Compare the mean energy of `codegreen run` with the kernel's own RAPL reading
+from `perf stat -x , -e power/energy-pkg/` on the same Python workload.
 
 ## Prerequisites
 
 - `pip install codegreen`
-- `perf` on PATH (`sudo apt install linux-tools-common linux-tools-generic`).
-- Either `sudo` (recommended) or `kernel.perf_event_paranoid <= 2`.
+- `perf` on `PATH` with access to the `power/energy-pkg/` event (root, or a
+  permissive `kernel.perf_event_paranoid`). Without it the script prints
+  `SKIP:`.
 
 ## Source
 
@@ -31,25 +24,34 @@ few percent, something is wrong on this host.
 python examples/10_codegreen_vs_perf/main.py
 ```
 
-## Expected output
-
-```
-OK: codegreen_vs_perf; codegreen_j=0.8123; perf_j=0.8087; delta_pct=0.45
+```text
+OK: codegreen_vs_perf; codegreen_j=20.8444; perf_j=16.5600; delta_pct=25.87
 ```
 
-## Why it matters
+The script compares like with like only on a host without a GPU. It calls
+`codegreen run` without `--sensors`, so on a GPU host the CodeGreen mean
+includes GPU energy while `energy-pkg` is the CPU package alone; the 26%
+above is that difference. Restrict CodeGreen to RAPL for the comparison:
 
-`perf stat` is the kernel's own RAPL frontend. If CodeGreen's number
-diverges from `perf` by more than 5%, you're likely seeing one of:
+```bash
+WORKLOAD=$'x=0\nfor i in range(2_000_000): x+=i*i\nprint(x)'
+codegreen run --repeat 3 --warmup 1 --sensors rapl --json -- python3 -c "$WORKLOAD"
+perf stat -x , -e power/energy-pkg/ python3 -c "$WORKLOAD"
+```
 
-- a **multi-Monitor double-count** (another `codegreen monitor` running),
-- a **DRAM domain mismatch** (`perf` includes DRAM, CodeGreen excludes it
-  or vice versa -- check `meta.domain_topology`),
-- a **wraparound bug** in the AMD provider (if you're not on a recent
-  release).
+Two such pairs on the same host gave 16.17 J vs 15.96 J and 16.56 J vs
+15.73 J (CodeGreen mean of three runs vs one `perf` run).
 
-This script is the canonical "is my measurement actually correct?" probe.
-Run it after any kernel update, BIOS update, or CodeGreen upgrade.
+## When they disagree
 
-See also: [User guide: Energy Measurement](../user-guide/energy-measurement.md#benchmark-accuracy),
+- Different scope: GPU or other providers in the CodeGreen total (check
+  `domains` and `validity.warnings` for `GPU_IN_TOTAL`), or a different set
+  of RAPL domains (check `meta.domain_topology`).
+- Different samples: `perf` measures one run, CodeGreen the mean of
+  `--repeat` runs. Short workloads vary from run to run; compare means over
+  several runs of each.
+- Another process on the host: RAPL is system-wide, so both tools count
+  everything that ran during the window.
+
+See also: [Energy Measurement](../user-guide/energy-measurement.md),
 [01 - Quickstart](01_quickstart_measure.md).
